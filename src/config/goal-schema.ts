@@ -54,6 +54,10 @@ export const goalSchema = z
   })
   .strict()
   .superRefine((goal, ctx) => {
+    const numeric = /^\d+$/;
+    if (!numeric.test(goal.source_version) || !numeric.test(goal.target_version)) {
+      return; // the field-level regex already reported the problem
+    }
     const expected = String(Number(goal.source_version) + 1);
     if (goal.target_version !== expected) {
       ctx.addIssue({

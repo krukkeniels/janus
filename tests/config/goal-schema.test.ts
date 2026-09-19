@@ -27,9 +27,9 @@ describe('goalSchema', () => {
   });
 
   it('rejects non-numeric versions', () => {
-    expect(issuesOf({ ...validGoal, source_version: 'v15' })).toContain(
-      'source_version: must be a major version number like "16"',
-    );
+    const issues = issuesOf({ ...validGoal, source_version: 'v15' });
+    expect(issues).toContain('source_version: must be a major version number like "16"');
+    expect(issues.some((issue) => issue.startsWith('target_version:'))).toBe(false);
   });
 
   it('rejects an id or repo name that is not kebab-case', () => {
