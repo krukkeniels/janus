@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import type { Engine } from '../../src/engine/engine.js';
 import { approvePlan } from '../../src/engine/gates.js';
 import { describeNextStep, runEngine } from '../../src/engine/run-loop.js';
 import type { RunEngineInput } from '../../src/engine/run-loop.js';
@@ -92,6 +93,40 @@ describe('runEngine', () => {
       'awaiting_plan_approval',
     ]);
     expect(types.filter((type) => type === 'gate.entered')).toHaveLength(1);
+  });
+
+  it('recovers when a crash lands between the step-outcome checkpoint and gate entry', async () => {
+    const ws = await initWorkspace();
+    const workspace = await openWorkspace(ws.root);
+    const { engine: realEngine } = testEngine(workspace);
+    let checkpoints = 0;
+    // Wraps the real engine so the 5th checkpoint (the "planning: plan ready" step-outcome checkpoint, C0) commits
+    // for real and then the process "dies" before `enterStage`/`enterGate` run, exactly as a crash would.
+    const crashingEngine: Engine = {
+      ...realEngine,
+      checkpoint: async (message, decision) => {
+        const result = await realEngine.checkpoint(message, decision);
+        checkpoints += 1;
+        if (checkpoints === 5) throw new Error('simulated crash between C0 and gate entry');
+        return result;
+      },
+    };
+    await expect(
+      runEngine({ engine: crashingEngine, steps: scriptedSteps(), until: null, maxWaitMs: 60_000, modelProfile: 'default' }),
+    ).rejects.toThrow('simulated crash between C0 and gate entry');
+    workspace.release();
+
+    const onDisk = readState(ws.janusDir);
+    expect(onDisk.goal.status).toBe('planning');
+    expect(onDisk.gate).toEqual({ type: null, status: 'none', entered_at: null, checkpoint_commit: null });
+    expect(onDisk.execution.in_flight).toEqual(emptyInFlight());
+
+    const { result, state } = await run(ws, scriptedSteps());
+    expect(result.reason).toBe('gate');
+    expect(result.status).toBe('awaiting_plan_approval');
+    expect(state.gate).toMatchObject({ type: 'plan_approval', status: 'waiting' });
+    expect(state.gate.checkpoint_commit).toBe(await revParse(ws.janusDir, 'HEAD~1'));
+    expect(result.stateCommit).toBe(await revParse(ws.janusDir, 'HEAD'));
   });
 
   it('stops immediately while the gate waits and continues after approval to completed', async () => {

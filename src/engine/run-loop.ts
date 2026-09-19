@@ -107,9 +107,12 @@ export async function runEngine(input: RunEngineInput): Promise<RunResult> {
         await engine.checkpoint(`chore(janus): ${step.name}: ${outcome.summary}`);
         break;
       case 'gate': {
+        // Spec §7 rule 1 / crash safety: checkpoint the step outcome first with the goal status still the stage
+        // that produced the gate (C0), then enter the gate stage and the gate itself as one further checkpoint
+        // (C1). A crash between C0 and C1 leaves a consistent, re-runnable state: the stage step just runs again.
+        await engine.checkpoint(`chore(janus): ${step.name}: ${outcome.summary}`);
         const stage = gateStage(outcome.gate);
         if (state.goal.status !== stage) enterStage(engine, stage);
-        await engine.checkpoint(`chore(janus): ${step.name}: ${outcome.summary}`);
         const alreadyWaiting = state.gate.status === 'waiting' && state.gate.type === outcome.gate;
         if (!alreadyWaiting) await enterGate(engine, outcome.gate);
         if (!isCliGate(outcome.gate)) {
