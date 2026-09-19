@@ -10,7 +10,8 @@ export class GitError extends Error {
   readonly stderr: string;
 
   constructor(args: string[], cwd: string, exitCode: number | null, stderr: string) {
-    super(`git ${args.join(' ')} failed in ${cwd} (exit ${exitCode ?? 'signal'}): ${stderr.trim()}`);
+    const redactedArgs = args.map((arg) => arg.replace(/(:\/\/)[^/@\s]+@/g, '$1<redacted>@'));
+    super(`git ${redactedArgs.join(' ')} failed in ${cwd} (exit ${exitCode ?? 'signal'}): ${stderr.trim()}`);
     this.name = 'GitError';
     this.args = args;
     this.cwd = cwd;
@@ -28,7 +29,7 @@ export async function runGit(cwd: string, args: string[], options: GitRunOptions
   try {
     const { stdout } = await execFileAsync('git', args, {
       cwd,
-      env: { ...process.env, LC_ALL: 'C', LANG: 'C', ...options.env },
+      env: { ...process.env, LC_ALL: 'C', LANG: 'C', GIT_TERMINAL_PROMPT: '0', ...options.env },
       maxBuffer: 64 * 1024 * 1024,
     });
     return stdout.replace(/\n$/, '');

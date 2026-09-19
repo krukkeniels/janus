@@ -50,4 +50,18 @@ describe('runGit', () => {
       delete process.env['LANG'];
     }
   });
+
+  it('disables git terminal prompts by default', async () => {
+    const dir = tempDir();
+    expect(await runGit(dir, ['-c', 'alias.env=!env', 'env'])).toContain('GIT_TERMINAL_PROMPT=0');
+  });
+});
+
+describe('GitError', () => {
+  it('redacts credentials embedded in a url arg but keeps the originals in .args', () => {
+    const error = new GitError(['clone', 'https://user:token@host/x.git', 'dir'], '/tmp', 128, 'boom');
+    expect(error.message).toContain('https://<redacted>@host/x.git');
+    expect(error.message).not.toContain('token');
+    expect(error.args).toEqual(['clone', 'https://user:token@host/x.git', 'dir']);
+  });
 });
