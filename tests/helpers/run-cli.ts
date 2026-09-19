@@ -1,5 +1,5 @@
 import { main } from '../../src/cli/main.js';
-import type { CliIo } from '../../src/cli/context.js';
+import type { CliIo, CliOverrides } from '../../src/cli/context.js';
 
 export interface CliResult {
   code: number;
@@ -7,7 +7,7 @@ export interface CliResult {
   stderr: string;
 }
 
-export async function runCli(argv: string[], overrides: Partial<CliIo> = {}): Promise<CliResult> {
+export async function runCli(argv: string[], overrides: Partial<CliIo> = {}, ctxOverrides: CliOverrides = {}): Promise<CliResult> {
   let stdout = '';
   let stderr = '';
   const io: CliIo = {
@@ -21,6 +21,6 @@ export async function runCli(argv: string[], overrides: Partial<CliIo> = {}): Pr
     cwd: process.cwd(),
     ...overrides,
   };
-  const code = await main(argv, io);
+  const code = await main(argv, io, ctxOverrides);
   return { code, stdout, stderr };
 }

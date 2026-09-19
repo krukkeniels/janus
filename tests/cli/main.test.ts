@@ -5,6 +5,7 @@ import { ExitCode } from '../../src/cli/exit-codes.js';
 import { exitCodeForError } from '../../src/cli/main.js';
 import { VERSION } from '../../src/cli/version.js';
 import { ConfigError } from '../../src/config/errors.js';
+import { StateBranchDivergedError } from '../../src/state/checkpoint.js';
 import { WorkspaceLockedError } from '../../src/workspace/lock.js';
 import { runCli } from '../helpers/run-cli.js';
 
@@ -73,5 +74,13 @@ describe('exitCodeForError', () => {
     const error = new WorkspaceLockedError('/ws/janus.lock', { pid: 1, acquired_at: '2026-09-19T00:00:00.000Z' });
     expect(exitCodeForError(error, io)).toBe(ExitCode.Locked);
     expect(io.stderrText).toContain('locked by pid 1');
+  });
+
+  it('exits 1 with a reconcile instruction when the state branch diverged', () => {
+    const io = fakeIo();
+    const error = new StateBranchDivergedError('janus/g', 'state-repo');
+    expect(exitCodeForError(error, io)).toBe(ExitCode.UnexpectedError);
+    expect(io.stderrText).toContain('janus: state branch janus/g on state-repo has moved');
+    expect(io.stderrText).toContain('reconcile with: git -C .janus fetch origin');
   });
 });

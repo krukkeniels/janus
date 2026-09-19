@@ -3,14 +3,8 @@ import { ExitCode } from '../../src/cli/exit-codes.js';
 import { runCli } from '../helpers/run-cli.js';
 
 const stubbed: string[][] = [
-  ['run'],
-  ['run', '--until', 'planning', '--max-wait', '45m', '--dry-run', '--model-profile', 'fast-first'],
   ['status'],
   ['status', '--json', '--telemetry'],
-  ['approve', 'plan', '--commit', 'abc123'],
-  ['approve', 'plan', '--commit', 'abc123', '--exception', 'ex-1', '--exception', 'ex-2'],
-  ['approve', 'revised-plan', '--commit', 'abc123'],
-  ['reject', 'plan', '--reason', 'wrong order'],
   ['escalation', 'show'],
   ['escalation', 'show', '--json'],
   ['escalation', 'resolve', '--direction', 'split the shell package'],

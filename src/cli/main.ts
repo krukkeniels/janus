@@ -1,9 +1,10 @@
 import { Command, CommanderError } from 'commander';
 import { ConfigError } from '../config/errors.js';
+import { StateBranchDivergedError } from '../state/checkpoint.js';
 import { WorkspaceLockedError } from '../workspace/lock.js';
 import { registerCommands } from './commands/index.js';
 import { createContext, defaultIo } from './context.js';
-import type { CliContext, CliIo } from './context.js';
+import type { CliContext, CliIo, CliOverrides } from './context.js';
 import { ExitCode } from './exit-codes.js';
 import { VERSION } from './version.js';
 
@@ -32,6 +33,13 @@ export function exitCodeForError(error: unknown, io: CliIo): ExitCode {
     io.stderr(`janus: ${error.message}\n`);
     return ExitCode.Locked;
   }
+  if (error instanceof StateBranchDivergedError) {
+    io.stderr(`janus: ${error.message}\n`);
+    io.stderr(
+      'janus: reconcile with: git -C .janus fetch origin && git -C .janus log --oneline HEAD...FETCH_HEAD, then merge (never force-push) so the branch has one line of history, and run janus again\n',
+    );
+    return ExitCode.UnexpectedError;
+  }
   if (error instanceof ConfigError) {
     io.stderr(`janus: ${error.message}\n`);
     return ExitCode.UsageError;
@@ -41,8 +49,8 @@ export function exitCodeForError(error: unknown, io: CliIo): ExitCode {
   return ExitCode.UnexpectedError;
 }
 
-export async function main(argv: string[], io: CliIo = defaultIo()): Promise<ExitCode> {
-  const ctx = createContext(io);
+export async function main(argv: string[], io: CliIo = defaultIo(), overrides: CliOverrides = {}): Promise<ExitCode> {
+  const ctx = createContext(io, overrides);
   const program = buildProgram(ctx);
   if (argv.length === 0) {
     program.outputHelp();
