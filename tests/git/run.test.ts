@@ -36,4 +36,18 @@ describe('runGit', () => {
     await runGit(dir, ['commit', '-q', '-m', 'test(git): first']);
     expect(await runGit(dir, ['log', '-1', '--format=%an <%ae>'])).toBe('Janus Test <janus@test.invalid>');
   });
+
+  it('runs git in the C locale regardless of the caller environment', async () => {
+    const dir = tempDir();
+    await runGit(dir, ['init', '-q', '-b', 'main']);
+    process.env['LANG'] = 'de_DE.UTF-8';
+    try {
+      await runGit(dir, ['rev-parse', 'HEAD']);
+      expect.unreachable('expected GitError');
+    } catch (error) {
+      expect((error as GitError).stderr).toContain('ambiguous argument');
+    } finally {
+      delete process.env['LANG'];
+    }
+  });
 });
