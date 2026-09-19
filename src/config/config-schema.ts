@@ -67,6 +67,7 @@ export const configSchema = z
     state: z
       .object({
         repo: z.object({ project: z.string().min(1), slug: z.string().min(1) }).strict().optional(),
+        clone_url: z.string().min(1).optional(),
       })
       .strict()
       .default({}),
@@ -86,6 +87,7 @@ export const configSchema = z
         url: z.string().url().optional(),
         token_env: z.string().min(1).default('JANUS_BITBUCKET_TOKEN'),
         required_reviewers: z.array(z.string().min(1)).default([]),
+        clone_url_template: z.string().min(1).default('{url}/scm/{project}/{slug}.git'),
       })
       .strict()
       .default({}),

@@ -27,7 +27,7 @@ Done when: `janus --help` works; invalid config and goal files fail with message
 Depends on: T01.
 
 - `state.yaml` schema v2 (zod) per §6 including `execution.work_packages.<id>`, per-repo `merged`, `release`, `review_loop`
-- workspace layout per §5: `.janus/` single-branch clone, `repos/<name>`, `fake/`, `.pnpm-store/` with workspace `.npmrc`, `janus.lock` with PID
+- workspace layout per §5: `.janus/` single-branch clone, `repos/<name>`, `fake/`, `.pnpm-store/` (handed to agents via `npm_config_store_dir`, no `.npmrc`), `janus.lock` with PID
 - git module: clone, fetch, branch from commit, merge (no rebase), commit, fast-forward-only push, diff collection, reset, patch export, reflog read
 - checkpoint: stage state, minimal handover (full renderer in T14), evidence, decisions; commit; optional push
 - `janus init --goal`, `janus init --resume`

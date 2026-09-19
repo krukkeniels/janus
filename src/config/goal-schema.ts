@@ -18,6 +18,7 @@ const repoSchema = z
     scm: scmRefSchema,
     base_branch: z.string().min(1),
     package_name: z.string().min(1).optional(),
+    clone_url: z.string().min(1).optional(),
     ci: z
       .object({
         pr_build_type_id: z.string().min(1),

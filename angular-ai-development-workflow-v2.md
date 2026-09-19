@@ -212,6 +212,7 @@ repos:
   - name: ui-kit
     kind: library            # library | app | shell | remote
     scm: { project: FE, slug: ui-kit }
+    # clone_url: https://...   optional; derived from bitbucket.clone_url_template when absent
     base_branch: main
     package_name: "@acme/ui-kit"
     ci:
@@ -773,7 +774,7 @@ codex exec -C <cwd> -s <read-only|workspace-write> \
   [-m <model>] [-c model_reasoning_effort=<x>] - < prompt.md
 ```
 
-Writable roots for code-writing agents: the repo, the pnpm store (`pnpm store path`), `~/.cache`, and `.angular/cache` locations outside the repo. Alternatively `janus init` writes a workspace `.npmrc` with `store-dir=<workspace>/.pnpm-store` so a single writable root suffices; this is the default.
+Writable roots for code-writing agents: the repo, the pnpm store (`pnpm store path`), `~/.cache`, and `.angular/cache` locations outside the repo. Alternatively Janus sets `npm_config_store_dir=<workspace>/.pnpm-store` in every code-writing agent's environment so a single writable root suffices; this is the default (`agents.pnpm_store: workspace`). No `.npmrc` is written, because pnpm reads `.npmrc` only from a project root.
 
 Angular guidance injected into code-writing prompts: use the repo's package manager; run `ng update` with `--allow-dirty` because the tree is intentionally uncommitted; expect CLI migrations to touch files across the repo; never edit CI configuration.
 
@@ -946,7 +947,8 @@ workflow:
   create_prs_early: true
 
 state:
-  repo: { project: FE, slug: janus-state }   # optional dedicated state repo
+  repo: { project: FE, slug: janus-state }   # optional dedicated state repo, rendered through bitbucket.clone_url_template
+  clone_url: null                              # or an explicit clone URL for the state repo
 
 teamcity:
   url: https://teamcity.example.internal
@@ -960,6 +962,7 @@ bitbucket:
   url: https://bitbucket.example.internal
   token_env: JANUS_BITBUCKET_TOKEN
   required_reviewers: []
+  clone_url_template: "{url}/scm/{project}/{slug}.git"
 
 local_ci:
   repos:
