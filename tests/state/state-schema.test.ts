@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { formatZodIssues } from '../../src/config/errors.js';
 import { goalSchema } from '../../src/config/goal-schema.js';
-import { BUDGET_NAMES, createInitialState, GATE_TYPES, GOAL_STATUSES, stateSchema } from '../../src/state/state-schema.js';
+import { BUDGET_NAMES, createInitialState, emptyInFlight, GATE_TYPES, GOAL_STATUSES, stateSchema } from '../../src/state/state-schema.js';
 import { validGoal } from '../fixtures/valid-goal.js';
 
 const now = new Date('2026-09-19T12:00:00.000Z');
@@ -48,7 +48,7 @@ describe('createInitialState', () => {
       infra_retries: 0,
     });
     expect(state.execution.work_packages).toEqual({});
-    expect(state.execution.in_flight).toEqual({ step: null, started_at: null, agent_run_id: null });
+    expect(state.execution.in_flight).toEqual(emptyInFlight());
     expect(state.verification.e2e.status).toBe('not_run');
     expect(state.gate).toEqual({ type: null, status: 'none', entered_at: null, checkpoint_commit: null });
     expect(state.release).toEqual({ order: [], done: [] });
@@ -104,5 +104,15 @@ describe('schema constants', () => {
       state.gate.type = type;
       expect(stateSchema.parse(state).gate.type).toBe(type);
     }
+  });
+
+  it('defaults the in_flight repo and budget to null and accepts a budget name', () => {
+    const state = initial();
+    expect(state.execution.in_flight).toEqual(emptyInFlight());
+    state.execution.in_flight = { step: 'execute-work-packages', started_at: '2026-09-19T12:00:00.000Z', agent_run_id: 'run-1', repo: 'ui-kit', budget: 'ci_fix_attempts' };
+    expect(stateSchema.parse(state).execution.in_flight.budget).toBe('ci_fix_attempts');
+    expect(issuesOf({ ...state, execution: { ...state.execution, in_flight: { ...state.execution.in_flight, budget: 'nope' } } })).toEqual([
+      expect.stringContaining('execution.in_flight.budget'),
+    ]);
   });
 });

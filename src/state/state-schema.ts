@@ -192,6 +192,10 @@ export const stateSchema = z
             step: nullableString.default(null),
             started_at: isoDate.nullable().default(null),
             agent_run_id: nullableString.default(null),
+            /** Repo the in-flight agent writes to; its uncommitted diff is saved and reset on recovery (§7 rule 3). */
+            repo: nullableString.default(null),
+            /** Budget an interrupted agent run counts against (§7 rule 3, §20). */
+            budget: z.enum(BUDGET_NAMES).nullable().default(null),
           })
           .strict()
           .default({}),
@@ -267,6 +271,12 @@ export const stateSchema = z
   .strict();
 
 export type JanusState = z.infer<typeof stateSchema>;
+
+export type InFlight = JanusState['execution']['in_flight'];
+
+export function emptyInFlight(): InFlight {
+  return { step: null, started_at: null, agent_run_id: null, repo: null, budget: null };
+}
 
 export interface InitialStateInput {
   goal: Goal;

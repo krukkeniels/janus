@@ -6,7 +6,9 @@ import type { Engine } from '../../src/engine/engine.js';
 import { checkoutBranch, commitAll, push } from '../../src/git/ops.js';
 import { checkpoint } from '../../src/state/checkpoint.js';
 import { GOAL_FILE } from '../../src/state/files.js';
-import { readState } from '../../src/state/state-store.js';
+import { emptyInFlight } from '../../src/state/state-schema.js';
+import type { BudgetName, InFlight } from '../../src/state/state-schema.js';
+import { readState, writeState } from '../../src/state/state-store.js';
 import type { Workspace } from '../../src/workspace/open-workspace.js';
 import { tempDir } from './git-fixtures.js';
 import { runCli } from './run-cli.js';
@@ -64,4 +66,14 @@ export async function createGoalBranch(ws: WorkspaceFixture, repoName: string): 
   const { goal } = loadGoal(join(ws.janusDir, GOAL_FILE));
   await checkpoint({ janusDir: ws.janusDir, state, goal, message: `chore(janus): record ${repoName} goal branch`, push: true });
   return head;
+}
+
+/** Simulates a crash: writes `in_flight` (and optional budget values) into state.yaml on disk without committing. Call while no Workspace is open. */
+export function markInFlight(ws: WorkspaceFixture, inFlight: Partial<InFlight>, budgets: Partial<Record<BudgetName, number>> = {}): void {
+  const state = readState(ws.janusDir);
+  state.execution.in_flight = { ...emptyInFlight(), ...inFlight };
+  for (const [name, value] of Object.entries(budgets)) {
+    if (value !== undefined) state.execution.budgets[name as BudgetName] = value;
+  }
+  writeState(ws.janusDir, state);
 }
