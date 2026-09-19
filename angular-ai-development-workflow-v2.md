@@ -384,6 +384,8 @@ execution:
     step: null
     started_at: null
     agent_run_id: null
+    repo: null              # repo the in-flight agent writes to; its uncommitted diff is saved and reset on recovery
+    budget: null            # budget an interrupted agent run counts against (see §20)
   budgets:                 # see §20 for increment/reset rules
     ci_fix_attempts: 0
     e2e_fix_attempts: 0
@@ -907,6 +909,8 @@ Unchanged from v1. `escalation.md` follows the v1 package structure plus repo, p
 3. PR approval (in Bitbucket, all PRs)
 4. merge (in Bitbucket, all PRs, dependency order)
 
+Gate 2 waits in `awaiting_plan_approval` with `gate.type = revised_plan_approval`.
+
 Gate entry and exit times are recorded to measure human wait time.
 
 ---
@@ -916,16 +920,18 @@ Gate entry and exit times are recorded to measure human wait time.
 Append-only events in `telemetry/events.jsonl`:
 
 ```text
+run.started, run.stopped
 goal.created, stage.entered, stage.exited
 agent.started, agent.finished        (role, repo, run_id, model, effort, prompt_version, profile, experiment_id, tokens, duration, status)
 agent.model_switch
 policy.checked, commit.created, push.completed
 sync.started, sync.completed, sync.conflict
+repo.drift
 ci.build.found, ci.build.triggered, ci.build.finished, ci.build.infra_retry
 e2e.triggered, e2e.rerun, e2e.finished, e2e.invalidated, e2e.triaged
 publish.triggered, publish.finished, release.triggered, release.finished
 budget.incremented, budget.reset, guardrail.hit
-gate.entered, gate.passed
+gate.entered, gate.passed, gate.rejected
 escalation.created, escalation.resolved
 pr.created, pr.comment.received, pr.comment.answered, pr.approved, pr.declined, pr.merged
 goal.completed
