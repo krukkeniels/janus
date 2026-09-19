@@ -5,6 +5,7 @@ import { ExitCode } from '../../src/cli/exit-codes.js';
 import { exitCodeForError } from '../../src/cli/main.js';
 import { VERSION } from '../../src/cli/version.js';
 import { ConfigError } from '../../src/config/errors.js';
+import { GateError } from '../../src/engine/gates.js';
 import { StateBranchDivergedError } from '../../src/state/checkpoint.js';
 import { WorkspaceLockedError } from '../../src/workspace/lock.js';
 import { runCli } from '../helpers/run-cli.js';
@@ -82,5 +83,11 @@ describe('exitCodeForError', () => {
     expect(exitCodeForError(error, io)).toBe(ExitCode.UnexpectedError);
     expect(io.stderrText).toContain('janus: state branch janus/g on state-repo has moved');
     expect(io.stderrText).toContain('reconcile with: git -C .janus fetch origin');
+  });
+
+  it('exits 2 with the message for a GateError', () => {
+    const io = fakeIo();
+    expect(exitCodeForError(new GateError('no plan_approval gate is waiting'), io)).toBe(ExitCode.UsageError);
+    expect(io.stderrText).toBe('janus: no plan_approval gate is waiting\n');
   });
 });
