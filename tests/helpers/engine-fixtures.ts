@@ -3,11 +3,13 @@ import { ExitCode } from '../../src/cli/exit-codes.js';
 import { loadGoal } from '../../src/config/load-goal.js';
 import { createEngine } from '../../src/engine/engine.js';
 import type { Engine } from '../../src/engine/engine.js';
+import { startStep } from '../../src/engine/steps.js';
+import type { Step, StepRegistry } from '../../src/engine/steps.js';
 import { checkoutBranch, commitAll, push } from '../../src/git/ops.js';
 import { checkpoint } from '../../src/state/checkpoint.js';
 import { GOAL_FILE } from '../../src/state/files.js';
 import { emptyInFlight } from '../../src/state/state-schema.js';
-import type { BudgetName, InFlight } from '../../src/state/state-schema.js';
+import type { BudgetName, GoalStatus, InFlight } from '../../src/state/state-schema.js';
 import { readState, writeState } from '../../src/state/state-store.js';
 import type { Workspace } from '../../src/workspace/open-workspace.js';
 import { tempDir } from './git-fixtures.js';
@@ -76,4 +78,26 @@ export function markInFlight(ws: WorkspaceFixture, inFlight: Partial<InFlight>, 
     if (value !== undefined) state.execution.budgets[name as BudgetName] = value;
   }
   writeState(ws.janusDir, state);
+}
+
+export function advanceStep(name: string, to: GoalStatus): Step {
+  return { name, run: async () => ({ kind: 'advance', to, summary: `scripted ${name}` }) };
+}
+
+/** A registry that walks the §9 happy path with no providers: planning enters Gate 1, review and merge advance directly. */
+export function scriptedSteps(overrides: StepRegistry = {}): StepRegistry {
+  return {
+    created: startStep,
+    preparing: advanceStep('prepare', 'discovering'),
+    discovering: advanceStep('discovery', 'baselining'),
+    baselining: advanceStep('baseline', 'planning'),
+    planning: { name: 'planning', run: async () => ({ kind: 'gate', gate: 'plan_approval', summary: 'plan ready' }) },
+    executing: advanceStep('execute-work-packages', 'final_e2e'),
+    final_e2e: advanceStep('final-e2e', 'ai_review'),
+    ai_review: advanceStep('ai-review', 'qa'),
+    qa: advanceStep('qa-recommendation', 'awaiting_human_review'),
+    awaiting_human_review: advanceStep('observe-pr-review', 'awaiting_merge'),
+    awaiting_merge: advanceStep('observe-merge', 'completed'),
+    ...overrides,
+  };
 }
