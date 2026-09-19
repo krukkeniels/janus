@@ -2,7 +2,12 @@ import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { ConfigError } from '../../src/config/errors.js';
-import { createWorkspaceDirs, ensureEmptyOrMissing, workspacePaths } from '../../src/workspace/layout.js';
+import {
+  createWorkspaceDirs,
+  ensureEmptyOrMissing,
+  removeWorkspaceArtifacts,
+  workspacePaths,
+} from '../../src/workspace/layout.js';
 import { tempDir } from '../helpers/git-fixtures.js';
 
 describe('workspacePaths', () => {
@@ -56,5 +61,28 @@ describe('ensureEmptyOrMissing', () => {
     mkdirSync(dir);
     writeFileSync(join(dir, 'janus.lock'), '{}');
     expect(() => ensureEmptyOrMissing(dir)).not.toThrow();
+  });
+});
+
+describe('removeWorkspaceArtifacts', () => {
+  it('removes the whole root when this run created it', () => {
+    const paths = workspacePaths(join(tempDir(), 'ws'));
+    createWorkspaceDirs(paths);
+    removeWorkspaceArtifacts(paths, false);
+    expect(existsSync(paths.root)).toBe(false);
+  });
+
+  it('removes only the owned entries, leaving the root and a pre-existing janus.lock, when the root already existed', () => {
+    const paths = workspacePaths(join(tempDir(), 'ws'));
+    mkdirSync(paths.root);
+    writeFileSync(paths.lockFile, '{}');
+    createWorkspaceDirs(paths);
+    removeWorkspaceArtifacts(paths, true);
+    expect(existsSync(paths.janusDir)).toBe(false);
+    expect(existsSync(paths.reposDir)).toBe(false);
+    expect(existsSync(paths.fakeDir)).toBe(false);
+    expect(existsSync(paths.pnpmStoreDir)).toBe(false);
+    expect(existsSync(paths.root)).toBe(true);
+    expect(existsSync(paths.lockFile)).toBe(true);
   });
 });

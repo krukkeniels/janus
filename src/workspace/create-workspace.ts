@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import type { JanusConfig } from '../config/config-schema.js';
 import type { Goal, GoalRepo } from '../config/goal-schema.js';
 import { clone, revParse } from '../git/ops.js';
@@ -7,9 +8,9 @@ import { CONFIG_FILE, DECISIONS_FILE, GOAL_FILE } from '../state/files.js';
 import { createInitialState } from '../state/state-schema.js';
 import type { JanusState } from '../state/state-schema.js';
 import { appendEvent } from '../telemetry/events.js';
-import { createWorkspaceDirs, ensureEmptyOrMissing, workspacePaths } from './layout.js';
+import { createWorkspaceDirs, ensureEmptyOrMissing, removeWorkspaceArtifacts, workspacePaths } from './layout.js';
 import type { WorkspacePaths } from './layout.js';
-import { acquireLock, releaseLock } from './lock.js';
+import { acquireLock, releaseLock, WorkspaceLockedError } from './lock.js';
 import type { LockInfo } from './lock.js';
 import { repoCloneUrl, stateBranchName, stateRemote } from './remotes.js';
 import type { StateRemote } from './remotes.js';
@@ -38,10 +39,14 @@ export interface CreateWorkspaceResult {
 export async function createWorkspace(input: CreateWorkspaceInput): Promise<CreateWorkspaceResult> {
   const now = input.now ?? new Date();
   const paths = workspacePaths(input.workspaceRoot);
+  const rootExisted = existsSync(paths.root);
   ensureEmptyOrMissing(paths.root);
   createWorkspaceDirs(paths);
-  const { reclaimed } = acquireLock(paths.lockFile, now);
+  let lockHeld = false;
+  let reclaimed: LockInfo | null;
   try {
+    ({ reclaimed } = acquireLock(paths.lockFile, now));
+    lockHeld = true;
     const remote = stateRemote(input.goal, input.config);
     const branch = stateBranchName(input.goal.id);
     const state = createInitialState({ goal: input.goal, stateBranch: { name: branch, remote: remote.remoteName }, now });
@@ -84,7 +89,16 @@ export async function createWorkspace(input: CreateWorkspaceInput): Promise<Crea
       now,
     });
     return { paths, state, stateCommit: commit, stateRemote: remote, reclaimedLock: reclaimed };
+  } catch (error) {
+    if (lockHeld) {
+      releaseLock(paths.lockFile);
+      lockHeld = false;
+    }
+    if (!(error instanceof WorkspaceLockedError)) {
+      removeWorkspaceArtifacts(paths, rootExisted);
+    }
+    throw error;
   } finally {
-    releaseLock(paths.lockFile);
+    if (lockHeld) releaseLock(paths.lockFile);
   }
 }

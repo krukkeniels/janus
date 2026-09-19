@@ -72,4 +72,16 @@ describe('janus init --goal', () => {
     expect(result.code).toBe(ExitCode.Locked);
     expect(result.stderr).toContain('locked by pid');
   });
+
+  it('removes what it created when cloning fails, so the same path can be retried', async () => {
+    const fixture = await goalFixture();
+    const workspace = join(tempDir(), 'ws');
+    writeFileSync(fixture.goalPath, fixture.goalText.replace(fixture.shell.bare, '/nonexistent/shell.git'));
+    const failed = await runCli(['init', '--goal', fixture.goalPath, '--workspace', workspace]);
+    expect(failed.code).toBe(ExitCode.UnexpectedError);
+    expect(existsSync(workspace)).toBe(false);
+    writeFileSync(fixture.goalPath, fixture.goalText);
+    const retry = await runCli(['init', '--goal', fixture.goalPath, '--workspace', workspace]);
+    expect(retry.code).toBe(ExitCode.Ok);
+  });
 });

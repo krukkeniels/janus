@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { ConfigError } from '../config/errors.js';
 
@@ -39,5 +39,16 @@ export function ensureEmptyOrMissing(root: string): void {
   const entries = readdirSync(root).filter((entry) => entry !== 'janus.lock');
   if (entries.length > 0) {
     throw new ConfigError(root, ['workspace directory exists and is not empty']);
+  }
+}
+
+/** Removes what a failed init created: the whole root if this run created it, otherwise only the entries a workspace owns. */
+export function removeWorkspaceArtifacts(paths: WorkspacePaths, rootExisted: boolean): void {
+  if (!rootExisted) {
+    rmSync(paths.root, { recursive: true, force: true });
+    return;
+  }
+  for (const dir of [paths.janusDir, paths.reposDir, paths.fakeDir, paths.pnpmStoreDir]) {
+    rmSync(dir, { recursive: true, force: true });
   }
 }
