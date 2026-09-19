@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -8,6 +9,12 @@ import { readEvents } from '../../src/telemetry/events.js';
 import { tempDir } from '../helpers/git-fixtures.js';
 import { runCli } from '../helpers/run-cli.js';
 import { goalFixture } from '../helpers/workspace-fixtures.js';
+
+function deadPid(): number {
+  const child = spawnSync('true');
+  if (child.pid === undefined) throw new Error('could not spawn a process');
+  return child.pid;
+}
 
 describe('janus init --goal', () => {
   it('clones repos, creates and pushes the state branch, and checkpoints', async () => {
@@ -63,6 +70,17 @@ describe('janus init --goal', () => {
     expect(result.stderr).toContain('config.yaml not found next to the goal file');
   });
 
+  it('reclaims a stale lock and proceeds', async () => {
+    const fixture = await goalFixture();
+    const workspace = join(tempDir(), 'ws');
+    mkdirSync(workspace);
+    const stale = deadPid();
+    writeFileSync(join(workspace, 'janus.lock'), JSON.stringify({ pid: stale, acquired_at: new Date().toISOString() }));
+    const result = await runCli(['init', '--goal', fixture.goalPath, '--workspace', workspace]);
+    expect(result.code).toBe(ExitCode.Ok);
+    expect(result.stderr).toContain('reclaimed a stale lock held by dead pid');
+  });
+
   it('exits 13 when another janus process holds the lock', async () => {
     const fixture = await goalFixture();
     const workspace = join(tempDir(), 'ws');
@@ -83,5 +101,17 @@ describe('janus init --goal', () => {
     writeFileSync(fixture.goalPath, fixture.goalText);
     const retry = await runCli(['init', '--goal', fixture.goalPath, '--workspace', workspace]);
     expect(retry.code).toBe(ExitCode.Ok);
+  });
+
+  it('refuses to re-init a goal whose state branch already exists on the remote, and cleans up', async () => {
+    const fixture = await goalFixture();
+    const first = join(tempDir(), 'ws1');
+    expect((await runCli(['init', '--goal', fixture.goalPath, '--workspace', first])).code).toBe(ExitCode.Ok);
+
+    const second = join(tempDir(), 'ws2');
+    const result = await runCli(['init', '--goal', fixture.goalPath, '--workspace', second]);
+    expect(result.code).toBe(ExitCode.UsageError);
+    expect(result.stderr).toContain(`already exists; use: janus init --resume ${fixture.stateBare} ${fixture.goalId}`);
+    expect(existsSync(second)).toBe(false);
   });
 });

@@ -1,3 +1,4 @@
+import { tmpdir } from 'node:os';
 import { dirname } from 'node:path';
 import { GitError, runGit } from './run.js';
 
@@ -88,7 +89,7 @@ export async function push(cwd: string, remote: string, branch: string, options:
   try {
     await runGit(cwd, args);
   } catch (error) {
-    if (error instanceof GitError && /rejected|non-fast-forward|fetch first/.test(error.stderr)) {
+    if (error instanceof GitError && /non-fast-forward|fetch first/.test(error.stderr)) {
       throw new PushRejectedError(error);
     }
     throw error;
@@ -98,6 +99,14 @@ export async function push(cwd: string, remote: string, branch: string, options:
 /** Sha of `branch` on `remote`, or null when the branch does not exist there. */
 export async function remoteHead(cwd: string, remote: string, branch: string): Promise<string | null> {
   const output = await runGit(cwd, ['ls-remote', remote, `refs/heads/${branch}`]);
+  if (output === '') return null;
+  const [sha] = output.split(/\s+/);
+  return sha === undefined || sha === '' ? null : sha;
+}
+
+/** Sha of `branch` at `url`, or null when the branch does not exist there. Runs outside any local repo. */
+export async function lsRemoteHead(url: string, branch: string): Promise<string | null> {
+  const output = await runGit(tmpdir(), ['ls-remote', url, `refs/heads/${branch}`]);
   if (output === '') return null;
   const [sha] = output.split(/\s+/);
   return sha === undefined || sha === '' ? null : sha;

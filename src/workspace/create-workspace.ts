@@ -1,7 +1,8 @@
 import { existsSync } from 'node:fs';
 import type { JanusConfig } from '../config/config-schema.js';
+import { ConfigError } from '../config/errors.js';
 import type { Goal, GoalRepo } from '../config/goal-schema.js';
-import { clone, revParse } from '../git/ops.js';
+import { clone, lsRemoteHead, revParse } from '../git/ops.js';
 import { checkpoint } from '../state/checkpoint.js';
 import { DECISIONS_HEADER } from '../state/decisions.js';
 import { CONFIG_FILE, DECISIONS_FILE, GOAL_FILE } from '../state/files.js';
@@ -60,6 +61,13 @@ export async function createWorkspace(input: CreateWorkspaceInput): Promise<Crea
       input.log(`cloning ${name} (${repo.base_branch}) from ${url}`);
       await clone(url, paths.repoDir(name), { branch: repo.base_branch });
       repoState.base_commit = await revParse(paths.repoDir(name), 'HEAD');
+    }
+
+    const existingHead = await lsRemoteHead(remote.url, branch);
+    if (existingHead !== null) {
+      throw new ConfigError(remote.url, [
+        `state branch ${branch} already exists; use: janus init --resume ${remote.url} ${input.goal.id}`,
+      ]);
     }
 
     input.log(`creating state branch ${branch} -> ${remote.url}`);

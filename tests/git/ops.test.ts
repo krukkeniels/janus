@@ -11,6 +11,7 @@ import {
   initBare,
   initRepo,
   isAncestor,
+  lsRemoteHead,
   push,
   PushRejectedError,
   remoteHead,
@@ -90,6 +91,12 @@ describe('git ops', () => {
     await push(dir, 'origin', 'janus/goal', { setUpstream: true });
     expect(await remoteHead(dir, 'origin', 'janus/goal')).toBe(sha);
     expect(await currentBranch(dir)).toBe('janus/goal');
+  });
+
+  it('resolves a remote branch head by url without requiring a local repo', async () => {
+    const remote = await createRemoteWithCommit('app');
+    expect(await lsRemoteHead(remote.bare, 'main')).toBe(remote.head);
+    expect(await lsRemoteHead(remote.bare, 'does-not-exist')).toBeNull();
   });
 
   it('allows an empty commit only when asked', async () => {
