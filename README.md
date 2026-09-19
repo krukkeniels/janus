@@ -6,7 +6,7 @@ Design: `angular-ai-development-workflow-v2.md`. Task breakdown: `tasks.md`. Imp
 
 ## Status
 
-Early scaffold. The CLI exists with every command from spec §8; most report "not implemented" and name the task that delivers them. `janus init --goal goal.yaml` creates a goal workspace, and `janus init --resume <state-remote> <goal-id>` rebuilds one from the state branch alone.
+Early scaffold. The CLI exists with every command from spec §8. `janus init --goal` creates a goal workspace, `janus init --resume` rebuilds one from the state branch alone, and `janus run` drives the goal state machine: it recovers an interrupted step, reconciles repo heads, runs one step per stage with `in_flight` bracketing and a checkpoint after each, and stops at human gates (`janus approve plan --commit <sha>`, `janus reject plan --reason`), escalations, exceeded waits, or completion. Every real stage step is still a placeholder that reports the task delivering it (T11 onward); the machine is exercised end to end with scripted steps in `tests/cli/scripted-run.test.ts`.
 
 ## Workspace
 
@@ -22,6 +22,18 @@ Early scaffold. The CLI exists with every command from spec §8; most report "no
 ```
 
 Repositories are cloned from `clone_url` in `goal.yaml` when present, otherwise from `bitbucket.clone_url_template` rendered with `bitbucket.url`.
+
+## Running
+
+`janus run [--until STAGE] [--max-wait 45m] [--dry-run] [--model-profile NAME]` must be run inside a workspace (any directory under it). It takes the workspace lock, loads `.janus/state.yaml`, and:
+
+1. recovers an interrupted step if `execution.in_flight.step` is set: an agent run's uncommitted diff is saved to `.janus/evidence/agents/<run-id>.interrupted.patch`, the repo is reset, and the run counts against its budget (spec §7 rule 3);
+2. reconciles every repo: a local goal branch that fast-forwarded past `head_commit` is adopted, a remote goal branch that is ahead is fast-forwarded locally, non-fast-forward drift escalates, and base-branch movement is only noted (§7 rule 2);
+3. runs stage steps until it stops.
+
+Exit codes: `0` completed or `--until` reached, `3` the next step is not implemented yet, `10` waiting at a human gate, `11` a wait exceeded `--max-wait`, `12` escalated, `13` another janus process holds the lock, `2` usage error, `1` unexpected error (including a moved remote state branch, which needs a manual reconcile).
+
+Gates 1 and 2 are passed with `janus approve plan --commit <sha> [--exception <id> ...]` and `janus approve revised-plan --commit <sha>`; the sha must be the state-branch commit printed by `janus run` (the commit at which the gate was entered), and the approver is taken from the git identity in `.janus/` and written to `decisions.md`. `janus reject plan --reason "..."` sends the goal back to `planning` (or `replanning` after an escalation). Guardrail hits (spec §20) and step failures write `.janus/escalation.md` and move the goal to `escalated`; `janus escalation resolve` arrives with T13.
 
 ## Development
 
