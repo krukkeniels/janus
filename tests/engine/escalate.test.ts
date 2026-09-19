@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { escalate, renderEscalationStub } from '../../src/engine/escalate.js';
+import { enterGate } from '../../src/engine/gates.js';
 import { IllegalTransitionError } from '../../src/engine/transitions.js';
 import { remoteHead } from '../../src/git/ops.js';
 import { runGit } from '../../src/git/run.js';
@@ -61,6 +62,29 @@ describe('escalate', () => {
       const events = readEvents(ws.janusDir).map((event) => event['type']);
       expect(events).toEqual(['goal.created', 'escalation.created', 'stage.exited', 'stage.entered']);
       expect(readFileSync(join(ws.janusDir, 'escalation.md'), 'utf8')).toContain('- Guardrail: none');
+    } finally {
+      workspace.release();
+    }
+  });
+
+  it('clears a gate waiting at the time of escalation and emits gate.rejected', async () => {
+    const ws = await initWorkspace();
+    const workspace = await openWorkspace(ws.root);
+    try {
+      const clock = { now: new Date('2026-09-19T15:00:00.000Z') };
+      const { engine } = testEngine(workspace, () => clock.now);
+      workspace.state.goal.status = 'awaiting_plan_approval';
+      await engine.checkpoint('chore(janus): planning: plan ready');
+      await enterGate(engine, 'plan_approval');
+
+      clock.now = new Date('2026-09-19T15:05:00.000Z');
+      const result = await escalate(engine, { reason: 'planning stalled', repo: null, guardrail: null });
+
+      expect(result.from).toBe('awaiting_plan_approval');
+      expect(workspace.state.gate).toEqual({ type: null, status: 'none', entered_at: null, checkpoint_commit: null });
+      expect(readState(ws.janusDir).gate).toEqual({ type: null, status: 'none', entered_at: null, checkpoint_commit: null });
+      const rejected = readEvents(ws.janusDir).find((event) => event['type'] === 'gate.rejected');
+      expect(rejected).toMatchObject({ gate: 'plan_approval', reason: 'escalated', waited_ms: 300_000 });
     } finally {
       workspace.release();
     }

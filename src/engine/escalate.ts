@@ -28,6 +28,15 @@ export async function escalate(engine: Engine, input: EscalationInput): Promise<
   const { state, paths } = engine.workspace;
   const from = state.goal.status;
   const now = engine.now();
+  if (state.gate.status === 'waiting') {
+    // A gate has no meaning once its goal moves to `escalated`: clear it so a later `approve`/`reject` finds no
+    // gate waiting instead of mutating state and emitting `gate.passed`/`gate.rejected` ahead of the illegal
+    // transition it would otherwise hit in `enterStage` (below), after already having mutated state.
+    const enteredAt = state.gate.entered_at;
+    const waited = enteredAt === null ? 0 : Math.max(0, now.getTime() - Date.parse(enteredAt));
+    engine.emit({ type: 'gate.rejected', gate: state.gate.type, reason: 'escalated', waited_ms: waited });
+    state.gate = { type: null, status: 'none', entered_at: null, checkpoint_commit: null };
+  }
   if (input.guardrail !== null) {
     engine.emit({
       type: 'guardrail.hit',

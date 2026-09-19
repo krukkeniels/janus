@@ -6,6 +6,7 @@ import type { CheckpointResult } from '../state/checkpoint.js';
 import type { GateType, GoalStatus } from '../state/state-schema.js';
 import { enterStage } from './engine.js';
 import type { Engine } from './engine.js';
+import { assertTransition } from './transitions.js';
 
 /** Gates passed by `janus approve` (spec §26 gates 1 and 2). The others are observed from the SCM provider. */
 export const CLI_GATES: readonly GateType[] = ['plan_approval', 'revised_plan_approval'];
@@ -64,17 +65,24 @@ interface WaitingGate {
   enteredAt: string;
 }
 
+/**
+ * A gate is genuinely waiting only when the gate object says so *and* the goal is still parked in the stage that
+ * gate entered (spec §7 rule 1, §26). Escalation clears the gate object itself, but this extra check guards
+ * against any other path that moves `goal.status` away from a gate's stage without also clearing `state.gate`.
+ */
 function requireWaitingCliGate(engine: Engine, expected: GateType | null): WaitingGate {
   const { state } = engine.workspace;
   const gate = state.gate;
-  if (gate.status !== 'waiting' || gate.type === null || !isCliGate(gate.type)) {
+  const type = gate.type;
+  const waiting = gate.status === 'waiting' && type !== null && isCliGate(type) && state.goal.status === gateStage(type);
+  if (!waiting || type === null) {
     const name = expected ?? 'plan approval';
     throw new GateError(`no ${name} gate is waiting (goal status ${state.goal.status}, gate ${gate.status})`);
   }
-  if (expected !== null && gate.type !== expected) {
-    throw new GateError(`gate ${gate.type} is waiting, not ${expected}; use: janus approve ${gateCommand(gate.type) ?? '...'} --commit <sha>`);
+  if (expected !== null && type !== expected) {
+    throw new GateError(`gate ${type} is waiting, not ${expected}; use: janus approve ${gateCommand(type) ?? '...'} --commit <sha>`);
   }
-  return { type: gate.type, enteredAt: gate.entered_at ?? engine.now().toISOString() };
+  return { type, enteredAt: gate.entered_at ?? engine.now().toISOString() };
 }
 
 function waitedMs(enteredAt: string, now: Date): number {
@@ -98,6 +106,7 @@ export interface ApproveResult {
 export async function approvePlan(engine: Engine, input: ApprovePlanInput): Promise<ApproveResult> {
   const { state, paths } = engine.workspace;
   const waiting = requireWaitingCliGate(engine, input.gate);
+  assertTransition(state.goal.status, 'executing');
   const head = await revParse(paths.janusDir, 'HEAD');
   let resolved: string;
   try {
@@ -153,9 +162,10 @@ export interface RejectResult {
 export async function rejectPlan(engine: Engine, input: RejectPlanInput): Promise<RejectResult> {
   const { state } = engine.workspace;
   const waiting = requireWaitingCliGate(engine, null);
+  const to: GoalStatus = waiting.type === 'plan_approval' ? 'planning' : 'replanning';
+  assertTransition(state.goal.status, to);
   const now = engine.now();
   const by = formatIdentity(input.approver);
-  const to: GoalStatus = waiting.type === 'plan_approval' ? 'planning' : 'replanning';
   const waited = waitedMs(waiting.enteredAt, now);
   state.gate = { type: null, status: 'none', entered_at: null, checkpoint_commit: null };
   engine.emit({ type: 'gate.rejected', gate: waiting.type, approver: by, reason: input.reason, waited_ms: waited });

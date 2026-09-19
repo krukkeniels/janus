@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { escalate } from '../../src/engine/escalate.js';
 import { GateError, approvePlan, enterGate, gateCommand, gateStage, isCliGate, rejectPlan } from '../../src/engine/gates.js';
 import { remoteHead, revParse } from '../../src/git/ops.js';
 import { runGit } from '../../src/git/run.js';
@@ -152,6 +153,23 @@ describe('approvePlan', () => {
       await approvePlan(at.engine, { gate: 'plan_approval', commit: at.gateCommit, exceptions: ['ex-1'], approver });
       expect(at.workspace.state.baseline.exceptions[0]).toMatchObject({ id: 'ex-1', approved_by: 'Janus Test <janus@test.invalid>', approved_at: '2026-09-19T16:00:00.000Z' });
       expect(readFileSync(join(at.ws.janusDir, 'decisions.md'), 'utf8')).toContain('Exceptions approved: ex-1');
+    } finally {
+      at.workspace.release();
+    }
+  });
+});
+
+describe('approvePlan on an escalated goal', () => {
+  it('throws GateError without mutating state or emitting gate.passed', async () => {
+    const at = await atGate('revised_plan_approval');
+    try {
+      await escalate(at.engine, { reason: 'stalled mid-review', repo: null, guardrail: null });
+      await expect(approvePlan(at.engine, { gate: 'revised_plan_approval', commit: at.gateCommit, exceptions: [], approver })).rejects.toThrow(GateError);
+      expect(at.workspace.state.goal.status).toBe('escalated');
+      expect(at.workspace.state.plan.approved).toBe(false);
+      expect(at.workspace.state.gate.status).toBe('none');
+      const types = readEvents(at.ws.janusDir).map((event) => event['type']);
+      expect(types).not.toContain('gate.passed');
     } finally {
       at.workspace.release();
     }
