@@ -1,12 +1,18 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { parse } from 'yaml';
 import { ConfigError } from './errors.js';
 
 export function readYamlFile(path: string): unknown {
-  if (!existsSync(path)) {
-    throw new ConfigError(path, ['file not found']);
+  let text: string;
+  try {
+    text = readFileSync(path, 'utf8');
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && (error as NodeJS.ErrnoException).code === 'ENOENT') {
+      throw new ConfigError(path, ['file not found']);
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    throw new ConfigError(path, [`cannot read file: ${message}`]);
   }
-  const text = readFileSync(path, 'utf8');
   try {
     return parse(text) as unknown;
   } catch (error) {
