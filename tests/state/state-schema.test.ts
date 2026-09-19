@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { formatZodIssues } from '../../src/config/errors.js';
 import { goalSchema } from '../../src/config/goal-schema.js';
-import { createInitialState, GOAL_STATUSES, stateSchema } from '../../src/state/state-schema.js';
+import { BUDGET_NAMES, createInitialState, GATE_TYPES, GOAL_STATUSES, stateSchema } from '../../src/state/state-schema.js';
 import { validGoal } from '../fixtures/valid-goal.js';
 
 const now = new Date('2026-09-19T12:00:00.000Z');
@@ -90,5 +90,19 @@ describe('stateSchema', () => {
       checkpoint: { outcome: null, run_id: null },
       regroups: [],
     });
+  });
+});
+
+describe('schema constants', () => {
+  it('BUDGET_NAMES matches the budgets object', () => {
+    expect(Object.keys(initial().execution.budgets).sort()).toEqual([...BUDGET_NAMES].sort());
+  });
+
+  it('GATE_TYPES is what the gate enum accepts', () => {
+    for (const type of GATE_TYPES) {
+      const state = initial();
+      state.gate.type = type;
+      expect(stateSchema.parse(state).gate.type).toBe(type);
+    }
   });
 });

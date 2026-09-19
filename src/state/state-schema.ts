@@ -23,6 +23,23 @@ export const GOAL_STATUSES = [
 
 export type GoalStatus = (typeof GOAL_STATUSES)[number];
 
+/** The seven counters of `execution.budgets` (spec §20). The per-package `policy_violations` counter lives in work packages. */
+export const BUDGET_NAMES = [
+  'ci_fix_attempts',
+  'e2e_fix_attempts',
+  'ai_review_cycles',
+  'no_progress_iterations',
+  'work_packages_without_green',
+  'sync_conflict_attempts',
+  'infra_retries',
+] as const;
+
+export type BudgetName = (typeof BUDGET_NAMES)[number];
+
+export const GATE_TYPES = ['plan_approval', 'revised_plan_approval', 'pr_review', 'merge'] as const;
+
+export type GateType = (typeof GATE_TYPES)[number];
+
 const sha = z.string().regex(/^[0-9a-f]{40}$/, 'must be a full 40-character commit sha');
 const nullableSha = sha.nullable();
 const isoDate = z.string().datetime();
@@ -224,7 +241,7 @@ export const stateSchema = z
       .default({}),
     gate: z
       .object({
-        type: z.enum(['plan_approval', 'revised_plan_approval', 'pr_review', 'merge']).nullable().default(null),
+        type: z.enum(GATE_TYPES).nullable().default(null),
         status: z.enum(['none', 'waiting', 'passed']).default('none'),
         entered_at: isoDate.nullable().default(null),
         checkpoint_commit: nullableSha.default(null),
