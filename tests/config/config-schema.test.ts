@@ -84,4 +84,22 @@ describe('configSchema', () => {
     });
     expect(issues.some((issue) => issue.startsWith('model_profiles.default.tester'))).toBe(true);
   });
+
+  it('does not cascade timeout-ceiling noise when max_agent_runtime_minutes itself is invalid', () => {
+    const issues = issuesOf({
+      workflow: { ci_provider: 'fake', scm_provider: 'fake' },
+      guardrails: { max_agent_runtime_minutes: 0 },
+    });
+    expect(issues).toHaveLength(1);
+    expect(issues[0]?.startsWith('guardrails.max_agent_runtime_minutes')).toBe(true);
+  });
+
+  it('does not cascade a profile-existence issue when workflow_models.profile itself is invalid', () => {
+    const issues = issuesOf({
+      workflow: { ci_provider: 'fake', scm_provider: 'fake' },
+      workflow_models: { profile: '' },
+    });
+    expect(issues).toHaveLength(1);
+    expect(issues[0]?.startsWith('workflow_models.profile')).toBe(true);
+  });
 });

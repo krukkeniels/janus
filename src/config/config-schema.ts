@@ -194,13 +194,23 @@ export const configSchema = z
   })
   .strict()
   .superRefine((config, ctx) => {
-    if (config.workflow.ci_provider === 'teamcity' && config.teamcity.url === undefined) {
+    const ciProviders = ['teamcity', 'local', 'fake'] as const;
+    const scmProviders = ['bitbucket-server', 'fake'] as const;
+    if (
+      (ciProviders as readonly string[]).includes(config.workflow.ci_provider) &&
+      config.workflow.ci_provider === 'teamcity' &&
+      config.teamcity.url === undefined
+    ) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['teamcity', 'url'], message: 'required when workflow.ci_provider is "teamcity"' });
     }
-    if (config.workflow.scm_provider === 'bitbucket-server' && config.bitbucket.url === undefined) {
+    if (
+      (scmProviders as readonly string[]).includes(config.workflow.scm_provider) &&
+      config.workflow.scm_provider === 'bitbucket-server' &&
+      config.bitbucket.url === undefined
+    ) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['bitbucket', 'url'], message: 'required when workflow.scm_provider is "bitbucket-server"' });
     }
-    if (!(config.workflow_models.profile in config.model_profiles)) {
+    if (config.workflow_models.profile.length > 0 && !(config.workflow_models.profile in config.model_profiles)) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['workflow_models', 'profile'],
@@ -208,13 +218,15 @@ export const configSchema = z
       });
     }
     const ceiling = config.guardrails.max_agent_runtime_minutes;
-    for (const role of AGENT_ROLES) {
-      if (config.agents.roles[role].timeout_minutes > ceiling) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ['agents', 'roles', role, 'timeout_minutes'],
-          message: `must not exceed guardrails.max_agent_runtime_minutes (${ceiling})`,
-        });
+    if (Number.isInteger(ceiling) && ceiling > 0) {
+      for (const role of AGENT_ROLES) {
+        if (config.agents.roles[role].timeout_minutes > ceiling) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['agents', 'roles', role, 'timeout_minutes'],
+            message: `must not exceed guardrails.max_agent_runtime_minutes (${ceiling})`,
+          });
+        }
       }
     }
   });
