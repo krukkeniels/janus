@@ -5,7 +5,7 @@ import { ConfigError } from '../config/errors.js';
 import type { Goal, GoalRepo } from '../config/goal-schema.js';
 import { loadConfig } from '../config/load-config.js';
 import { loadGoal } from '../config/load-goal.js';
-import { checkoutBranch, clone, fetch, revParse } from '../git/ops.js';
+import { checkoutBranch, clone, fetch, isAncestor, revParse } from '../git/ops.js';
 import { CONFIG_FILE, GOAL_FILE } from '../state/files.js';
 import type { JanusState } from '../state/state-schema.js';
 import { readState } from '../state/state-store.js';
@@ -51,6 +51,9 @@ export async function resumeWorkspace(input: ResumeWorkspaceInput): Promise<Resu
     if (state.goal.id !== input.goalId) {
       throw new ConfigError(paths.janusDir, [`state branch holds goal "${state.goal.id}", not "${input.goalId}"`]);
     }
+    if (state.state_branch.name !== branch) {
+      throw new ConfigError(paths.janusDir, [`state branch name ${state.state_branch.name} does not match ${branch}`]);
+    }
     const { goal, repoOrder } = loadGoal(join(paths.janusDir, GOAL_FILE));
     const config = loadConfig(join(paths.janusDir, CONFIG_FILE));
     const reposByName = new Map<string, GoalRepo>(goal.repos.map((repo) => [repo.name, repo]));
@@ -66,11 +69,18 @@ export async function resumeWorkspace(input: ResumeWorkspaceInput): Promise<Resu
       await clone(url, dir, { branch: repo.base_branch });
       if (repoState.head_commit !== null) {
         await fetch(dir, 'origin', repoState.goal_branch);
-        await checkoutBranch(dir, repoState.goal_branch, 'FETCH_HEAD');
-        const head = await revParse(dir, 'HEAD');
-        if (head !== repoState.head_commit) {
+        const headCommit = repoState.head_commit;
+        const short = headCommit.slice(0, 7);
+        if (await isAncestor(dir, headCommit, 'FETCH_HEAD')) {
+          await checkoutBranch(dir, repoState.goal_branch, headCommit);
+          const fetchHead = await revParse(dir, 'FETCH_HEAD');
+          if (fetchHead !== headCommit) {
+            warnings.push(`${name}: remote goal branch is ahead of recorded head ${short}; janus run will reconcile`);
+          }
+        } else {
+          await checkoutBranch(dir, repoState.goal_branch, 'FETCH_HEAD');
           warnings.push(
-            `${name}: goal branch head ${head.slice(0, 7)} differs from recorded ${repoState.head_commit.slice(0, 7)}; janus run will reconcile`,
+            `${name}: recorded head ${short} is not reachable from the remote goal branch (non-fast-forward drift); janus run will reconcile`,
           );
         }
       }
