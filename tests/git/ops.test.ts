@@ -7,6 +7,7 @@ import {
   clone,
   commitAll,
   currentBranch,
+  fastForward,
   fetch,
   initBare,
   initRepo,
@@ -16,7 +17,9 @@ import {
   PushRejectedError,
   remoteHead,
   revParse,
+  tryRevParse,
 } from '../../src/git/ops.js';
+import { GitError } from '../../src/git/run.js';
 import { runGit } from '../../src/git/run.js';
 import { createRemoteWithCommit, tempDir } from '../helpers/git-fixtures.js';
 
@@ -107,5 +110,32 @@ describe('git ops', () => {
     await expect(commitAll(dir, 'chore(r): nothing')).rejects.toThrow();
     const sha = await commitAll(dir, 'chore(r): checkpoint', { allowEmpty: true });
     expect(sha).toMatch(/^[0-9a-f]{40}$/);
+  });
+
+  it('resolves refs or answers null with tryRevParse', async () => {
+    const dir = join(tempDir(), 'repo');
+    mkdirSync(dir);
+    await initRepo(dir, 'main');
+    writeFileSync(join(dir, 'a.txt'), 'a\n');
+    const sha = await commitAll(dir, 'chore: a');
+    expect(await tryRevParse(dir, 'main')).toBe(sha);
+    expect(await tryRevParse(dir, 'refs/heads/nope')).toBeNull();
+  });
+
+  it('fast-forwards the current branch and refuses divergence', async () => {
+    const dir = join(tempDir(), 'repo');
+    mkdirSync(dir);
+    await initRepo(dir, 'main');
+    writeFileSync(join(dir, 'a.txt'), 'a\n');
+    const base = await commitAll(dir, 'chore: a');
+    await checkoutBranch(dir, 'feature', base);
+    const ahead = await commitAll(dir, 'chore: b', { allowEmpty: true });
+    await checkoutBranch(dir, 'main');
+    await fastForward(dir, 'feature');
+    expect(await revParse(dir, 'main')).toBe(ahead);
+    await commitAll(dir, 'chore: c', { allowEmpty: true });
+    await checkoutBranch(dir, 'feature');
+    await commitAll(dir, 'chore: d', { allowEmpty: true });
+    await expect(fastForward(dir, 'main')).rejects.toBeInstanceOf(GitError);
   });
 });

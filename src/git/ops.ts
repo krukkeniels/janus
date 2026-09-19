@@ -121,3 +121,18 @@ export async function isAncestor(cwd: string, ancestor: string, descendant: stri
     throw error;
   }
 }
+
+/** Like `revParse`, but null when `ref` does not resolve to a commit. */
+export async function tryRevParse(cwd: string, ref: string): Promise<string | null> {
+  try {
+    return await revParse(cwd, ref);
+  } catch (error) {
+    if (error instanceof GitError && error.exitCode === 128) return null;
+    throw error;
+  }
+}
+
+/** Moves the current branch forward to `ref`; fails with GitError when that is not a fast-forward. */
+export async function fastForward(cwd: string, ref: string): Promise<void> {
+  await runGit(cwd, ['merge', '-q', '--ff-only', ref]);
+}
