@@ -5,9 +5,9 @@ import { ConfigError } from '../../config/errors.js';
 import { loadConfig } from '../../config/load-config.js';
 import { loadGoal } from '../../config/load-goal.js';
 import { createWorkspace } from '../../workspace/create-workspace.js';
+import { resumeWorkspace } from '../../workspace/resume-workspace.js';
 import type { CliContext } from '../context.js';
 import { ExitCode } from '../exit-codes.js';
-import { notImplemented } from '../not-implemented.js';
 
 interface InitOptions {
   goal?: string;
@@ -32,8 +32,26 @@ export function registerInit(program: Command, ctx: CliContext): void {
 
 async function runInit(ctx: CliContext, goalId: string | undefined, options: InitOptions): Promise<ExitCode> {
   if (options.resume !== undefined) {
-    void goalId;
-    return notImplemented(ctx, 'init --resume', 'T02');
+    if (goalId === undefined) {
+      ctx.io.stderr('janus: init --resume requires the goal id, for example: janus init --resume <state-remote> angular-15-to-16\n');
+      return ExitCode.UsageError;
+    }
+    const result = await resumeWorkspace({
+      stateRemoteUrl: options.resume,
+      goalId,
+      workspaceRoot: resolve(ctx.io.cwd, options.workspace ?? goalId),
+      log: (line) => ctx.io.stdout(`${line}\n`),
+    });
+    if (result.reclaimedLock !== null) {
+      ctx.io.stderr(`janus: reclaimed a stale lock held by dead pid ${result.reclaimedLock.pid}\n`);
+    }
+    for (const warning of result.warnings) {
+      ctx.io.stderr(`janus: warning: ${warning}\n`);
+    }
+    ctx.io.stdout(`goal ${result.goal.id}: status ${result.state.goal.status}\n`);
+    ctx.io.stdout(`workspace: ${result.paths.root}\n`);
+    ctx.io.stdout(`state branch: ${result.state.state_branch.name} at ${result.stateCommit.slice(0, 7)}\n`);
+    return ExitCode.Ok;
   }
   if (options.goal === undefined) {
     ctx.io.stderr('janus: either --goal <file> or --resume <state-remote> is required\n');

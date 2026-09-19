@@ -24,7 +24,6 @@ const stubbed: string[][] = [
   ['telemetry', 'export'],
   ['telemetry', 'export', '--csv'],
   ['telemetry', 'compare', 'a.jsonl', 'b.jsonl'],
-  ['init', '--resume', 'ssh://git/state.git', 'angular-15-to-16'],
 ];
 
 describe('command stubs', () => {
