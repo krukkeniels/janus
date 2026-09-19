@@ -12,7 +12,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
-    "dev": "tsx src/cli/main.ts",
+    "dev": "tsx src/cli/entry.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "eslint .",
