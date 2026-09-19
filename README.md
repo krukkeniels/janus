@@ -20,4 +20,4 @@ pnpm dev --help    # run the CLI from source
 node bin/janus.js --help
 ```
 
-Node 20 or newer and pnpm are required. Tokens for TeamCity and Bitbucket come from environment variables named in `config.yaml` (`JANUS_TEAMCITY_TOKEN`, `JANUS_BITBUCKET_TOKEN` by default) and are never read from files.
+Node 20 or newer and pnpm are required, though the dev toolchain (ESLint 10) needs Node 20.19 or newer. Tokens for TeamCity and Bitbucket come from environment variables named in `config.yaml` (`JANUS_TEAMCITY_TOKEN`, `JANUS_BITBUCKET_TOKEN` by default) and are never read from files.
