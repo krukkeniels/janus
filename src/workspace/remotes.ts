@@ -42,8 +42,9 @@ export function stateRemote(goal: Goal, config: JanusConfig): StateRemote {
 
 function renderTemplate(config: JanusConfig, project: string, slug: string): string {
   const base = (config.bitbucket.url ?? '').replace(/\/+$/, '');
+  const projectKey = project.toLowerCase();
   return config.bitbucket.clone_url_template
-    .replace('{url}', base)
-    .replace('{project}', project.toLowerCase())
-    .replace('{slug}', slug);
+    .replace('{url}', () => base)
+    .replace('{project}', () => projectKey)
+    .replace('{slug}', () => slug);
 }

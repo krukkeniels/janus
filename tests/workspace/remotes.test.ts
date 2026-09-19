@@ -27,6 +27,17 @@ describe('repoCloneUrl', () => {
     expect(repoCloneUrl(repo, config)).toBe('https://bb.example.internal/scm/fe/ui-kit.git');
   });
 
+  it('treats a literal $ in bitbucket.url as literal, not a replacement pattern', () => {
+    // "$&" is JS String.replace's "insert the whole match" token; if renderTemplate passes
+    // values straight as the replacement argument, this reappears as the {url} placeholder
+    // it just replaced instead of being carried through literally.
+    const goal = goalSchema.parse(validGoal);
+    const config = parseConfig({ ...fakeProviders, bitbucket: { url: 'https://bb.example.internal/$&prefix' } }, 'config.yaml');
+    const repo = goal.repos[0];
+    if (!repo) throw new Error('fixture has no repos');
+    expect(repoCloneUrl(repo, config)).toBe('https://bb.example.internal/$&prefix/scm/fe/ui-kit.git');
+  });
+
   it('fails clearly when neither clone_url nor bitbucket.url exists', () => {
     const goal = goalSchema.parse(validGoal);
     const config = parseConfig(fakeProviders, 'config.yaml');
