@@ -1,5 +1,4 @@
 import type { Command } from 'commander';
-import { ConfigError } from '../../config/errors.js';
 import { loadConfig } from '../../config/load-config.js';
 import { loadGoal } from '../../config/load-goal.js';
 import type { CliContext } from '../context.js';
@@ -35,21 +34,13 @@ function runInit(ctx: CliContext, options: InitOptions): ExitCode {
     ctx.io.stderr('janus: either --goal <file> or --resume <state-remote> is required\n');
     return ExitCode.UsageError;
   }
-  try {
-    const { goal, repoOrder } = loadGoal(options.goal);
-    if (options.config !== undefined) {
-      loadConfig(options.config);
-    }
-    ctx.io.stdout(
-      `goal ${goal.id}: Angular ${goal.source_version} -> ${goal.target_version}, ${goal.repos.length} repos\n`,
-    );
-    ctx.io.stdout(`repo order: ${repoOrder.join(', ')}\n`);
-  } catch (error) {
-    if (error instanceof ConfigError) {
-      ctx.io.stderr(`janus: ${error.message}\n`);
-      return ExitCode.UsageError;
-    }
-    throw error;
+  const { goal, repoOrder } = loadGoal(options.goal);
+  if (options.config !== undefined) {
+    loadConfig(options.config);
   }
+  ctx.io.stdout(
+    `goal ${goal.id}: Angular ${goal.source_version} -> ${goal.target_version}, ${goal.repos.length} repos\n`,
+  );
+  ctx.io.stdout(`repo order: ${repoOrder.join(', ')}\n`);
   return notImplemented(ctx, 'workspace creation', 'T02');
 }

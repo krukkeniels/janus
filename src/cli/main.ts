@@ -1,4 +1,5 @@
 import { Command, CommanderError } from 'commander';
+import { ConfigError } from '../config/errors.js';
 import { registerCommands } from './commands/index.js';
 import { createContext, defaultIo } from './context.js';
 import type { CliContext, CliIo } from './context.js';
@@ -22,6 +23,19 @@ export function buildProgram(ctx: CliContext): Command {
 
 const HELP_CODES = new Set(['commander.helpDisplayed', 'commander.help', 'commander.version']);
 
+export function exitCodeForError(error: unknown, io: CliIo): ExitCode {
+  if (error instanceof CommanderError) {
+    return HELP_CODES.has(error.code) ? ExitCode.Ok : ExitCode.UsageError;
+  }
+  if (error instanceof ConfigError) {
+    io.stderr(`janus: ${error.message}\n`);
+    return ExitCode.UsageError;
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  io.stderr(`janus: ${message}\n`);
+  return ExitCode.UnexpectedError;
+}
+
 export async function main(argv: string[], io: CliIo = defaultIo()): Promise<ExitCode> {
   const ctx = createContext(io);
   const program = buildProgram(ctx);
@@ -33,11 +47,6 @@ export async function main(argv: string[], io: CliIo = defaultIo()): Promise<Exi
     await program.parseAsync(argv, { from: 'user' });
     return ctx.exitCode;
   } catch (error) {
-    if (error instanceof CommanderError) {
-      return HELP_CODES.has(error.code) ? ExitCode.Ok : ExitCode.UsageError;
-    }
-    const message = error instanceof Error ? error.message : String(error);
-    io.stderr(`janus: ${message}\n`);
-    return ExitCode.UnexpectedError;
+    return exitCodeForError(error, io);
   }
 }
