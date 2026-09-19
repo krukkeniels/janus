@@ -1,202 +1,271 @@
-# Janus: High-Level Task Breakdown
+# Janus: High-Level Task Breakdown (v2.1)
 
-Each task below is intended to become one implementation plan (superpowers `writing-plans`) and one execution cycle. Tasks are ordered by dependency; tasks marked with the same letter in "Parallel" can be built concurrently once their dependencies are done.
+Each task is intended to become one implementation plan (superpowers `writing-plans`) and one execution cycle. Tasks are grouped into the vertical slices of spec §30. Within a slice, tasks are ordered by dependency; tasks sharing a "Parallel" letter can be built concurrently once their dependencies are done.
 
-Source spec: `angular-ai-development-workflow-v2.md` (section numbers referenced as §N).
+Source spec: `angular-ai-development-workflow-v2.md` (§N references).
 
-Conventions for every task: TypeScript strict, Node 20+, pnpm, vitest, zod for schemas, conventional commits `type(scope): subject`, no work merged without tests.
+Conventions for every task: TypeScript strict, Node 20+, pnpm, vitest, zod for schemas, conventional commits `type(scope): subject`, no task done without its tests green in CI.
 
 ---
 
+# Slice 1: one repo, local CI, fake SCM, full loop
+
 ## T01 Repository bootstrap and CLI skeleton
 
-Depends on: nothing. Parallel: A.
+Depends on: nothing.
 
-- pnpm project, TypeScript strict, ESLint, vitest, `tsup` or `tsc` build, `bin/janus` entry
-- CLI framework (commander or similar) with the command surface of §8 stubbed: `init`, `run`, `status`, `approve`, `reject`, `escalation`, `review sync`, `doctor`, `agent run`, `ci`
-- distinct exit codes for run outcomes (gate, wait, escalated, completed, error)
-- `config.yaml` schema (zod) matching §28 with defaults; loader with env-var token resolution
-- `goal.yaml` schema (zod) matching §4; validation of repo graph (acyclic `depends_on`, `coupled_with` symmetry, E2E `branch_params` refer to known repos)
-- README stub, CONTRIBUTING with the test pyramid of §29
+- pnpm project, TypeScript strict, ESLint, vitest, build, `bin/janus`
+- CLI framework with the §8 command surface stubbed; distinct exit codes per run outcome
+- `config.yaml` schema (zod) per §28 with defaults; loader with env-var token resolution
+- `goal.yaml` schema (zod) per §4: acyclic `depends_on`, `coupled_with` normalization, `loads_remotes` covered by `repos` or `acknowledged_outside_goal`, E2E `branch_params` refer to known repos
+- GitHub Actions on this repo: lint, unit tests
 
-Done when: `janus --help` works, config and goal files validate with useful errors, CI (GitHub Actions on this repo) runs lint and tests.
+Done when: `janus --help` works; invalid config and goal files fail with messages naming the field; CI green.
 
 ## T02 State model, workspace, state branch, checkpoints
 
 Depends on: T01.
 
-- `state.yaml` schema v2 (zod) per §6, load/save with atomic writes
-- workspace layout per §5: `.janus/` worktree of orphan branch `janus/<goal-id>`, `repos/<name>` clones, `janus.lock`
-- git operations module (wrapping `git` CLI): clone, fetch, create branch from commit, worktree add, commit, push fast-forward-only, diff collection (tracked + untracked, excluding ignored), reset, patch export
-- checkpoint function: stage state, handover, evidence, decisions; commit on state branch; optional push; return commit sha
-- `janus init --goal` and `janus init --resume` (§8)
-- `decisions.md` append helper, `telemetry/events.jsonl` append helper
+- `state.yaml` schema v2 (zod) per §6 including `execution.work_packages.<id>`, per-repo `merged`, `release`, `review_loop`
+- workspace layout per §5: `.janus/` single-branch clone, `repos/<name>`, `fake/`, `.pnpm-store/` with workspace `.npmrc`, `janus.lock` with PID
+- git module: clone, fetch, branch from commit, merge (no rebase), commit, fast-forward-only push, diff collection, reset, patch export, reflog read
+- checkpoint: stage state, minimal handover (full renderer in T14), evidence, decisions; commit; optional push
+- `janus init --goal`, `janus init --resume`
+- `decisions.md` and `telemetry/events.jsonl` append helpers
 
-Done when: integration test creates a workspace from three temp repos, checkpoints, clones the state branch elsewhere, and `init --resume` rebuilds an identical workspace.
+Done when: integration test builds a workspace from temp repos, checkpoints, clones the state branch elsewhere, and `init --resume` rebuilds an identical workspace; stale lock with dead PID is reclaimed.
 
-## T03 Engine core: state machine, run loop, gates, resume
+## T03 Engine core: state machine, run loop, gates, resume, budgets
 
 Depends on: T02.
 
-- explicit state machine for `goal.status` (§6) with allowed transitions and a transition log
-- step abstraction: `in_flight` bracketing, checkpoint after each step, idempotency flags
-- `janus run` loop with `--until`, `--max-wait`, `--dry-run`, lock file, exit codes
-- resume reconciliation (§7): head verification, remote drift detection, in-flight recovery for agent, CI-wait, and idempotent steps
-- gate representation and `janus approve|reject` recording approver, commit, timestamp into state and `decisions.md`
-- budget accounting primitives (§20) and guardrail-hit -> escalation transition hook (escalation content comes in T12)
-- telemetry event emission for stage, gate, budget, guardrail events (§27)
+- explicit `goal.status` machine with allowed transitions and transition log
+- step abstraction with `in_flight` bracketing and checkpoint after each step
+- `janus run` with `--until`, `--max-wait`, `--dry-run`, lock, exit codes
+- resume reconciliation per §7: head verification, goal and base branch drift, in-flight recovery per step type
+- gates: Gate 1 and 2 by `janus approve --commit` (required) and `reject`; Gate 3 and 4 as SCM-observed placeholders
+- budget table per §20 as a single module: increment, reset, escalate hooks; guardrail hit routes to `escalated`
+- telemetry events for stage, gate, budget, guardrail
 
-Done when: unit tests cover every transition and every resume case with stubbed steps; a scripted "steps" test runs from `created` to `completed` with no real providers.
+Done when: unit tests cover every transition, every budget row, every resume case with stubbed steps; a scripted run goes `created` to `completed` with no providers.
 
-## T04 Agent runner: contract, context packages, Codex adapter, fake runner
+## T04 Integration harness skeleton
 
-Depends on: T02. Parallel: B (with T05, T06, T07).
+Depends on: T03. Parallel: A (with T05 to T08).
 
-- `AgentTask`, `AgentResult`, `ContextPackage` types (§18)
-- per-role JSON output schemas (`additionalProperties: false`) and zod validators; role list per §18.1
-- context package renderer with byte budget and explicit truncation markers (§18.2)
-- prompt templates per role (markdown files, versioned) including the git-write prohibition and report paths
-- Codex adapter: build the `codex exec` invocation of §18.4, stream JSONL, capture `turn.completed.usage`, enforce timeout and kill, read `-o` last message, validate, write `evidence/agents/<run-id>.yaml`
-- fake runner: scripted by role and attempt; applies patches, writes reports, returns canned results (§18.5)
-- `janus agent run <role> --task FILE` debug command
-- one opt-in smoke test that runs real Codex (`read-only`, trivial prompt) when `JANUS_REAL_CODEX=1`
+- helper that creates N temp git repos with a dependency graph, a bare "remote" for each, and a bare state remote
+- scripted fake runner, fake CI, fake SCM stubs (full implementations land in T05 to T08) with persistence under `fake/`
+- assertions on state, evidence files, and reflogs (no git writes by agent processes, §31.29)
+- `pnpm test:integration` target
 
-Done when: adapter unit tests pass against recorded JSONL streams; fake runner drives a scripted task; real-Codex smoke test passes locally.
+Done when: a smoke test runs `init` and one checkpoint through the harness. Every later task adds its scenarios here.
 
-## T05 Policy checks and orchestrator commit/push
+## T05 Agent runner: contract, context packages, Codex adapter, fake runner
 
-Depends on: T02. Parallel: B.
+Depends on: T03. Parallel: A.
 
-- diff analysis: changed, added, deleted, renamed files; per-file hunks
-- checks of §14: forbidden test patterns (added lines only), test file deletion/rename, test count decrease (count `it(`/`test(` occurrences per repo before/after), forbidden paths, Angular major beyond target (package.json diff), allowed-scope globs, diff size, secret patterns
-- result object written to `evidence/policy/<attempt-id>.yaml`; patch export on violation; working tree reset
-- commit message convention with work package id and agent run id; push via git module
-- config wiring for `policy.*`
+- `AgentTask`, `AgentResult`, `ContextPackage`, sandbox classes per §18
+- per-role output schemas (all fields required, `null` allowed) and zod validators
+- context renderer with byte budgets, change summary, inline diff only for code-writing roles, Angular guidance block (§18.2, §18.4)
+- prompt templates per role, versioned markdown
+- Codex adapter per §18.4: invocation, JSONL parsing for usage, timeout kill, `-o` last message, validation, evidence file; writable roots for the pnpm store
+- fake runner scripted by role and attempt, persisted
+- `janus agent run <role> --task FILE`
+- opt-in real-Codex smoke test (`JANUS_REAL_CODEX=1`) for a read-only echo and a workspace-write scratch install
 
-Done when: unit tests with fixture diffs for every check, including the false-positive cases (pattern inside a string or comment is still flagged, documented as accepted).
+Done when: adapter tests pass on recorded JSONL; fake runner drives a task; real smoke test passes locally.
 
-## T06 CI providers: interface, failure digest, local, fake, teamcity
+## T06 Manual prompt spike (time-boxed, one week)
 
-Depends on: T02. Parallel: B.
+Depends on: T05. Parallel: A. Output is a report, not code.
 
-- `CiProvider` interface, `BuildRef`, `BuildOutcome`, `FailureDigest` types (§3.2, §16)
-- failure digest builder with caps (§16.2) and failure signature (§16.3), shared by all providers
-- `local` provider: runs configured commands per repo (§28 `local_ci`), captures exit codes and output, parses JUnit or Karma/Jest summary output when present for failed test identities, produces digest
-- `fake` provider: scripted outcomes per (repo, attempt), supports "no build appears" to exercise explicit trigger
-- `teamcity` provider: find by revision, queue check, trigger via `buildQueue` with branch, revision and properties, poll state, fetch problems, failed tests with details, plain log download streamed to tail buffer; Bearer token from env
-- provider contract test suite that all three implementations pass
-- `janus ci wait|trigger|digest` debug commands
+- throwaway Angular 15 app outside this repo
+- hand-run `codex exec` with the T05 context packages and schemas for discovery, planning, implementation, and debug roles
+- verify: report-writing under `workspace-write` with report cwd; pnpm store as writable root; `ng update --allow-dirty` behavior; typical migration file footprint versus `allowed_scope`; output-schema compliance; token usage per role
+- fold findings into T05 templates, T07 doctor probes, and §12 scope defaults
 
-Done when: contract suite green for all providers; TeamCity adapter tested against recorded HTTP fixtures (nock/msw) for success, failure, queued, cancelled, and missing-build cases.
+Done when: `docs/spikes/prompt-spike.md` records what worked, what failed, and the resulting template and config changes.
 
-## T07 SCM providers: interface, fake, bitbucket-server
+## T07 `janus doctor`
 
-Depends on: T02. Parallel: B.
+Depends on: T05. Parallel: A.
 
-- `ScmProvider` interface and types (§3.2, §15, §24)
-- `bitbucket-server` adapter: create PR, get PR (state, version, reviewer statuses), activities since cursor with comment anchors, add comment, find PR by branch; Bearer token; pagination
-- `fake` adapter: in-memory PRs; test hooks to inject comments, NEEDS_WORK, approvals, merges
-- PR description renderer (links to state branch, plan commit, sibling PRs, progress table)
+- checks: codex login, git identity, tokens present, provider reachability (skipped for fakes), user namespaces for bubblewrap, three real Codex probes (§18.4), pnpm store writability, `janus/*` branch-spec warning when the state repo is a product repo
+- `--json` output contract
+
+Done when: each check has a unit test with a simulated failure and a clear remediation message.
+
+## T08 Policy checks and orchestrator commit/push
+
+Depends on: T03. Parallel: A.
+
+- diff analysis: changed, added, deleted, renamed; per-file hunks
+- checks per §14 including runner-config threshold detection, lockfile-in-scope warning, secrets
+- in-place fix attempt flow, then reset at the per-package limit; evidence and patch export
+- commit message convention; push through git module
+
+Done when: fixture-diff unit tests for every check, plus harness scenarios for pass, fix-in-place success, and reset after limit.
+
+## T09 CI providers: interface, digest, redaction, `local`, `fake`
+
+Depends on: T04. Parallel: B (with T10).
+
+- `CiProvider` and types with outcome classification (`success | tests_failed | build_failed | infra`)
+- digest builder with caps and redaction; failure signature with normalized error lines (§16.2, §16.3)
+- `local` provider: configured commands per repo, JUnit or Karma/Jest summary parsing for failed test identities
+- `fake` provider: scripted per (repo, attempt), supports missing build, infra outcome, persisted
 - provider contract test suite
 
-Done when: contract suite green for both; Bitbucket adapter tested against recorded fixtures including paginated activities and inline comment anchors.
+Done when: contract suite green for `local` and `fake`; redaction tests; signature tests showing distinct compile errors produce distinct signatures.
 
-## T08 Discovery and baseline stages
+## T10 SCM providers: interface, `fake`
 
-Depends on: T03, T04, T06.
+Depends on: T04. Parallel: B.
 
-- discovery stage: per-repo agents for the six areas plus integration discovery, bounded parallelism, read-only sandbox, report paths, `discovery/summary.yaml` merge (§10)
-- baseline stage: local checks per repo via `local` provider, PR build per repo via configured provider, goal E2E on base branches; evidence under `evidence/baseline/`; proposed exceptions with stable identities (§11)
-- handover and status output for these stages (uses T13 renderer stubs if not yet done)
+- `ScmProvider` and types per §3.2 including `currentUser`, reply comments, decline, merge commit
+- `fake` provider persisted under `fake/scm.json` with test hooks and CLI hooks (`janus fake scm comment|approve|decline|merge`) for dogfooding
+- PR description renderer
+- provider contract test suite
 
-Done when: engine integration test runs discovery and baseline with fake runner and fake CI and produces the expected files and state.
+Done when: contract suite green; hooks drive a PR through comment, approval, and merge across separate processes.
 
-## T09 Planning, plan.yaml validation, Gate 1
+## T11 Prepare, discovery, baseline, planning, Gate 1
 
-Depends on: T08.
+Depends on: T05, T08, T09, T10.
 
-- planning agent task and schema; writes `plan.md` and `plan.yaml` (§12)
-- `plan.yaml` validator: repos exist, acyclic packages, coupled repos share a group, red windows within guardrails, `requires_publish` only on libraries with a publish build type
-- Gate 1 flow: checkpoint, `awaiting_plan_approval`, `janus approve plan --commit --exception`, exception approval recorded in `baseline.exceptions`
-- branch and PR creation for all repos after approval (§15)
+- prepare step via `local` provider (§10)
+- discovery with configurable areas, report-writing class, report filing, `summary.yaml`; integration discovery with `loads_remotes` cross-check
+- baseline: local checks, PR build via provider, E2E on base (E2E provider call only; triage comes in T17), orchestrator-owned exceptions with stable identities
+- planning agent, `plan.yaml` validator (§12), Gate 1, branch creation, PR creation per `create_prs_early`
 
-Done when: integration test reaches Gate 1, rejects an invalid `plan.yaml`, approves a valid one, and creates branches and PRs on the fake SCM.
+Done when: harness runs to Gate 1 on one repo, rejects an invalid plan, approves a valid one, creates the branch and PR on the fake SCM; exception identities are stable across two baseline runs.
 
-## T10 Execution loop: work packages, groups, debug loop, budgets, publish
+## T12 Single-repo package loop: implement, verify, debug, escalate
 
-Depends on: T05, T09.
+Depends on: T11.
 
-- package scheduler honoring `depends_on`, repo dependency order, and groups (§13)
-- implementation agent per repo per package; policy check; commit; push
-- PR build loop per repo: find, trigger if absent, wait, digest, classify defect vs coupled-expected (§16.1, §16.5)
-- debug agent loop with attempt budget, no-progress detection, policy re-check
-- verification group boundary evaluation; E2E trigger when `e2e_after` (E2E stage from T11 or a stub)
-- prerelease publish trigger and version propagation to dependents
-- AI checkpoint per package with outcome handling including regroup re-validation (§21)
-- budget resets at verification boundaries; guardrail hits route to escalation
+- package scheduler for one repo (multi-repo ordering in T18)
+- implementation agent, policy flow, commit, push
+- PR build loop: find, trigger if absent, wait, classify, infra retry (§16.1)
+- debug loop with budgets, no-progress detection, policy re-check
+- per-package state block updates; `expected_red` accepted only with verified subset (§16.5), single-repo groups only
+- implementation `failed`/`blocked` handling per §20
 
-Done when: integration tests cover green path, defect fix within budget, budget exhaustion, no-progress escalation, coupled red inside a group, policy violation retry, publish propagation, and crash-resume mid-package.
+Done when: harness scenarios: green path, defect fixed within budget, budget exhaustion, no-progress escalation, infra retry then escalate, policy violation retry, crash-resume mid-package, resume mid-CI-wait.
 
-## T11 E2E, final review, QA, human review loop, completion
+## T13 Final review, completion, escalation and replanning (single repo)
 
-Depends on: T07, T10.
+Depends on: T12.
 
-- E2E stage: trigger with branch params, validity heads, invalidation on any commit, failure loop (§17)
-- final AI review agent across repos, findings schema, fix agent per repo, cycle budget (§22)
-- QA recommendation agent, output to evidence and PR comments (§23)
-- human review loop: activity polling with cursors, comments to fix tasks per repo, NEEDS_WORK handling, all-PRs-approved detection, `awaiting_merge`, merge detection, `completed` with release-order handover (§24)
-- `janus review sync`
+- final AI review agent (read-only, runs `git diff`), findings schema, fix loop, cycle budget (§22)
+- escalation package renderer, `janus escalation show|resolve`, replanning agent, Gate 2, resume from current package (§25)
+- SCM-observed Gate 3 and 4 for one PR: comment loop with own-comment skip and `no_change_needed` replies, NEEDS_WORK, approval reset on new commits, decline escalation, merge detection, `completed` (§24, without release steps)
 
-Done when: integration tests cover E2E invalidation, review findings loop, human comment loop with inline comments, approval on all PRs, merge in order, and goal completion.
+Done when: harness scenarios: review findings loop, escalate and replan, comment loop with inline anchors, decline, approval and merge to completion. Slice 1 is complete; dogfood runbook (T22) can start.
 
-## T12 Escalation and replanning
+# Slice 2: real adapters
 
-Depends on: T10.
+## T14 Rendering: handover, status, PR descriptions
 
-- escalation package renderer (`escalation.md`) with v1 structure plus repo and package (§25)
-- `janus escalation show|resolve --direction`
-- replanning agent task; plan revision counter; Gate 2; resume execution from the current package
+Depends on: T03. Parallel: C (with T15, T16).
 
-Done when: integration test escalates on budget exhaustion, resolves with direction, produces a revised plan, gates, approves, and resumes.
+- full `handover.md` generator; `janus status` human and `--json` with per-repo state, budgets, gate, merge order, open escalation; PR description updates at package boundaries
 
-## T13 Rendering: handover, status, PR descriptions
+Done when: snapshot tests across representative states; `--json` shape documented.
 
-Depends on: T03. Parallel: C (with T14).
+## T15 TeamCity provider
 
-- `handover.md` generator from state plus last agent handover, regenerated at every checkpoint (§5, §7)
-- `janus status` human and `--json` output: stage, per-repo branch/PR/build, budgets, gate, merge order, open escalation
-- PR description updates at package boundaries
+Depends on: T09. Parallel: C.
 
-Done when: snapshot tests for handover and status across representative states.
+- find by revision, queue check, trigger with branch, revision and properties, poll, problems, failed tests with details, streamed plain log tail; Bearer token; classification mapping incl. `UNKNOWN`
+- recorded HTTP fixtures for success, tests failed, build failed, queued, cancelled, missing build, merge-commit build
+- fixture capture script for first contact (§29.6)
 
-## T14 Telemetry metrics and cost
+Done when: contract suite green; `janus ci wait|trigger|digest` work against fixtures.
 
-Depends on: T03. Parallel: C.
+## T16 Bitbucket Server provider
 
-- event catalogue of §27 emitted from all stages (audit existing emit sites)
-- `janus status --telemetry`: derive v1 metrics from events; human wait time from gate events; optional cost from price table
+Depends on: T10. Parallel: C.
+
+- create PR, get PR with reviewer statuses and merge commit, activities since cursor with anchors, add and reply comments, find by branch, `currentUser`; pagination; recorded fixtures
+
+Done when: contract suite green including paginated activities and inline anchors.
+
+# Slice 3: multi-repo
+
+## T17 E2E stage with rerun, triage, invalidation
+
+Depends on: T12, T15.
+
+- trigger with branch params (base branch for merged repos), validity heads, invalidation on any commit, one automatic rerun, triage agent with `suite_repo_map`, debug under `e2e_fix_attempts`, escalation when triage is unsure (§17)
+
+Done when: harness scenarios: flaky pass on rerun, triage names repo and debug fixes it, triage unsure escalates, invalidation after a later commit.
+
+## T18 Multi-repo scheduling, base sync, partial merge
+
+Depends on: T13.
+
+- scheduler honoring `depends_on` across repos and packages
+- base-branch sync at package start and before final E2E; sync-conflict agent with budget; sync evidence (§16.6)
+- per-repo merged state; E2E and fix loops use base branches for merged repos; decline of one PR escalates the goal
+
+Done when: harness scenarios with three repos: dependency order respected, clean sync, conflict resolved, conflict escalates, partial merge keeps the goal running.
+
+## T19 Verification groups, coupled red, AI checkpoint
+
+Depends on: T18.
+
+- cross-repo groups, red windows, `work_packages_without_green`, E2E after group (§13, §16.5)
+- AI checkpoint per package with regroup re-validation (§21)
+
+Done when: harness scenarios: coupled red accepted with verified subset, rejected otherwise, red window exhaustion escalates, checkpoint outcomes handled.
+
+## T20 Prerelease publish, release-and-bump, QA recommendation
+
+Depends on: T18.
+
+- version computation, publish trigger with `janus.version`, propagation to dependents, re-publish on later commits (§13)
+- post-merge `releasing` flow: release build, consumer bump agent, CI, back to `awaiting_merge` (§24)
+- QA agent output to evidence and PR comments (§23)
+
+Done when: harness scenarios: publish then dependent pins version, re-publish after fix commit, library merge triggers release and consumer bumps before consumer merge; QA comment posted once per refresh.
+
+# Slice 4: polish
+
+## T21 Telemetry metrics and cost
+
+Depends on: T03. Parallel: D.
+
+- audit that every §27 event is emitted; `janus status --telemetry` deriving v1 metrics; human wait from gate events; optional cost table
 
 Done when: metrics test computes expected numbers from a fixture event log.
 
-## T15 Integration harness and dogfood runbook
+## T22 Dogfood runbook
 
-Depends on: T11, T12.
+Depends on: T13 (initial), T20 (full). Parallel: D.
 
-- reusable test harness: builds N temp git repos with a dependency graph, seeds fake runner scripts, fake CI, fake SCM; helper assertions on state, evidence, and reflogs (verify no agent git writes, §31.29)
-- full goal run to completion and every escalation path as one suite (`pnpm test:integration`)
-- dogfood runbook: run against an external throwaway Angular 15 app with real Codex, `local` CI provider, fake SCM; checklist of expected artifacts; how to inspect evidence
+- runbook for the throwaway Angular 15 app with real Codex, `local` CI, fake SCM and its hooks; expected artifacts checklist; how to inspect evidence
+- executed once after Slice 1 and once after Slice 3; findings filed as issues
 
-Done when: suite green in CI; runbook executed once locally and its findings folded back into T04, T05, T06 as needed.
+Done when: both runs recorded in `docs/dogfood/`.
 
-## T16 Documentation and first-contact runbook
+## T23 Operator skill
 
-Depends on: T15.
+Depends on: T14, T13.
 
-- README: concepts, workspace layout, CLI, configuration reference generated from the zod schemas
-- operator runbook for the work network: `janus doctor`, token setup, read-only TeamCity and Bitbucket checks, TeamCity branch-spec and E2E parameter prerequisites (§33), baseline-only first run, then a one-repo goal, then the multi-repo goal
-- troubleshooting: common TeamCity locator issues, missing builds, drift, lock file
+- skill directory per §35: interview to `goal.yaml`/`config.yaml`, gate conversations, escalation assistance, status explanation; consumes only `--json` outputs and `.janus/` files; approval only on explicit instruction with echoed commit hash
 
-Done when: a colleague can follow the runbook without the author present.
+Done when: a scripted conversation transcript test (fake runner, fake providers) reaches Gate 1 and approval through the skill without the skill touching `.janus/` directly.
+
+## T24 Documentation and first-contact runbook
+
+Depends on: T22, T23.
+
+- README, configuration reference generated from schemas, CLI reference
+- first-contact runbook for the work network: doctor, tokens, read-only calls with fixture capture, TeamCity prerequisites (§33), baseline-only run, one-repo goal, multi-repo goal; troubleshooting
+- validated by a second developer following it on a fresh machine
+
+Done when: the second developer's run notes are appended and any blocking step fixed.
 
 ---
 
@@ -204,18 +273,15 @@ Done when: a colleague can follow the runbook without the author present.
 
 - Claude Code `AgentRunner`
 - Bitbucket Cloud `ScmProvider`
-- TeamCity webhook receiver to replace polling
-- Spec Kit `workflow.yml` wrapper that calls `janus` commands
+- TeamCity webhook receiver
 - selective E2E based on change impact
 
-## Suggested build order
+## Build order
 
 ```text
-T01 -> T02 -> T03 -> T08 -> T09 -> T10 -> T11 -> T15 -> T16
-              \-> T04 ----^        ^       ^
-              \-> T05 -------------/       |
-              \-> T06 ----^                |
-              \-> T07 ---------------------/
-       T03 -> T13, T14 (any time after T03)
-       T10 -> T12 (before T15)
+Slice 1: T01 -> T02 -> T03 -> T04 -> {T05, T08} -> T06 (spike) -> T07
+                                   -> {T09, T10} -> T11 -> T12 -> T13
+Slice 2: T14 | T15 | T16   (parallel, after T03 / T09 / T10)
+Slice 3: T17 (after T12, T15) ; T18 (after T13) -> T19 -> T20
+Slice 4: T21 | T22 | T23 -> T24
 ```

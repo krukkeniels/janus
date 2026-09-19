@@ -1,27 +1,49 @@
-# Janus: Angular AI Development Workflow v2
+# Janus: Angular AI Development Workflow v2.1
 
-Status: draft for review. Supersedes `angular-ai-development-workflow-v1.md`.
+Status: draft for review. Supersedes `angular-ai-development-workflow-v1.md`. v2.1 incorporates an independent review of v2.
 
 ---
 
-## 0. What changed from v1 and why
+## 0. What changed and why
+
+### 0.1 v1 to v2
 
 | Topic | v1 | v2 | Reason |
 |---|---|---|---|
-| Workflow layer | Spec Kit "or equivalent" | Janus owns a small TypeScript state machine | Spec Kit's Codex step discards output, has no output schema, sandbox or cwd control, and keeps run state outside Git. Every real step would be a shell step anyway. |
-| Goal shape | One repo, one branch, one PR | One goal spans N repos in dependency order; one branch and one PR per repo | The application is spread over several repositories with mixed coupling (Module Federation, shared libraries, independent apps). |
-| State location | `.ai-dev/` on the goal branch | `.janus/` on a dedicated orphan branch `janus/<goal-id>`, checked out in a goal workspace | Keeps PR diffs clean; lets discovery and plan be checkpointed before any code branch exists. |
-| Who commits | Implicit | Only the orchestrator commits and pushes. Agents never run git write operations | Codex `workspace-write` makes `.git` read-only. Orchestrator commits are where policy checks run. |
-| Test integrity | Prompted rule | Deterministic policy checks on every diff before commit | Makes "never weaken tests" enforceable. |
-| Baseline checks | Run by discovery agents | Run by the orchestrator through the CI provider | Codex read-only sandbox blocks the disk writes tests need; agents stay strictly read-only. |
-| CI / SCM coupling | TeamCity and Bitbucket hard-wired | `CiProvider` and `ScmProvider` interfaces with `teamcity`, `local`, `fake` and `bitbucket-server`, `fake` implementations | Work systems are unreachable from the development network; Janus must be testable without them. |
-| PR build discovery | "observe automatic build" | Find build by `revision:<sha>` and build type; trigger explicitly if none appears within a window | TeamCity has no PR-number locator; PR builds run on the source branch. |
-| Failure handoff | "latest TeamCity failure" | Bounded failure digest (problems, failed tests, log tail) | Build logs are unpaginated and can be tens of MB. |
-| Plan format | `plan.md` | `plan.md` for humans plus `plan.yaml` for the engine | Work packages and groups must be machine-readable; approval binds to one commit of both. |
-| No-progress rule | "may evolve" | Concrete failure-signature heuristic | Budgets need a testable definition. |
-| CLI | Not defined | `init`, `run`, `status`, `approve`, `reject`, `escalation`, `doctor` | Human gates are CLI commands; runtime is a step-wise CLI. |
+| Workflow layer | Spec Kit "or equivalent" | Janus owns a small TypeScript state machine | Spec Kit's Codex step discards output, has no output schema, sandbox or cwd control, and keeps run state outside Git. |
+| Goal shape | One repo, one branch, one PR | One goal spans N repos in dependency order; one branch and one PR per repo | The application is spread over several repositories with mixed coupling. |
+| State location | `.ai-dev/` on the goal branch | `.janus/` on a dedicated branch `janus/<goal-id>` in a goal workspace | Clean PR diffs; discovery and plan checkpointed before any code branch exists. |
+| Who commits | Implicit | Only the orchestrator commits and pushes | Codex `workspace-write` makes `.git` read-only; orchestrator commits are where policy checks run. |
+| Test integrity | Prompted rule | Deterministic policy checks on every diff | Makes "never weaken tests" enforceable. |
+| Baseline checks | Run by discovery agents | Run by the orchestrator through the CI provider | Agents stay read-only with respect to product code. |
+| CI / SCM coupling | Hard-wired | `CiProvider` and `ScmProvider` interfaces with real, `local`, and `fake` implementations | Work systems are unreachable from the development network. |
+| PR build discovery | "observe automatic build" | Find by `revision:<sha>` and build type; trigger if absent | TeamCity has no PR-number locator. |
+| Failure handoff | "latest TeamCity failure" | Bounded, redacted failure digest | Logs are unpaginated and can be tens of MB. |
+| Plan format | `plan.md` | `plan.md` plus `plan.yaml` | Engine needs machine-readable packages and groups. |
+| CLI | Not defined | `init`, `run`, `status`, `approve`, `reject`, `escalation`, `doctor` | Step-wise CLI runtime with CLI gates. |
 
-Everything else in v1 (principles, gates, autonomy rules, safety rules, telemetry intent) carries over unchanged unless stated below.
+### 0.2 v2 to v2.1 (independent review)
+
+| Topic | Change |
+|---|---|
+| Sandbox model | Report-writing roles run `workspace-write` with a report directory as cwd; pnpm store and caches become writable roots; `ng update --allow-dirty` guidance; `doctor` probes all of it for real (§3.3, §18.4). |
+| Base-branch drift | New sync step at package boundaries and before final E2E, with bounded conflict resolution (§16.6). |
+| Post-merge release | Library merge triggers release build, consumer bump, CI, then consumer merge; Janus owns it (§24). |
+| Partial merge | Per-repo `merged` state; E2E and fix loops use base branches for merged repos (§6, §17, §24). |
+| Budgets | Explicit budget table with increment, reset, and escalation events (§20); per-work-package state block (§6). |
+| Infra failures | Cancelled or failed-to-start builds re-trigger once and never consume a debug attempt (§16.1). |
+| Discovery | Prepare step (install, build) before discovery; areas configurable, default three per repo; shell remotes outside the goal must be acknowledged (§10). |
+| Exceptions | Orchestrator owns the exception list; planner annotates only (§11, §12). |
+| Prerelease versions | Janus computes the version and passes it to the publish build; later commits re-trigger publish and consumer bumps (§13). |
+| Policy violations | One in-place fix attempt before a reset (§14). |
+| Failure signature | Includes normalized error lines, not only problem identities (§16.3). |
+| E2E failures | One automatic rerun, then a read-only triage agent names the repo (§17). |
+| Reviewer context | File list and stats inline; reviewer runs `git diff` itself (§18.2). |
+| Review loop | Own comments skipped; `no_change_needed` replies; declined PR escalates (§24). |
+| State clone | `.janus/` is a single-branch clone; dedicated state repo recommended (§5). |
+| Fakes | Persist to disk so they survive across `janus run` processes (§29). |
+| Operator skill | New section 35: thin conversational front door over the CLI. |
+| Build order | Vertical slices, one repo first (§30). Manual prompt spike before the execution loop is built. |
 
 ---
 
@@ -47,14 +69,16 @@ The key operating principle is unchanged:
 
 - one Angular major upgrade per goal
 - one goal spanning N repositories with an explicit dependency order
-- one long-lived goal branch and one long-lived pull request per repository
-- read-only discovery per repository plus one cross-repository integration discovery
+- one long-lived goal branch and one pull request per repository
+- orchestrator-run prepare step (install, build) and read-only discovery per repository, plus cross-repository integration discovery
 - orchestrator-run baseline verification (local checks, per-repo CI builds, goal-level E2E)
 - human-approved technical plan (`plan.md` + `plan.yaml`)
 - sequential work packages, each scoped to one or more repositories
-- verification groups for coupled work, including cross-repository groups
+- verification groups for coupled work
+- base-branch sync during execution
 - per-repository CI build feedback loop with bounded fresh debug agents
 - goal-level full E2E through the CI provider, with per-repository branch names passed as parameters
+- library prerelease publishing during execution and release-and-bump after merge, through CI builds
 - fresh agent process per meaningful task
 - deterministic policy checks on every diff before commit
 - AI checkpoint per work package, independent final AI review, QA recommendation
@@ -62,7 +86,7 @@ The key operating principle is unchanged:
 - structured escalation and replanning
 - Git-based state, handover, and resume
 - telemetry from the first run
-- step-wise CLI runtime on a developer machine
+- step-wise CLI runtime on a developer machine, with a thin operator skill as the conversational front door
 - fakes and a local CI provider so the whole loop is testable without TeamCity or Bitbucket
 
 ### Out of scope for v1 of Janus
@@ -74,7 +98,6 @@ The key operating principle is unchanged:
 - selective E2E execution
 - automatic architectural changes
 - weakening, skipping, or removing tests to obtain green CI
-- publishing final (non-prerelease) library versions; Janus may trigger prerelease publishes through CI where configured, and records the post-merge release order in the handover
 - a daemon or webhook receiver (polling only)
 - replacing TeamCity or Bitbucket
 - a general-purpose agent framework
@@ -87,7 +110,8 @@ The key operating principle is unchanged:
 ```text
                         +--------------------+
                         |     Human User     |
-                        |  CLI gates, PR     |
+                        |  operator skill /  |
+                        |  CLI gates, PRs    |
                         +---------+----------+
                                   |
                                   v
@@ -105,9 +129,8 @@ The key operating principle is unchanged:
          |    AgentRunner     |        |   Goal workspace   |
          |  codex | fake      |        |  .janus/  (state)  |
          |  fresh process per |        |  repos/<name>/     |
-         |  task              |        |  (code, one branch |
-         +--------------------+        |   per repo)        |
-                                       +--------------------+
+         |  task              |        |  fake/ (persisted) |
+         +--------------------+        +--------------------+
 ```
 
 ### 3.1 Janus engine (TypeScript, Node 20+, pnpm)
@@ -121,47 +144,51 @@ Owns:
 - validating agent output against JSON schemas
 - policy checks on diffs
 - commits and pushes on code branches; checkpoints on the state branch
+- base-branch sync
 - CI observation and triggering through `CiProvider`
-- PR creation, comment polling, approval detection through `ScmProvider`
-- failure digests, handover, escalation packages, status rendering
+- PR creation, comment polling, approval and merge detection through `ScmProvider`
+- failure digests with redaction, handover, escalation packages, status rendering
 - telemetry events
 
 ### 3.2 Provider interfaces
 
-All three are small TypeScript interfaces with at least one real and one fake implementation. Fakes are first-class, not test-only hacks: they are how Janus is developed and how the full loop is exercised from a network without TeamCity or Bitbucket.
+All three are small TypeScript interfaces with at least one real and one fake implementation. Fakes are first-class: they are how Janus is developed and how the full loop is exercised from a network without TeamCity or Bitbucket. Fakes persist their state under `<workspace>/fake/` because every `janus run` is a new process.
 
 ```text
 AgentRunner
   run(task: AgentTask): Promise<AgentResult>
-  implementations: codex, fake (scripted)
+  implementations: codex, fake (scripted, persisted)
 
 CiProvider
   findBuild(repo, revision, buildTypeId): Promise<BuildRef | null>
   triggerBuild(repo, buildTypeId, branch, revision, params): Promise<BuildRef>
-  waitForBuild(ref, timeout): Promise<BuildOutcome>
-  failureDigest(ref, limits): Promise<FailureDigest>
+  waitForBuild(ref, timeout): Promise<BuildOutcome>     // status + classification: tests_failed | build_failed | infra
+  failureDigest(ref, limits): Promise<FailureDigest>    // redacted
   implementations: teamcity, local, fake
 
 ScmProvider
   ensureBranch(repo, name, base): Promise<void>
   createPullRequest(repo, branch, base, title, body): Promise<PullRef>
-  getPullRequest(ref): Promise<PullState>          // OPEN|MERGED|DECLINED, reviewer statuses
-  listActivitySince(ref, cursor): Promise<Activity[]> // comments incl. inline, approvals, NEEDS_WORK
-  addComment(ref, text): Promise<void>
+  getPullRequest(ref): Promise<PullState>               // OPEN|MERGED|DECLINED, reviewer statuses, merge commit
+  listActivitySince(ref, cursor): Promise<Activity[]>   // comments incl. inline anchors, approvals, NEEDS_WORK
+  addComment(ref, text, replyTo?): Promise<void>
+  currentUser(): Promise<string>                        // to skip Janus's own comments
   implementations: bitbucket-server, fake
 ```
 
-The `local` CI provider runs configured shell commands (install, build, test, e2e) in the repository checkout and produces the same `BuildOutcome` and `FailureDigest` shapes as TeamCity. It serves both the "local or sandbox" baseline checks in v1 and as the development stand-in for TeamCity.
+The `local` CI provider runs configured shell commands (install, build, test, e2e) in the repository checkout and produces the same `BuildOutcome` and `FailureDigest` shapes as TeamCity.
 
-### 3.3 Agents
+### 3.3 Agents and sandboxes
 
-Codex processes started fresh per task through `codex exec`. They:
+Codex processes started fresh per task through `codex exec`. Roles fall into three sandbox classes:
 
-- read the repository and `.janus/` freely
-- write code only in the repository they are assigned (`workspace-write` sandbox, cwd = that repo)
-- write reports only into designated `.janus/` paths given in the task (`--add-dir`)
-- return a JSON result conforming to the role's output schema (`--output-schema`)
-- never run `git commit`, `git push`, `git checkout` or other history-changing commands (enforced by the sandbox making `.git` read-only, and stated in every task prompt)
+| Class | Roles | Sandbox | cwd | Writable roots |
+|---|---|---|---|---|
+| code-writing | implementation, debug, fix, sync-conflict | `workspace-write`, network on | the assigned repo | repo, pnpm store and caches (§18.4) |
+| report-writing | discovery, integration discovery, planning, replanning, qa | `workspace-write`, network off | `.janus/reports/<run-id>/` | that directory only |
+| read-only | checkpoint, review, triage | `read-only` | the workspace root | none; results returned as JSON |
+
+All classes can read the whole workspace (repos and `.janus/`). `.git` directories are read-only in every class, which is why agents cannot commit. Every prompt states that git write commands are forbidden.
 
 ### 3.4 TeamCity and Bitbucket
 
@@ -185,9 +212,11 @@ repos:
     kind: library            # library | app | shell | remote
     scm: { project: FE, slug: ui-kit }
     base_branch: main
+    package_name: "@acme/ui-kit"
     ci:
       pr_build_type_id: Fe_UiKit_Build
-      publish_build_type_id: Fe_UiKit_PublishPrerelease   # optional
+      publish_build_type_id: Fe_UiKit_Publish      # accepts property janus.version
+      release_build_type_id: Fe_UiKit_Release      # post-merge release; optional, else publish build with a release version
     depends_on: []
 
   - name: shell
@@ -196,6 +225,7 @@ repos:
     base_branch: main
     ci: { pr_build_type_id: Fe_Shell_Build }
     depends_on: [ui-kit]
+    loads_remotes: [orders-remote, billing-remote]   # every remote the shell loads at runtime
 
   - name: orders-remote
     kind: remote
@@ -203,32 +233,31 @@ repos:
     base_branch: develop
     ci: { pr_build_type_id: Fe_Orders_Build }
     depends_on: [ui-kit]
-    coupled_with: [shell]    # runtime-coupled: Module Federation shared singletons
+    coupled_with: [shell]
+
+acknowledged_outside_goal:
+  - repo: billing-remote
+    reason: retired next quarter; stays on Angular 15 behind a feature flag
 
 e2e:
   build_type_id: Fe_E2E_Full
-  branch_params:             # how each repo's branch is passed to the E2E build
+  branch_params:
     shell: env.SHELL_BRANCH
     orders-remote: env.ORDERS_BRANCH
   extra_params: {}
+  suite_repo_map: {}         # optional: scenario prefix -> repo, used by E2E triage
 
-success_criteria:
-  - every repo builds and passes its PR build on Angular 16
-  - full E2E green on the deployed goal branches
-  - no product behavior change
-non_goals:
-  - Angular 17 features
-  - standalone-component migration beyond what Angular 16 requires
+success_criteria: [...]
+non_goals: [...]
 ```
 
 Rules:
 
-- `depends_on` orders work: a repository's upgrade work package cannot start before the packages of its dependencies reach the required state (for libraries: prerelease published; for coupled runtime peers: same verification group).
-- `coupled_with` declares runtime coupling (Module Federation shared singletons). Coupling is symmetric; declaring it on one side is enough and the engine normalizes it. Coupled repositories are placed in the same verification group by the planner; the goal-level E2E is the only place their combination is verified.
-- Each repository gets its own goal branch `ai/<goal-id>` and its own PR against its own base branch.
-- A goal is complete only when every PR is merged.
-
-Later majors are separate goals, as in v1.
+- `depends_on` orders work: a repository's package cannot start before its dependencies reach the required state (libraries: prerelease published; coupled runtime peers: same verification group).
+- `coupled_with` declares runtime coupling (Module Federation shared singletons). It is symmetric; the engine normalizes it. Coupled repositories share a verification group and are verified together only by the goal-level E2E.
+- `loads_remotes` lists every remote a shell loads. Validation fails unless each is in `repos` or in `acknowledged_outside_goal`. Integration discovery cross-checks this list against the shell's federation config and reports discrepancies.
+- Each repository gets its own goal branch `ai/<goal-id>` and its own PR.
+- A goal is complete only when every PR is merged and post-merge release steps are done.
 
 ---
 
@@ -238,55 +267,54 @@ Later majors are separate goals, as in v1.
 
 ```text
 <workspace>/
-  .janus/                 # worktree of orphan branch janus/<goal-id> (state branch)
+  .janus/                 # single-branch clone of the state branch janus/<goal-id>
   repos/
     ui-kit/               # clone, on ai/<goal-id> once created
     shell/
     orders-remote/
-  janus.lock              # run lock, not committed
+  fake/                   # persisted fake provider state (only with fake providers)
+  .pnpm-store/            # optional workspace-local pnpm store (§18.4)
+  janus.lock              # run lock with PID and timestamp
 ```
 
-The state branch is pushed to a configured remote. Default: the first repository in `goal.yaml`, branch `janus/<goal-id>`. A dedicated state repository may be configured instead.
+The state branch lives in a dedicated state repository when one is configured (recommended). Otherwise it lives in the first repository of `goal.yaml`; in that case the TeamCity VCS root branch spec must exclude `janus/*` so state pushes do not trigger builds (`doctor` warns about this). `.janus/` is a plain single-branch clone, not a worktree, so re-cloning a product repo never breaks it.
 
 ### `.janus/` contents
 
 ```text
 .janus/
   config.yaml             # policy and provider configuration, no secrets
-  goal.yaml               # goal definition (section 4)
-  state.yaml              # authoritative runtime state (section 6)
+  goal.yaml
+  state.yaml              # authoritative runtime state (§6)
   plan.md                 # approved technical plan, human-readable
-  plan.yaml               # approved plan, machine-readable (section 12)
+  plan.yaml               # approved plan, machine-readable (§12)
   decisions.md            # append-only decision log
   handover.md             # regenerated at every checkpoint
   escalation.md           # present only while escalated
 
   discovery/
-    <repo>/
-      dependencies.md
-      build-tooling.md
-      tests.md
-      e2e.md
-      architecture.md
-      ci.md
-    integration.md        # cross-repo: MF shared deps, lib version graph, E2E topology
-    summary.yaml          # merged structured findings
+    <repo>/<area>.md
+    integration.md
+    summary.yaml
+
+  reports/<run-id>/       # raw agent-written reports before the orchestrator files them
 
   evidence/
-    baseline/             # per repo: local results, build refs; goal: e2e ref
-    builds/<repo>/<build-id>.yaml       # outcome + digest reference
-    digests/<repo>/<build-id>.md        # failure digest (bounded)
+    baseline/
+    builds/<repo>/<build-id>.yaml
+    digests/<repo>/<build-id>.md      # redacted, bounded
     e2e/<build-id>.yaml
-    policy/<attempt-id>.yaml            # policy-check results
-    agents/<run-id>.yaml                # agent result (validated JSON), token usage, duration
+    policy/<attempt-id>.yaml
+    agents/<run-id>.yaml              # validated result, token usage, duration
+    sync/<repo>/<sha>.yaml            # base-branch sync records
     reviews/
     qa/
 
   telemetry/
-    events.jsonl          # append-only
+    events.jsonl
 ```
 
-Secrets (TeamCity token, Bitbucket token) come from environment variables only and are never written under `.janus/`.
+Secrets come from environment variables only and are never written under `.janus/`.
 
 ---
 
@@ -299,29 +327,31 @@ version: 2
 
 goal:
   id: angular-15-to-16
-  status: planning        # created | discovering | baselining | planning |
+  status: planning        # created | preparing | discovering | baselining | planning |
                           # awaiting_plan_approval | executing | final_e2e |
                           # ai_review | qa | awaiting_human_review |
-                          # fixing_review_feedback | awaiting_merge |
+                          # fixing_review_feedback | awaiting_merge | releasing |
                           # escalated | replanning | completed
 
 state_branch:
   name: janus/angular-15-to-16
-  remote: ui-kit          # repo name or "state-repo"
+  remote: state-repo      # repo name or "state-repo"
 
 repos:
   ui-kit:
     goal_branch: ai/angular-15-to-16
-    base_commit: null
+    base_commit: null       # base-branch commit the goal branch currently includes
     head_commit: null
-    pr: { id: null, url: null, state: null, version: null }
-    last_build: { id: null, status: unknown, revision: null }
+    pr: { id: null, url: null, state: null, version: null, approved: false }
+    last_build: { id: null, status: unknown, classification: null, revision: null, explicit_trigger: false }
     prerelease_version: null
-  shell: { ... }
+    release_version: null
+    merged: false
+    merge_commit: null
 
 plan:
   approved: false
-  approved_commit: null   # state-branch commit containing plan.md + plan.yaml
+  approved_commit: null
   approved_at: null
   revision: 0
 
@@ -330,28 +360,43 @@ baseline:
   repos:
     ui-kit: { commit: null, local: {}, pr_build: { id: null, status: unknown } }
   e2e: { id: null, status: not_run, branches: {} }
-  exceptions: []          # each: { id, repo, kind: test|build|e2e, identity, reason, approved_by, approved_at }
+  exceptions: []          # { id, repo, kind: test|build|e2e, identity, reason, approved_by, approved_at }
 
 execution:
   current_work_package: null
   current_verification_group: null
-  completed_work_packages: []
-  in_flight:               # set while a step is executing; used to detect crashes on resume
+  work_packages:
+    wp-01-ui-kit-angular:
+      status: pending       # pending | in_progress | expected_red | green | done | skipped
+      repos:
+        ui-kit:
+          commits: []
+          builds: []
+          attempts: 0
+          policy_violations: 0
+          last_failure_signature: null
+      publish: { version: null, build_id: null }
+      checkpoint: { outcome: null, run_id: null }
+      regroups: []
+  in_flight:
     step: null
     started_at: null
     agent_run_id: null
-  budgets:
-    ci_fix_attempts: 0     # resets per verification boundary
+  budgets:                 # see §20 for increment/reset rules
+    ci_fix_attempts: 0
+    e2e_fix_attempts: 0
     ai_review_cycles: 0
     no_progress_iterations: 0
     work_packages_without_green: 0
-  last_failure_signature: null
+    sync_conflict_attempts: 0
+    infra_retries: 0
 
 verification:
   e2e:
     status: not_run        # not_run | running | passed | failed | invalidated
     build_id: null
-    heads: {}              # repo -> commit the result is valid for
+    heads: {}              # repo -> commit (or base commit for merged repos)
+    reruns: 0
   ai_review: { status: not_run, run_id: null, findings_open: 0 }
   qa_recommendation: { status: not_run, run_id: null }
 
@@ -363,7 +408,11 @@ gate:
 
 review_loop:
   activity_cursor: {}      # repo -> last processed activity id
-  open_comments: []
+  open_comments: []        # { repo, comment_id, author, path, line, text, status: open|fixed|answered }
+
+release:
+  order: []                # repos in merge/release order
+  done: []
 
 telemetry:
   started_at: null
@@ -374,45 +423,45 @@ telemetry:
 
 ## 7. Checkpoint rule and resume semantics
 
-Every meaningful state transition ends in a checkpoint commit on the state branch. A checkpoint contains the updated `state.yaml`, regenerated `handover.md`, new evidence files, and any `decisions.md` append. Code changes are committed on the repository's goal branch before the checkpoint that references them.
+Every meaningful state transition ends in a checkpoint commit on the state branch containing the updated `state.yaml`, regenerated `handover.md`, new evidence, and any `decisions.md` append. Code changes are committed on the goal branch before the checkpoint that references them.
 
 Rules:
 
 1. A human gate is never entered before a checkpoint exists; `gate.checkpoint_commit` records it.
-2. `janus run` starts by loading committed state, then reconciles with reality: for each repo it verifies that the local goal branch head equals `repos.<name>.head_commit` and fetches the remote to detect drift (for example a human pushed to the goal branch). Drift is recorded and, if it is not a fast-forward, escalated.
-3. If `execution.in_flight.step` is set at load time, the previous process died mid-step. Resume behavior by step type:
-   - agent run: the uncommitted diff in the assigned repo is saved to `evidence/agents/<run-id>.interrupted.patch`, the working tree is reset, the run counts as a failed attempt, and the step re-runs.
-   - CI wait: resume waiting on the recorded build id.
+2. `janus run` starts by loading committed state, then reconciles with reality: for each repo it verifies the local goal branch head equals `repos.<name>.head_commit`, fetches the remote goal branch and base branch, and records drift. Non-fast-forward drift on a goal branch escalates. New base-branch commits are noted and handled by the sync step (§16.6).
+3. If `execution.in_flight.step` is set at load time, the previous process died mid-step:
+   - agent run: the uncommitted diff in the assigned repo is saved to `evidence/agents/<run-id>.interrupted.patch`, the tree is reset, the run counts as one failed attempt against the budget of its role (§20), and the step re-runs.
+   - CI or E2E wait: resume waiting on the recorded build id.
    - any other step: re-run (all such steps are idempotent).
 4. State pushes are fast-forward only. If the remote state branch moved, `run` stops and asks the human to reconcile.
-5. A fresh Janus process on another machine can resume from `git clone` of the state branch plus `janus init --resume`, which re-clones the repositories at their recorded heads.
+5. A fresh Janus process on another machine resumes with `janus init --resume`, which clones the state branch and re-clones the repositories at their recorded heads.
+6. `janus.lock` stores PID and timestamp; a lock whose PID is dead is reclaimed with a warning.
 
 ---
 
 ## 8. CLI surface and run model
 
 ```text
-janus init --goal goal.yaml [--workspace DIR]     create workspace, clone repos, create state branch, first checkpoint
-janus init --resume <state-remote> <goal-id>      rebuild a workspace from committed state
+janus init --goal goal.yaml [--workspace DIR]
+janus init --resume <state-remote> <goal-id>
 janus run [--until STAGE] [--max-wait 45m] [--dry-run]
-janus status [--json]
-janus approve plan [--commit SHA] [--exception ID ...]
-janus approve revised-plan [--commit SHA]
+janus status [--json] [--telemetry]
+janus approve plan --commit SHA [--exception ID ...]
+janus approve revised-plan --commit SHA
 janus reject plan --reason "..."
-janus escalation show | resolve --direction "..."
-janus review sync                                 fetch PR activity now (also done by run)
-janus doctor                                      check codex, git, tokens, provider reachability
-janus agent run <role> --task FILE                debug: run one agent task by hand
-janus ci wait|trigger|digest ...                  debug helpers
+janus escalation show [--json] | resolve --direction "..."
+janus review sync
+janus doctor [--json]
+janus agent run <role> --task FILE       debug helper
+janus ci wait|trigger|digest ...         debug helpers
 ```
 
 Run model:
 
-- `janus run` advances the state machine step by step until one of: a human gate, a blocking wait longer than `--max-wait`, an escalation, or completion. It then prints a status summary and exits with a distinct exit code per reason.
+- `janus run` advances step by step until a human gate, a blocking wait longer than `--max-wait`, an escalation, or completion. It prints a status summary and exits with a distinct exit code per reason.
 - Every step is bracketed by `in_flight` set/clear and ends with a checkpoint.
-- A lock file prevents two concurrent runs in one workspace.
-- `--dry-run` prints the next steps without executing agents, commits, or CI calls.
-- Human gates are passed only by `janus approve ...`, which records who approved (from git identity), the approved state-branch commit, and appends to `decisions.md`.
+- Gates 1 and 2 are passed only by `janus approve`, which requires `--commit` so approval is bound to an exact state-branch commit, and records the approver from git identity in `decisions.md`. Gates 3 and 4 are observed from the SCM provider (approvals and merges) and recorded on the next run.
+- `--json` outputs of `status`, `escalation show`, and `doctor` are stable contracts consumed by the operator skill (§35).
 
 ---
 
@@ -421,37 +470,40 @@ Run model:
 ```text
 init
   |
-discovery (per repo x areas, parallel, read-only) + integration discovery
+prepare (orchestrator: clone, install, build per repo via local CI provider)
   |
-baseline (orchestrator: local checks per repo, PR build per repo on base, goal E2E on base branches)
+discovery (per repo, configurable areas, parallel) + integration discovery
   |
-planning (fresh agent -> plan.md + plan.yaml, proposed baseline exceptions)
+baseline (local checks per repo, PR build per repo on base, goal E2E on base branches)
+  |
+planning (fresh agent -> plan.md + plan.yaml)
   |
 GATE 1: approve plan + baseline + exceptions
   |
-create goal branches + PRs (all repos)
+create goal branches (+ PRs if create_prs_early)
   |
 execute work packages in plan order
-  |   for each WP (scoped to repos R):
-  |     fresh implementation agent per repo in R
-  |     policy checks -> commit -> push (per repo)
-  |     per-repo CI build: wait for automatic, trigger if absent
-  |       red -> diagnose: defect | coupled-expected
-  |            defect -> fresh debug agent (bounded)
-  |            coupled -> continue inside verification group
-  |     group boundary -> all group repos green; E2E if group flagged high-risk
-  |     library prerelease publish if WP requires it
-  |     AI checkpoint (fresh)
+  |   sync from base (per repo touched)
+  |   fresh implementation agent per repo
+  |   policy checks -> commit -> push
+  |   per-repo CI build: wait for automatic, trigger if absent
+  |       infra failure -> re-trigger once
+  |       red -> defect -> fresh debug agent (bounded)
+  |             coupled-expected (verified) -> continue inside group
+  |   group boundary -> all repos green; E2E if flagged
+  |   prerelease publish if required; dependents receive version
+  |   AI checkpoint (fresh)
   |
-final E2E (goal-level, all goal branches)
+sync from base (all repos) -> final E2E (goal-level)
   |
-independent AI review (fresh) -> findings -> fresh fix agent -> CI -> E2E if invalidated -> review
+independent AI review -> findings -> fresh fix agent -> CI -> E2E if invalidated -> review
   |
-QA recommendation (fresh)
+QA recommendation
   |
-GATE 3: human review of all PRs -> comments -> fresh fix agent -> CI -> E2E if invalidated -> AI review -> QA refresh
+GATE 3: human review of all PRs -> comments -> fix -> CI -> E2E if invalidated -> AI review -> QA refresh
   |
 GATE 4: human merges in dependency order
+  |   library merged -> release build -> fix agent bumps consumers -> CI -> next merge
   |
 completed
 ```
@@ -460,61 +512,41 @@ Escalation can happen from any autonomous step and leads to `escalated` -> human
 
 ---
 
-## 10. Discovery
+## 10. Prepare and discovery
 
-Discovery is read-only with respect to product code. Agents run with the Codex `read-only` sandbox; the orchestrator gives each agent an `--add-dir` for its report path under `.janus/discovery/`.
+### Prepare
 
-Per repository, run in parallel (bounded by `agents.max_parallel`):
+The orchestrator runs install and build per repository through the `local` CI provider before discovery, so agents can inspect `node_modules`, run `ng update` in listing mode, and read build output. Results are stored under `evidence/baseline/<repo>/local.yaml` and reused by the baseline stage.
 
-1. Angular and dependency compatibility
-2. build tooling and Module Federation
-3. CI configuration and build flow (reads `.teamcity/` or equivalent if present in repo; TeamCity API is not called by agents)
-4. unit/integration test topology
-5. E2E topology and coverage (for repos that host E2E code)
-6. architecture and high-risk areas
+### Discovery
 
-Then one cross-repository integration discovery agent reads all per-repo reports and produces `integration.md`: shared singleton versions across shell and remotes, library version graph, publish flow, E2E environment topology, recommended upgrade order.
+Discovery agents are report-writing (§3.3): they read repositories freely and write into their report directory only. They may not run installs, builds, or tests.
 
-Each agent writes a markdown report and returns structured findings:
+Areas are configurable (`discovery.areas`). Default, three per repository:
 
-```yaml
-area: e2e
-repo: shell
-findings: []
-risks: []
-known_gaps: []
-recommended_work: []
-evidence: []
-confidence: high | medium | low
-```
+1. dependencies and build tooling (Angular, TypeScript, RxJS, Module Federation, CLI config)
+2. tests and E2E (unit topology, E2E hosting, coverage)
+3. architecture, high-risk areas, and CI configuration files in the repo
 
-The orchestrator merges the structured parts into `discovery/summary.yaml`. Discovery agents may not run tests, builds, or installs (read-only sandbox); they may read existing local artifacts and CI evidence collected by the orchestrator.
+Then one integration discovery agent reads all reports and produces `integration.md`: shared singleton versions across shell and remotes, library version graph, publish flow, E2E environment topology, recommended order, and a check of `loads_remotes` against the shell's federation config.
+
+Each agent returns structured findings (`area`, `repo`, `findings`, `risks`, `known_gaps`, `recommended_work`, `evidence`, `confidence`). The orchestrator files reports under `discovery/` and merges the structured parts into `discovery/summary.yaml`.
 
 ---
 
 ## 11. Baseline
 
-Run by the orchestrator, not by agents, before planning finishes.
+Run by the orchestrator, not by agents.
 
-Per repository at its base-branch head:
+Per repository at its base-branch head: local checks (from prepare, plus tests and lint) and the PR build through the configured CI provider. Goal-level: full E2E on the base branches.
 
-- local checks through the `local` CI provider where configured (install, build, unit tests, lint)
-- PR build through the configured CI provider on the base branch
-
-Goal-level:
-
-- full E2E on the base branches through the CI provider
-
-Results are stored under `evidence/baseline/` and summarized in `state.yaml`. Failures become proposed baseline exceptions with a stable identity (test name, build problem identity, or E2E scenario id). Only a human approves exceptions, at Gate 1. No new exception may be created autonomously later; a newly discovered pre-existing failure escalates.
+Failures become proposed baseline exceptions with stable identities (test identity, build problem identity, or E2E scenario id). The orchestrator owns this list; the planning agent may only annotate reasons. Only a human approves exceptions, at Gate 1. No new exception may be created autonomously later; a newly discovered pre-existing failure escalates.
 
 ---
 
 ## 12. Technical plan and Gate 1
 
-A fresh planning agent receives the goal, discovery summary and reports, baseline results, and guardrails. It writes:
-
-- `plan.md`: human-readable, using the v1 section list (Goal, Baseline, Known Risks, Upgrade Strategy, Work Packages, Verification Groups, Verification Strategy, E2E Strategy, Autonomy, Guardrails, Known Baseline Exceptions, Escalation Rules), plus a Repository Order section.
-- `plan.yaml`: the engine's view.
+A fresh planning agent receives the goal, discovery summary and reports, baseline results, and guardrails. It writes `plan.md` (v1 sections plus Repository Order) and `plan.yaml`:
 
 ```yaml
 version: 1
@@ -523,17 +555,14 @@ work_packages:
     title: Upgrade ui-kit to Angular 16
     repos: [ui-kit]
     objective: ...
-    allowed_scope: [package.json, angular.json, src/**]
+    allowed_scope: [package.json, pnpm-lock.yaml, angular.json, tsconfig*.json, src/**, projects/**]
     definition_of_done: [...]
     verification: { pr_build: required }
-    requires_publish: true          # library prerelease after green
+    requires_publish: true
     depends_on: []
     risks: [...]
   - id: wp-02-shell-angular
     repos: [shell]
-    depends_on: [wp-01-ui-kit-angular]
-  - id: wp-03-orders-angular
-    repos: [orders-remote]
     depends_on: [wp-01-ui-kit-angular]
 
 verification_groups:
@@ -541,116 +570,130 @@ verification_groups:
     work_packages: [wp-02-shell-angular, wp-03-orders-angular]
     reason: Module Federation shared singletons must match
     e2e_after: true
-    max_red_window: 2               # work packages allowed red inside the group
+    max_red_window: 2
 
-proposed_exceptions: [...]
+exception_annotations:
+  - id: baseline-ex-003
+    reason: known flaky checkout test, tracked in JIRA FE-1234
 ```
 
-The engine validates `plan.yaml`: every repo referenced exists, `depends_on` is acyclic, coupled repos share a group, red windows respect `guardrails.max_work_packages_without_green`.
+Engine validation: every repo exists; `depends_on` is acyclic; coupled repos share a group; red windows respect `guardrails.max_work_packages_without_green`; `requires_publish` only on libraries with a publish build; `allowed_scope` is wide enough to include lockfiles and Angular CLI migration targets (the validator warns when `package.json` is in scope but the lockfile is not).
 
-Gate 1: the human runs `janus approve plan --commit <state-sha> [--exception <id> ...]`. Approval covers plan, work packages, groups, verification strategy, baseline, and the listed exceptions. No code-changing execution may begin before approval.
+Gate 1: `janus approve plan --commit <state-sha> [--exception <id> ...]`. Approval covers plan, packages, groups, verification strategy, baseline, and the listed exceptions.
 
 ---
 
 ## 13. Work packages and verification groups
 
-Unchanged from v1 except:
+As in v1, with:
 
-- a work package lists its `repos`; one implementation agent runs per repo, sequentially, in dependency order
-- a package may declare `requires_publish: true`; after its repos are green the orchestrator triggers the repo's `publish_build_type_id` and records the resulting prerelease version in `repos.<name>.prerelease_version`; dependent packages receive that version in their context
-- groups may span repositories; the group boundary condition is "every repo in the group green on its PR build" plus E2E when `e2e_after` is true
-- dynamic regrouping is allowed under the v1 conditions; the engine re-validates `plan.yaml` after any regroup and records the reason in `decisions.md`
+- a package lists its `repos`; one implementation agent runs per repo, sequentially, in dependency order
+- `requires_publish: true`: after the repo is green, Janus computes `prerelease = <current>-janus.<goal-id>.<n>`, triggers `publish_build_type_id` with property `janus.version`, waits, and records the version; dependent packages receive it in context and must pin it. Any later commit on a `requires_publish` repo (debug, fix, review, sync) re-triggers publish and creates a bump task for dependents
+- groups may span repositories; the boundary condition is every repo in the group green on its PR build plus E2E when `e2e_after` is true
+- red windows are primarily intra-repository sequences; cross-repo runtime coupling is verified by E2E, not by allowing red PR builds
+- dynamic regrouping is allowed under v1 conditions; the engine re-validates `plan.yaml` and records the reason
 
 ---
 
 ## 14. Commit model and policy checks
 
-Agents never commit. After an implementation, debug, or fix agent finishes, the orchestrator:
+Agents never commit. After a code-writing agent finishes, the orchestrator:
 
-1. collects the diff in the assigned repo (tracked and untracked, excluding ignored files)
+1. collects the diff (tracked and untracked, excluding ignored files)
 2. runs policy checks
-3. on pass: commits with a conventional message referencing the work package and agent run id, then pushes
-4. on violation: writes `evidence/policy/<attempt-id>.yaml`, saves the diff as a patch in evidence, resets the working tree, counts one attempt against the current budget, and includes the violation report in the next fresh agent's context
+3. on pass: commits with a conventional message referencing package and run id, then pushes
+4. on violation: writes `evidence/policy/<attempt-id>.yaml`, then runs one fresh "remove the violation" fix agent with the report and the diff kept in place; if the re-check still fails, or `max_policy_violations_per_package` is reached, the tree is reset, the diff is saved as a patch, and the attempt counts against the role budget
 
-Policy checks (deterministic, configurable, all on by default):
+Policy checks (deterministic, configurable, on by default):
 
 | Check | Default |
 |---|---|
-| forbidden test patterns added | `xit(`, `xdescribe(`, `fit(`, `fdescribe(`, `.skip(`, `.only(`, `it.todo(`; `expect(true).toBe(true)`-style tautologies |
-| deleted or renamed test files | violation unless the work package explicitly allows it |
-| net decrease in test count beyond threshold | configurable percentage per repo |
-| forbidden paths | `.teamcity/**`, `.github/**`, and other CI paths as configured. Test-runner configs (`karma.conf.js`, `jest.config.*`) may be edited, but lowering a coverage threshold or excluding test files in them is a violation |
-| Angular version beyond target | any `@angular/*` dependency whose major exceeds `target_version` |
-| scope | files outside the work package `allowed_scope` globs |
+| forbidden test patterns added | `xit(`, `xdescribe(`, `fit(`, `fdescribe(`, `.skip(`, `.only(`, `it.todo(`, tautological expectations |
+| deleted or renamed test files | violation unless the package allows it |
+| net decrease in test count | threshold per repo, default 0 percent |
+| forbidden paths | `.teamcity/**`, `.github/**`, other CI paths as configured. Runner configs (`karma.conf.js`, `jest.config.*`) may change, but lowering coverage thresholds or excluding tests in them is a violation |
+| Angular version beyond target | any `@angular/*` major above `target_version` |
+| scope | files outside `allowed_scope` |
 | diff size | `max_changed_files`, `max_diff_lines` when set |
 | secrets | common token patterns |
 
-The AI checkpoint remains responsible for judgment calls the deterministic checks cannot make (weakened assertions, behavior changes).
+The AI checkpoint remains responsible for judgment calls (weakened assertions, behavior changes).
+
+Output-schema note: Codex strict schemas require every property to be present, so role schemas list all fields as required and use `null` for "not applicable".
 
 ---
 
 ## 15. Pull request model
 
-After Gate 1 the orchestrator creates, for every repository, the goal branch from the recorded base commit and one PR against the repo's base branch. PR descriptions link to the state branch, the plan commit, and the other PRs of the goal. PR descriptions are updated by the orchestrator at each work package boundary with progress and CI state.
-
-All PRs remain open until the human merges them. Bitbucket Server HTTP access tokens cannot merge, which enforces the human-merge rule.
+Goal branches are created for every repository at Gate 1 from the recorded base commits. PRs are created either at Gate 1 (`create_prs_early: true`, default) or when a repository's first package starts. PR descriptions link to the state branch, the plan commit, and sibling PRs, and are updated at package boundaries. All PRs stay open until the human merges them. Bitbucket Server HTTP access tokens cannot merge, which enforces the human-merge rule.
 
 ---
 
 ## 16. CI provider and PR build loop
 
-### 16.1 Finding the build
+### 16.1 Finding and classifying the build
 
 After a push of commit `S` on repo `R`:
 
-1. poll `findBuild(R, S, pr_build_type_id)` every `ci.poll_interval` (default 30s) for `ci.appearance_timeout` (default 5m)
-2. if no build appears, `triggerBuild(R, pr_build_type_id, ai/<goal-id>, S)` and record that it was triggered explicitly
-3. `waitForBuild` until finished or `ci.build_timeout`
+1. poll `findBuild(R, S, pr_build_type_id)` every `poll_interval` for `appearance_timeout`
+2. if no build appears, `triggerBuild` explicitly and record `explicit_trigger: true`
+3. `waitForBuild` until finished or `build_timeout`
 
-TeamCity mapping: locator `revision:(S),buildType:(id:X),defaultFilter:false,state:any`; queued builds also checked via `buildQueue`; status `SUCCESS | FAILURE | UNKNOWN` (cancelled or failed-to-start count as failure with a distinct reason).
+Outcome classification:
+
+- `success`
+- `tests_failed`: failed test occurrences present
+- `build_failed`: build problems without failed tests (compile, lint, script exit code)
+- `infra`: cancelled, failed to start, agent lost, VCS or artifact problems, timeout in queue
+
+`infra` outcomes re-trigger once (`budgets.infra_retries`), then escalate without launching an agent. Only `tests_failed` and `build_failed` start the debug loop.
+
+TeamCity mapping: locator `revision:(S),buildType:(id:X),defaultFilter:false,state:any`; queued builds via `buildQueue`; `UNKNOWN` status maps to `infra` unless failed tests exist. If the build configuration builds merge commits rather than branch heads, `revision:(S)` never matches and every push goes through the explicit trigger path (see §33).
 
 ### 16.2 Failure digest
 
-Before any debug agent runs, the orchestrator produces a bounded digest:
-
-- build problems (type, identity, details)
-- failed tests: name, `newFailure` flag, first N lines of details; capped at `digest.max_tests` (default 50)
-- log tail: last `digest.log_tail_lines` (default 400) of the plain build log, plus up to `digest.max_error_windows` windows around lines matching error patterns
-- links: build URL, log URL
-- classification hints: known baseline exception identities matched
-
-Digests are stored under `evidence/digests/` and capped at `digest.max_bytes` (default 64 KB).
+Before any debug or triage agent runs, the orchestrator produces a bounded digest: build problems; failed tests with `newFailure` flag and the first N lines of details (`digest.max_tests`); log tail (`digest.log_tail_lines`) plus windows around error lines (`digest.max_error_windows`); links; baseline-exception matches. A redaction pass removes tokens, credentials, and query strings before anything is written under `evidence/`. Digests are capped at `digest.max_bytes`.
 
 ### 16.3 Failure signature and no-progress
 
-`failure_signature = sha256(sorted(failed test identities) + sorted(problem identities))` excluding approved baseline exceptions.
+```text
+failure_signature = sha256(
+  sorted(failed test identities)
+  + sorted(problem identities)
+  + sorted(normalized error lines)   # file paths, TS error codes, first line of each error window,
+)                                     # with line numbers and timestamps stripped
+```
 
-A debug attempt is a no-progress iteration when the resulting signature equals `execution.last_failure_signature`. Two consecutive no-progress iterations (default `max_no_progress_iterations: 2`) escalate even if `max_ci_fix_attempts` remains.
+excluding approved baseline exceptions. A debug attempt is a no-progress iteration when its resulting signature equals the previous one. `max_no_progress_iterations` consecutive no-progress iterations escalate even if attempts remain.
 
 ### 16.4 Debug agent
 
-A fresh debug agent receives: goal, plan slice, current work package, repo, diff of the package so far, the failure digest, previous attempt summaries (one paragraph each, no reasoning), policy-violation reports if any, guardrails, remaining attempt budget.
+Receives: goal, plan slice, package, repo, package diff so far, digest, previous attempt summaries (one paragraph each), policy reports if any, guardrails, remaining budget, and Angular-specific guidance (§18.4).
 
 ### 16.5 Coupled red
 
-If the failure is classified by the implementation agent's result (`expected_temporary_failure: true` with a stated dependency on a later package in the same group) and the engine confirms the group and red window allow it, the red is recorded and execution continues to the next package in the group. The window and the `max_work_packages_without_green` guardrail bound this.
+An implementation agent may return `expected_temporary_failure: true` with the dependency it expects to resolve it. The engine accepts this only if the package is inside a verification group with remaining red window and the actual failed-test set is a subset of the predicted set in the agent's result; otherwise the failure is treated as a defect. Accepted coupled reds are recorded and execution continues to the next package in the group.
+
+### 16.6 Base-branch sync
+
+Goal branches live for weeks. At the start of each package for each repo it touches, and before final E2E for all repos, the orchestrator fetches the base branch and merges it into the goal branch (`merge`, never rebase, to preserve PR history). Clean merges are committed and pushed and trigger the normal PR build loop. Conflicts start a fresh sync-conflict agent (code-writing class) bounded by `max_sync_conflict_attempts`; the agent resolves conflicts only and the result goes through policy checks. Failure escalates. Every sync is recorded under `evidence/sync/`. `repos.<name>.base_commit` tracks the included base commit.
 
 ---
 
 ## 17. E2E
 
-E2E is goal-level. It is triggered by the orchestrator only, always the full suite:
+E2E is goal-level, orchestrator-triggered, always the full suite: baseline, after groups with `e2e_after`, before final AI review, and after any invalidating change.
 
-- baseline: base branches of all repos
-- after a verification group with `e2e_after: true`
-- before final AI review
-- after any code change that invalidates the previous result
+Validity: `verification.e2e.heads` records the head commit of every repository (or the base branch commit for merged repos). Any new commit on any unmerged goal branch sets status to `invalidated`.
 
-Validity: `verification.e2e.heads` records the head commit of every repository the run covered. Any new commit on any goal branch sets status to `invalidated`.
+Trigger parameters: per repo in `branch_params`, the goal branch name, or the base branch name if the repo is merged or not part of the goal.
 
-Trigger parameters: for each repo listed in `e2e.branch_params`, the repo's goal branch name (or base branch for the baseline). The E2E build configuration is responsible for deploying or pointing at an environment; Janus passes parameters and waits.
+Failure handling:
 
-Failure handling: the same digest, debug, budget, and escalation model as PR builds, with the debug agent scoped to the repository the digest and plan point at. If the failing repository cannot be determined, the engine escalates with the digest rather than guessing.
+1. one automatic rerun (`verification.e2e.reruns`) to absorb flakiness
+2. a fresh read-only triage agent receives the digest, every repo's diff summary, and `suite_repo_map`, and returns the most likely repo and a rationale
+3. a debug agent runs in that repo under `budgets.e2e_fix_attempts`
+4. if triage cannot name a repo with at least medium confidence, escalate with the digest
 
 ---
 
@@ -661,40 +704,43 @@ Failure handling: the same digest, debug, budget, and escalation model as PR bui
 ```yaml
 AgentTask:
   run_id: string
-  role: discovery | integration_discovery | planning | implementation | debug |
-        checkpoint | review | fix | qa | replanning
-  repo: string | null          # cwd for the agent
-  writable_paths: []           # extra --add-dir entries under .janus/
-  sandbox: read-only | workspace-write
-  network: boolean             # sandbox_workspace_write.network_access
+  role: discovery | integration_discovery | planning | replanning | implementation |
+        debug | fix | sync_conflict | checkpoint | review | triage | qa
+  class: code-writing | report-writing | read-only
+  repo: string | null
+  cwd: string
+  writable_roots: []
+  network: boolean
   timeout_minutes: number
-  context: ContextPackage      # section 18.2, rendered to the prompt
-  output_schema: JSONSchema    # per role
+  context: ContextPackage
+  output_schema: JSONSchema
 ```
 
 ### 18.2 Context package
 
-Rendered into the prompt in this order. Nothing else is injected; in particular no previous agent reasoning.
+Rendered into the prompt in this order; nothing else is injected, in particular no previous agent reasoning.
 
 ```text
-GOAL (from goal.yaml, trimmed)
-REPOSITORY (name, kind, dependencies, coupled repos, base branch)
-APPROVED PLAN SLICE (this work package and its group)
-CURRENT STATE (relevant subset of state.yaml)
-RELEVANT DIFF (this package so far, or full branch diff for review)
+GOAL
+REPOSITORY (name, kind, dependencies, coupled repos, base branch, prerelease versions to pin)
+APPROVED PLAN SLICE
+CURRENT STATE (relevant subset)
+CHANGE SUMMARY (file list with added/removed line counts; lockfiles and generated files listed but never inlined)
+INLINE DIFF (only for code-writing roles, only the current package, truncated with markers at agents.max_inline_diff_bytes)
 LATEST VERIFICATION EVIDENCE (digest or build refs)
 PREVIOUS ATTEMPTS (summaries only)
 KNOWN BASELINE EXCEPTIONS
-GUARDRAILS AND FORBIDDEN ACTIONS (including: never run git write commands)
-BUDGET (remaining attempts / cycles)
-OUTPUT CONTRACT (schema summary, where to write reports)
+GUARDRAILS AND FORBIDDEN ACTIONS
+ANGULAR GUIDANCE (package manager, ng update flags, migration expectations)
+BUDGET
+OUTPUT CONTRACT
 ```
 
-Context size is bounded by `agents.max_context_bytes`; diffs and digests are truncated with markers, never silently.
+Review, checkpoint, and triage agents receive the change summary and run `git diff` themselves inside the read-only sandbox instead of receiving inlined diffs.
 
 ### 18.3 Output contract
 
-Minimum shape for every role (roles extend it):
+Minimum shape for every role; all fields required, `null` where not applicable:
 
 ```yaml
 status: completed | blocked | failed
@@ -704,146 +750,148 @@ findings: []
 evidence: []
 new_tasks: []
 expected_temporary_failure: false
+predicted_failures: []            # test identities, when expected_temporary_failure is true
 plan_change_required: false
 architecture_change_required: false
 behavior_change_required: false
 recommended_next_action: string
-handover:
-  current_state: string
-  next_action: string
-  risks: []
+handover: { current_state: string, next_action: string, risks: [] }
 ```
 
-The orchestrator validates against the JSON schema; invalid output is one failed attempt, and the validation error is included in the retry context.
+Invalid output is one failed attempt; the validation error is included in the retry context.
 
 ### 18.4 Codex adapter
 
-Invocation shape:
-
 ```text
-codex exec -C <repo-or-workspace> \
-  -s <read-only|workspace-write> \
+codex exec -C <cwd> -s <read-only|workspace-write> \
   -c sandbox_workspace_write.network_access=<bool> \
-  --add-dir <.janus/...> \
-  --output-schema <schema.json> \
-  --json -o <last-message.json> \
-  [--ephemeral] [-m <model>] [-c model_reasoning_effort=<x>] \
-  - < prompt.md
+  --add-dir <root> ... \
+  --output-schema <schema.json> --json -o <last-message.json> --ephemeral \
+  [-m <model>] [-c model_reasoning_effort=<x>] - < prompt.md
 ```
 
-The adapter parses the JSONL stream for `turn.completed.usage` (input, cached input, output, reasoning tokens), records duration, exit code, and the validated final message under `evidence/agents/<run-id>.yaml`, and terminates the process after the timeout. `--skip-git-repo-check` is never used. The adapter never relies on Codex session state; `resume` is not used.
+Writable roots for code-writing agents: the repo, the pnpm store (`pnpm store path`), `~/.cache`, and `.angular/cache` locations outside the repo. Alternatively `janus init` writes a workspace `.npmrc` with `store-dir=<workspace>/.pnpm-store` so a single writable root suffices; this is the default.
 
-Per-role settings (`config.yaml` `agents.roles.<role>`): model, reasoning effort, sandbox, network, timeout. The reviewer role may be pinned to a different model than implementers.
+Angular guidance injected into code-writing prompts: use the repo's package manager; run `ng update` with `--allow-dirty` because the tree is intentionally uncommitted; expect CLI migrations to touch files across the repo; never edit CI configuration.
+
+The adapter parses `turn.completed.usage`, records duration, exit code, and the validated final message under `evidence/agents/<run-id>.yaml`, and kills the process at timeout. `resume` and `--skip-git-repo-check` are never used.
+
+Bubblewrap requires user namespaces. `janus doctor` runs three real probes: a read-only `codex exec` echo, a `workspace-write` install in a scratch project, and an `ng update --allow-dirty` dry run when Angular is present. If the sandbox cannot start (containers without user namespaces), doctor reports it; running with `danger-full-access` is possible only with `agents.allow_unsandboxed: true` and is recorded in every checkpoint, with the reflog audit (§31) as the remaining guard.
+
+Per-role settings in `config.yaml`: model, reasoning effort, timeout. Class determines sandbox and network. The reviewer may use a different model than implementers.
 
 ### 18.5 Fake runner
 
-A scripted runner used in tests and dry runs: given a task, it applies a prepared patch (or none), writes prepared reports, and returns a prepared result. Scripts are keyed by role and attempt number so escalation paths can be tested deterministically.
+Scripted by role and attempt number; applies prepared patches, writes prepared reports, returns prepared results; state persisted under `fake/agents.json`.
 
 ---
 
 ## 19. Autonomy rules
 
-As in v1, with these additions to the "may not" list:
+As in v1, with these additions to "may not":
 
-- run any git write command (commit, push, checkout, reset, rebase, stash)
-- modify files outside the assigned repository or designated `.janus/` paths
-- change files under forbidden paths (section 14)
-- publish packages directly (only the orchestrator triggers publish builds)
+- run any git write command
+- modify files outside the assigned repository or the assigned report directory
+- change files under forbidden paths
+- publish packages directly
+- resolve anything but conflicts during a sync-conflict task
 
 ---
 
-## 20. Guardrails
+## 20. Guardrails and budget table
 
-```yaml
-guardrails:
-  max_ci_fix_attempts: 5            # per verification boundary
-  max_ai_review_cycles: 3
-  max_no_progress_iterations: 2
-  max_work_packages_without_green: 3
-  max_policy_violations_per_package: 2
-  max_changed_files: null
-  max_diff_lines: null
-  max_agent_runtime_minutes: 60
-  max_goal_runtime_hours: null
-  require_human_for: [architecture_change, scope_change, acceptance_criteria_change,
-                      product_behavior_change, new_baseline_exception, repo_order_change]
-  forbidden: [disable_tests, skip_failing_tests, remove_failing_tests,
-              weaken_assertions_for_green, bypass_quality_checks,
-              upgrade_beyond_target_major, git_write_by_agent, edit_ci_config]
-```
+| Counter | Incremented when | Reset when | Escalates at |
+|---|---|---|---|
+| `ci_fix_attempts` | a debug agent finishes (any status) or a code-writing run crashes, for a PR build failure | the repo's PR build goes green | `max_ci_fix_attempts` (5) |
+| `e2e_fix_attempts` | a debug agent finishes for an E2E failure | E2E passes | `max_e2e_fix_attempts` (3) |
+| `no_progress_iterations` | a debug attempt yields the same failure signature | signature changes or build goes green | `max_no_progress_iterations` (2) |
+| `work_packages_without_green` | a package ends in `expected_red` | any package in the group goes green | `max_work_packages_without_green` (3) |
+| `ai_review_cycles` | a final review returns findings | never within a goal | `max_ai_review_cycles` (3) |
+| `policy_violations` (per package) | policy check fails after the in-place fix attempt | package completes | `max_policy_violations_per_package` (2) |
+| `sync_conflict_attempts` | a sync-conflict agent finishes without a clean merge | sync succeeds | `max_sync_conflict_attempts` (2) |
+| `infra_retries` | a build is classified `infra` | build finishes with a non-infra outcome | `max_infra_retries` (1) |
 
-Null disables a limit. Hitting any limit escalates (section 25).
+Other limits: `max_agent_runtime_minutes` is the ceiling; per-role `timeout_minutes` may only be lower. `max_changed_files`, `max_diff_lines`, `max_goal_runtime_hours` are null by default. Implementation agents returning `failed` or `blocked` count as one `ci_fix_attempts` increment when a build exists, otherwise escalate directly with the agent's summary. Planning, discovery, review, and qa agent failures retry once, then escalate.
+
+`require_human_for` and `forbidden` lists are as in v2, plus `repo_order_change` and `git_write_by_agent`.
 
 ---
 
 ## 21. AI checkpoint after each work package
 
-Unchanged from v1. The checkpoint agent runs read-only, receives the package diff per repo, policy-check results, build outcomes, and the plan slice. Outcomes: `PASS`, `CONTINUE_WITH_REFINED_TASKS`, `REGROUP_VERIFICATION`, `ESCALATE`. `REGROUP_VERIFICATION` proposals are applied only if `plan.yaml` re-validates.
+Unchanged from v1. The checkpoint agent is read-only, receives change summaries per repo, policy results, and build outcomes, and runs `git diff` itself. Outcomes: `PASS`, `CONTINUE_WITH_REFINED_TASKS`, `REGROUP_VERIFICATION`, `ESCALATE`.
 
 ---
 
 ## 22. Independent final AI review
 
-Unchanged from v1, applied across repositories: the reviewer receives every repo's full branch diff, CI and E2E evidence, the plan, and the goal. It never receives implementation agent output. Findings are structured (repo, file, severity, category, description, suggested action). A fresh fix agent addresses findings per repo; CI and E2E invalidation rules apply; the cycle counter is `max_ai_review_cycles`.
+Unchanged from v1, across repositories, with the reviewer inspecting diffs itself. Findings are structured (repo, file, severity, category, description, suggested action). A fresh fix agent addresses findings per repo; CI, publish re-trigger, and E2E invalidation rules apply; `ai_review_cycles` bounds the loop.
 
 ---
 
 ## 23. QA recommendation
 
-Unchanged from v1, with per-repository change-impact sections and one goal-level section covering cross-repository behavior (Module Federation boundaries, shared library consumers). Output goes to `evidence/qa/` and is posted as a comment on each PR.
+Unchanged from v1, with per-repository sections and one goal-level section. Output goes to `evidence/qa/` and is posted as a comment on each PR by Janus's SCM user.
 
 ---
 
-## 24. Human review loop, merge, completion
+## 24. Human review loop, merge, release, completion
 
-`janus run` (or `janus review sync`) polls each PR's activity stream since `review_loop.activity_cursor`:
+Polling each PR's activity stream since `review_loop.activity_cursor`:
 
-- new comments (general or inline) become fix tasks grouped per repo; a fresh fix agent runs per repo; then CI, E2E if invalidated, fresh AI review, QA refresh if the diff changed
+- comments authored by Janus's own SCM user are skipped
+- other new comments become fix tasks grouped per repo; the fix agent may answer `no_change_needed` with a rationale, which Janus posts as a reply and marks the comment `answered`
 - `NEEDS_WORK` is treated as comments present
-- `APPROVED` on every PR by the required reviewers moves the goal to `awaiting_merge`
+- new commits reset Bitbucket approvals; Janus records this and re-enters review
+- `DECLINED` on any PR escalates with the decline reason
+- `APPROVED` on every open PR by the required reviewers moves the goal to `awaiting_merge`
 
-Merge order is derived from `depends_on` and shown by `janus status`. After all PRs are merged (detected by polling PR state), the goal moves to `completed`, the final handover records the post-merge release order for libraries (replace prerelease versions with released versions), and telemetry is finalized.
+Merge and release, in dependency order shown by `janus status`:
+
+1. the human merges a repo's PR; Janus detects `MERGED`, records `merged: true` and the merge commit
+2. if the repo is a library with `requires_publish`, Janus enters `releasing`: triggers `release_build_type_id` (or the publish build with a release version), records `release_version`, runs a fresh fix agent in each consumer to replace the prerelease pin, then CI, then returns the consumers to `awaiting_merge`
+3. coupled repos should be merged and deployed together; `status` says so
+4. when every PR is merged and every release step is done, the goal is `completed`, the final handover is written, telemetry is finalized
 
 ---
 
 ## 25. Escalation and replanning
 
-Unchanged from v1. `escalation.md` follows the v1 escalation package structure and additionally names the repository and work package. `janus escalation resolve --direction "..."` records the human direction in `decisions.md`, starts a fresh replanning agent that updates `plan.md` and `plan.yaml`, checkpoints, and enters Gate 2. Execution resumes only after `janus approve revised-plan`.
+Unchanged from v1. `escalation.md` follows the v1 package structure plus repo, package, and budget snapshot. `janus escalation resolve --direction "..."` records the direction, runs a fresh replanning agent, checkpoints, and enters Gate 2. Execution resumes only after `janus approve revised-plan --commit`.
 
 ---
 
 ## 26. Human gates
 
-Four mandatory gates as in v1:
-
-1. plan approval (`janus approve plan`)
-2. revised plan approval (`janus approve revised-plan`)
+1. plan approval (`janus approve plan --commit`)
+2. revised plan approval (`janus approve revised-plan --commit`)
 3. PR approval (in Bitbucket, all PRs)
 4. merge (in Bitbucket, all PRs, dependency order)
 
-Gate entry time and exit time are recorded to measure human wait time.
+Gate entry and exit times are recorded to measure human wait time.
 
 ---
 
 ## 27. Telemetry
 
-Append-only events in `telemetry/events.jsonl`. Minimum event types:
+Append-only events in `telemetry/events.jsonl`:
 
 ```text
 goal.created, stage.entered, stage.exited
-agent.started, agent.finished          (role, repo, run_id, tokens, duration, status)
-policy.checked                          (attempt_id, pass, violations)
-commit.created, push.completed
-ci.build.found, ci.build.triggered, ci.build.finished   (repo, build_id, status, duration)
-e2e.triggered, e2e.finished, e2e.invalidated
-budget.incremented, guardrail.hit
-gate.entered, gate.passed               (type, waited_seconds)
+agent.started, agent.finished
+policy.checked, commit.created, push.completed
+sync.started, sync.completed, sync.conflict
+ci.build.found, ci.build.triggered, ci.build.finished, ci.build.infra_retry
+e2e.triggered, e2e.rerun, e2e.finished, e2e.invalidated, e2e.triaged
+publish.triggered, publish.finished, release.triggered, release.finished
+budget.incremented, budget.reset, guardrail.hit
+gate.entered, gate.passed
 escalation.created, escalation.resolved
-pr.created, pr.comment.received, pr.approved, pr.merged
+pr.created, pr.comment.received, pr.comment.answered, pr.approved, pr.declined, pr.merged
 goal.completed
 ```
 
-`janus status --telemetry` derives the v1 metrics (human time, autonomous time, runs by role, fix iterations, review cycles, escalations, tokens, packages completed, regroups, tests added, QA recommendations) from events. Cost estimation is optional and uses a price table in `config.yaml` when present.
+`janus status --telemetry` derives the v1 metrics from events. Cost estimation is optional via a price table.
 
 ---
 
@@ -856,8 +904,10 @@ workflow:
   agent_runner: codex            # codex | fake
   ci_provider: teamcity          # teamcity | local | fake
   scm_provider: bitbucket-server # bitbucket-server | fake
-  sequential_execution: true
   create_prs_early: true
+
+state:
+  repo: { project: FE, slug: janus-state }   # optional dedicated state repo
 
 teamcity:
   url: https://teamcity.example.internal
@@ -870,9 +920,9 @@ teamcity:
 bitbucket:
   url: https://bitbucket.example.internal
   token_env: JANUS_BITBUCKET_TOKEN
-  required_reviewers: []         # empty: any approval counts
+  required_reviewers: []
 
-local_ci:                        # used by ci_provider: local and for baseline local checks
+local_ci:
   repos:
     ui-kit:
       install: pnpm install --frozen-lockfile
@@ -880,18 +930,26 @@ local_ci:                        # used by ci_provider: local and for baseline l
       test: pnpm test -- --watch=false
   e2e: pnpm --dir e2e run full
 
+discovery:
+  areas: [deps-and-build, tests-and-e2e, architecture-and-ci]
+
 agents:
   max_parallel: 4
   max_context_bytes: 200000
+  max_inline_diff_bytes: 60000
+  pnpm_store: workspace           # workspace | global (adds store path as writable root)
+  allow_unsandboxed: false
   roles:
-    implementation: { sandbox: workspace-write, network: true, timeout_minutes: 60 }
-    debug:          { sandbox: workspace-write, network: true, timeout_minutes: 45 }
-    fix:            { sandbox: workspace-write, network: true, timeout_minutes: 45 }
-    discovery:      { sandbox: read-only, network: false, timeout_minutes: 30 }
-    planning:       { sandbox: read-only, network: false, timeout_minutes: 45 }
-    checkpoint:     { sandbox: read-only, network: false, timeout_minutes: 20 }
-    review:         { sandbox: read-only, network: false, timeout_minutes: 60, model: null }
-    qa:             { sandbox: read-only, network: false, timeout_minutes: 30 }
+    implementation: { timeout_minutes: 60 }
+    debug:          { timeout_minutes: 45 }
+    fix:            { timeout_minutes: 45 }
+    sync_conflict:  { timeout_minutes: 30 }
+    discovery:      { timeout_minutes: 30 }
+    planning:       { timeout_minutes: 45 }
+    checkpoint:     { timeout_minutes: 20 }
+    review:         { timeout_minutes: 60, model: null }
+    triage:         { timeout_minutes: 20 }
+    qa:             { timeout_minutes: 30 }
 
 policy:
   forbidden_test_patterns: ["xit(", "xdescribe(", "fit(", "fdescribe(", ".skip(", ".only("]
@@ -904,13 +962,17 @@ digest:
   log_tail_lines: 400
   max_error_windows: 10
   max_bytes: 65536
+  redact: true
 
-guardrails:                      # see section 20 for semantics
+guardrails:
   max_ci_fix_attempts: 5
+  max_e2e_fix_attempts: 3
   max_ai_review_cycles: 3
   max_no_progress_iterations: 2
   max_work_packages_without_green: 3
   max_policy_violations_per_package: 2
+  max_sync_conflict_attempts: 2
+  max_infra_retries: 1
   max_agent_runtime_minutes: 60
 
 telemetry:
@@ -923,50 +985,41 @@ Secrets: `JANUS_TEAMCITY_TOKEN`, `JANUS_BITBUCKET_TOKEN`. Codex authentication i
 
 ## 29. Testing strategy for Janus itself
 
-Janus is developed on a network where TeamCity and Bitbucket are unreachable, so the test pyramid is:
-
-1. **Unit tests** (vitest): state transitions, `plan.yaml` validation, policy checks, failure signature, digest truncation, context package rendering, output validation, budget accounting.
-2. **Adapter contract tests**: TeamCity and Bitbucket Server adapters run against recorded HTTP fixtures (request and response pairs captured from documentation and, later, from the real systems). The `local` and `fake` providers must pass the same provider contract test suite as the real adapters.
-3. **Engine integration tests**: temporary git repositories (two or three, with dependencies) plus the fake runner, fake CI, and fake SCM drive a whole goal from `init` to `completed`, and separately through each escalation path, resume after simulated crash, policy violation, coupled red, E2E invalidation, and human comment loops.
-4. **Dogfood run**: a throwaway Angular 15 application (outside this repository) run with the real Codex runner, the `local` CI provider, and the fake SCM provider. This is the first real end-to-end exercise and is documented as a runbook, not automated.
-5. **First contact runbook** for the work network: `janus doctor`, read-only TeamCity and Bitbucket calls, baseline only, then a small goal.
+1. **Unit tests** (vitest): state transitions, `plan.yaml` and `goal.yaml` validation, policy checks, failure signature, digest truncation and redaction, context rendering, output validation, budget table.
+2. **Provider contract tests**: one suite that `teamcity`, `local`, and `fake` CI providers all pass; likewise for SCM providers. Real adapters run against recorded HTTP fixtures; fixtures are refreshed from the real systems during first contact (§30).
+3. **Engine integration harness**: temp git repositories with a dependency graph, persisted fake runner, fake CI, fake SCM. Drives a goal from `init` to `completed` and through every escalation path, crash resume, policy violation, coupled red, base sync conflict, E2E invalidation and triage, comment loop, decline, partial merge, and release-and-bump. Asserts from reflogs that no agent process performed a git write.
+4. **Manual prompt spike** (before the execution loop is built): hand-run `codex exec` with the intended context packages and schemas against a throwaway Angular 15 app to validate prompts, the sandbox and pnpm store setup, `ng update --allow-dirty`, and the scope globs. Findings feed the prompt templates and doctor probes.
+5. **Dogfood run**: the throwaway Angular 15 app with real Codex, `local` CI, persisted fake SCM, driven by the CLI. Documented as a runbook.
+6. **First contact runbook** for the work network: `doctor`, read-only TeamCity and Bitbucket calls with fixture capture, baseline only, then a one-repo goal, then multi-repo.
 
 ---
 
-## 30. Implementation phases
+## 30. Build order (vertical slices)
 
-Detailed in `tasks.md`. Summary:
+1. **Slice 1, one repo, local CI, fake SCM**: bootstrap, state, engine core, harness skeleton, agent runner, policy checks, `local` and fake CI, fake SCM, prepare, discovery, baseline, plan, Gate 1, package loop with debug budget and escalation, final review, completion, resume. No groups, publish, checkpoint, QA, or E2E yet.
+2. **Slice 2, real adapters**: TeamCity and Bitbucket Server providers, doctor probes, digest redaction, review comment loop.
+3. **Slice 3, multi-repo**: N repos in `depends_on` order, base sync, partial merge, E2E with triage, coupled groups, prerelease publish and release-and-bump, AI checkpoint, QA.
+4. **Slice 4, polish**: telemetry metrics, operator skill, documentation, first contact.
 
-1. repository bootstrap and CLI skeleton
-2. state model, state branch, workspace, checkpoints
-3. engine core: state machine, run loop, gates, locking, resume, telemetry events
-4. agent runner: contract, context packages, schemas, Codex adapter, fake runner
-5. policy checks, orchestrator commit and push
-6. CI providers: interface, digest, `local`, `fake`, `teamcity`
-7. SCM providers: interface, `fake`, `bitbucket-server`
-8. discovery and baseline stages
-9. planning, `plan.yaml` validation, Gate 1
-10. execution loop: packages, groups, debug loop, budgets, checkpoints, publish
-11. E2E, final review, QA, human review loop, completion
-12. escalation and replanning
-13. rendering: handover, escalation, status
-14. telemetry metrics
-15. integration harness and dogfood runbook
-16. documentation and first-contact runbook
+`tasks.md` maps tasks onto these slices.
 
 ---
 
 ## 31. Acceptance criteria
 
-v1 criteria 1 through 22 remain, reinterpreted per repository where relevant, plus:
+v1 criteria 1 through 22, per repository where relevant, plus:
 
-23. a goal with three repositories and a dependency graph is executed in dependency order
-24. a library work package can trigger a prerelease publish and dependents receive the version
-25. every diff is policy-checked before commit and violations are evidenced and fed back
-26. E2E results are invalidated by any new commit on any goal branch
-27. the whole loop runs to completion and through every escalation path using only fakes
+23. a goal with three repositories and a dependency graph executes in dependency order
+24. a library package triggers a prerelease publish and dependents receive and pin the version
+25. every diff is policy-checked before commit; violations are evidenced, fixed in place once, then fed back
+26. E2E results are invalidated by any new commit on any unmerged goal branch
+27. the whole loop, every escalation path, and resume run to completion using only fakes
 28. a workspace can be rebuilt on another machine from the state branch alone
-29. no agent process ever performs a git write operation (verified in the integration harness by inspecting reflogs)
+29. no agent process ever performs a git write (verified from reflogs in the harness)
+30. base-branch changes are merged into goal branches before final E2E
+31. after a library PR merges, consumers are bumped from prerelease to release and rebuilt before their merge
+32. infrastructure build failures never consume a debug attempt
+33. `janus doctor` detects a non-working sandbox, a read-only pnpm store, and a missing `janus/*` branch exclusion
 
 ---
 
@@ -975,36 +1028,47 @@ v1 criteria 1 through 22 remain, reinterpreted per repository where relevant, pl
 v1 rules 1 through 10 plus:
 
 11. Agents never commit, push, or otherwise rewrite Git history.
-12. Secrets never enter `.janus/`, prompts, or evidence.
-13. Never trigger a publish of a non-prerelease version.
+12. Secrets never enter `.janus/`, prompts, or evidence; digests are redacted.
+13. Never trigger a release of a library except in the post-merge release step for a merged PR.
+14. Approval commands bind to an explicit state-branch commit; no tool or skill may infer approval.
 
 ---
 
 ## 33. Assumptions and open items
 
-- TeamCity PR builds run on the source branch with the Pull Requests build feature; the VCS root branch spec includes `ai/*`. If it does not, the explicit trigger path still works when the branch spec allows it; otherwise the branch spec must be widened by a TeamCity admin (recorded in the first-contact runbook).
-- The E2E build configuration can accept per-repo branch parameters and handles deployment itself.
-- Prerelease publishing is available as a TeamCity build configuration per library; if not, `requires_publish` packages escalate with a clear message.
-- Bitbucket Server exposes inline comments through the activities endpoint with anchors; the fix agent receives file and line.
-- The developer machine can run Codex with `workspace-write` and network enabled for installs; Codex uses bubblewrap on Linux.
-- A Claude Code `AgentRunner` is out of scope but the contract is designed so it can be added.
+- TeamCity PR builds run on the source branch and build branch heads, not merge commits. If merge commits are built, every push takes the explicit-trigger path, which still works.
+- The VCS root branch spec includes `ai/*` and excludes `janus/*`.
+- The E2E build accepts per-repo branch parameters and handles deployment itself.
+- Publish and release builds accept a `janus.version` property.
+- Bitbucket Server activities expose inline comment anchors with file and line.
+- The developer machine supports bubblewrap user namespaces; containers may not.
+- A Claude Code `AgentRunner` is out of scope but the contract supports it.
 
 ---
 
 ## 34. Guiding principles
 
-Unchanged from v1:
-
-- State survives. Agents do not.
-- Humans approve intent. Agents execute detail.
-- CI is evidence, not orchestration.
-- Green is required at meaningful boundaries.
-- Planning is progressive.
-- Automation must remain bounded.
-- Independent review matters.
-- Testing is part of implementation.
-
-Added:
+Unchanged from v1, plus:
 
 - Safety rules are enforced by code where they can be, and by review where they cannot.
 - Fakes are part of the product, not an afterthought.
+- The agent is the interface; the engine is the guarantor.
+
+---
+
+## 35. Operator skill
+
+A thin skill for Claude Code or Codex that makes the CLI conversational. It is built last and never bypasses the engine.
+
+It does:
+
+- interview the developer and draft `goal.yaml` and `config.yaml`, then run `janus init` and `janus doctor` and help fix red probes
+- summarize `plan.md` at Gate 1, answer questions from discovery reports and baseline evidence
+- run `janus approve ... --commit <sha>` only when the developer explicitly asks, always echoing the commit hash first
+- read `janus status --json` and explain progress, budgets, and merge order
+- on escalation, read `escalation.md` and digests, help formulate direction, run `janus escalation resolve`
+- tell the developer when to come back after long CI waits; on a new session, re-read status and continue
+
+It does not: run agents itself, edit `.janus/` files, commit, infer approval, or hold workflow state in its conversation.
+
+The skill consumes only the stable `--json` outputs and the files under `.janus/`. It ships as a skill directory in this repository.
