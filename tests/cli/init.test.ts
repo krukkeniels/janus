@@ -12,15 +12,13 @@ function tempDir(): string {
 }
 
 describe('janus init --goal', () => {
-  it('validates the goal, prints the summary, and reports workspace creation as not implemented', async () => {
+  it('validates the goal and then requires a config file', async () => {
     const dir = tempDir();
     const goalPath = join(dir, 'goal.yaml');
     writeFileSync(goalPath, stringify(validGoal));
     const result = await runCli(['init', '--goal', goalPath]);
-    expect(result.stdout).toContain('goal angular-15-to-16: Angular 15 -> 16, 3 repos');
-    expect(result.stdout).toContain('repo order: ui-kit, shell, orders-remote');
-    expect(result.stderr).toContain('workspace creation is not implemented yet (planned in T02)');
-    expect(result.code).toBe(ExitCode.NotImplemented);
+    expect(result.code).toBe(ExitCode.UsageError);
+    expect(result.stderr).toContain('config.yaml not found next to the goal file');
   });
 
   it('exits 2 and names the field when the goal is invalid', async () => {

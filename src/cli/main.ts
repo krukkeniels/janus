@@ -1,5 +1,6 @@
 import { Command, CommanderError } from 'commander';
 import { ConfigError } from '../config/errors.js';
+import { WorkspaceLockedError } from '../workspace/lock.js';
 import { registerCommands } from './commands/index.js';
 import { createContext, defaultIo } from './context.js';
 import type { CliContext, CliIo } from './context.js';
@@ -26,6 +27,10 @@ const HELP_CODES = new Set(['commander.helpDisplayed', 'commander.help', 'comman
 export function exitCodeForError(error: unknown, io: CliIo): ExitCode {
   if (error instanceof CommanderError) {
     return HELP_CODES.has(error.code) ? ExitCode.Ok : ExitCode.UsageError;
+  }
+  if (error instanceof WorkspaceLockedError) {
+    io.stderr(`janus: ${error.message}\n`);
+    return ExitCode.Locked;
   }
   if (error instanceof ConfigError) {
     io.stderr(`janus: ${error.message}\n`);

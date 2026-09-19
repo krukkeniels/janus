@@ -5,6 +5,7 @@ import { ExitCode } from '../../src/cli/exit-codes.js';
 import { exitCodeForError } from '../../src/cli/main.js';
 import { VERSION } from '../../src/cli/version.js';
 import { ConfigError } from '../../src/config/errors.js';
+import { WorkspaceLockedError } from '../../src/workspace/lock.js';
 import { runCli } from '../helpers/run-cli.js';
 
 function fakeIo(): CliIo & { stderrText: string } {
@@ -65,5 +66,12 @@ describe('exitCodeForError', () => {
     const error = new Error('kaboom');
     expect(exitCodeForError(error, io)).toBe(ExitCode.UnexpectedError);
     expect(io.stderrText).toBe('janus: kaboom\n');
+  });
+
+  it('exits 13 with the message for a locked workspace', () => {
+    const io = fakeIo();
+    const error = new WorkspaceLockedError('/ws/janus.lock', { pid: 1, acquired_at: '2026-09-19T00:00:00.000Z' });
+    expect(exitCodeForError(error, io)).toBe(ExitCode.Locked);
+    expect(io.stderrText).toContain('locked by pid 1');
   });
 });
