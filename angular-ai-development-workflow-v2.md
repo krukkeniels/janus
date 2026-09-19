@@ -791,16 +791,18 @@ Scripted by role and attempt number; applies prepared patches, writes prepared r
 
 Janus must make it cheap to compare models (for example `gpt-5.6-sol` against a smaller or faster model) per role without changing code or prompts.
 
-**Model profiles.** `config.yaml` defines named profiles. A profile sets, per role, the model, reasoning effort, and an optional ladder of fallback models tried on successive retries of the same failure (cheap first, strong later, or the reverse). `workflow.model_profile` selects the default; `janus run --model-profile <name>` overrides for that invocation and is recorded in state and telemetry.
+**Model profiles.** `config.yaml` defines named profiles. A profile sets, per role, the model, reasoning effort, and an optional ladder of fallback models tried on successive retries of the same failure (cheap first, strong later, or the reverse). `workflow_models.profile` selects the default; `janus run --model-profile <name>` overrides for that invocation and is recorded in state and telemetry.
 
 ```yaml
 model_profiles:
   default:
+    "*":            { model: gpt-5.6-sol, effort: high }
     implementation: { model: gpt-5.6-sol, effort: xhigh }
     debug:          { model: gpt-5.6-sol, effort: high, ladder: [gpt-5.6-sol, gpt-5.6-sol:xhigh] }
     review:         { model: gpt-5.6-sol, effort: xhigh }
     discovery:      { model: gpt-5.6-sol, effort: medium }
   fast-first:
+    "*":            { model: gpt-5.6-mini, effort: medium }
     implementation: { model: gpt-5.6-mini, effort: medium, ladder: [gpt-5.6-mini, gpt-5.6-sol] }
     debug:          { model: gpt-5.6-mini, effort: medium, ladder: [gpt-5.6-mini, gpt-5.6-sol, gpt-5.6-sol:xhigh] }
 ```
