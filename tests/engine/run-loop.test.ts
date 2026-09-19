@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { parse, stringify } from 'yaml';
 import type { Engine } from '../../src/engine/engine.js';
 import { approvePlan } from '../../src/engine/gates.js';
 import { describeNextStep, runEngine } from '../../src/engine/run-loop.js';
@@ -9,8 +10,9 @@ import { defaultSteps } from '../../src/engine/steps.js';
 import type { Step, StepRegistry } from '../../src/engine/steps.js';
 import { commitAll, remoteHead, revParse } from '../../src/git/ops.js';
 import { runGit } from '../../src/git/run.js';
+import { CONFIG_FILE } from '../../src/state/files.js';
 import { emptyInFlight } from '../../src/state/state-schema.js';
-import { readState } from '../../src/state/state-store.js';
+import { readState, writeState } from '../../src/state/state-store.js';
 import { readEvents } from '../../src/telemetry/events.js';
 import { openWorkspace } from '../../src/workspace/open-workspace.js';
 import { createGoalBranch, initWorkspace, markInFlight, scriptedSteps, testEngine } from '../helpers/engine-fixtures.js';
@@ -240,6 +242,33 @@ describe('runEngine', () => {
     expect(result.reason).toBe('gate');
     expect(state.repos['ui-kit']?.head_commit).toBe(newer);
     expect(await subjects(ws)).toContain('chore(janus): adopt fast-forwarded goal branch heads');
+  });
+
+  it('escalates when the goal has run longer than max_goal_runtime_hours, before running any step', async () => {
+    const ws = await initWorkspace();
+    const configPath = join(ws.janusDir, CONFIG_FILE);
+    const config = parse(readFileSync(configPath, 'utf8')) as Record<string, unknown>;
+    config['guardrails'] = { ...(config['guardrails'] as Record<string, unknown> | undefined), max_goal_runtime_hours: 1 };
+    writeFileSync(configPath, stringify(config));
+    const state = readState(ws.janusDir);
+    state.telemetry.started_at = '2026-09-19T08:00:00.000Z';
+    writeState(ws.janusDir, state);
+
+    const workspace = await openWorkspace(ws.root);
+    try {
+      const { engine, warnings } = testEngine(workspace, () => new Date('2026-09-19T10:00:00.000Z'));
+      const result = await runEngine({ engine, steps: scriptedSteps(), until: null, maxWaitMs: 60_000, modelProfile: 'default' });
+      expect(result.reason).toBe('escalated');
+      expect(result.steps).toBe(0);
+      expect(warnings[0]).toContain('goal runtime exceeded');
+      expect(readState(ws.janusDir).goal.status).toBe('escalated');
+      const escalation = readFileSync(join(ws.janusDir, 'escalation.md'), 'utf8');
+      expect(escalation).toContain('goal_runtime_hours');
+      const guardrailHit = readEvents(ws.janusDir).find((event) => event['type'] === 'guardrail.hit');
+      expect(guardrailHit).toMatchObject({ guardrail: 'goal_runtime_hours', value: 2, limit: 1 });
+    } finally {
+      workspace.release();
+    }
   });
 
   it('refuses to loop forever on stay and refuses a stage without a step', async () => {

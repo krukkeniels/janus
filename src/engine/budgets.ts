@@ -9,16 +9,19 @@ export interface BudgetContext {
   emit(event: TelemetryEvent): unknown;
 }
 
-/** A limit that was reached. `guardrail` is a budget name, `policy_violations`, or `goal_runtime_hours`. */
+/** Every counter a guardrail can name: the seven budgets, per-package `policy_violations`, and `goal_runtime_hours`. */
+export type GuardrailName = BudgetName | 'policy_violations' | 'goal_runtime_hours';
+
+/** A limit that was reached. */
 export interface GuardrailHit {
-  guardrail: string;
+  guardrail: GuardrailName;
   value: number;
   limit: number;
   detail: string;
 }
 
 export interface BudgetIncrement {
-  budget: string;
+  budget: GuardrailName;
   value: number;
   limit: number;
   /** `value >= limit`: the next attempt must not be started; escalate instead (spec §20 "escalates at"). */

@@ -3,6 +3,7 @@ import { emptyInFlight } from '../state/state-schema.js';
 import type { GoalStatus } from '../state/state-schema.js';
 import { writeState } from '../state/state-store.js';
 import type { Workspace } from '../workspace/open-workspace.js';
+import { checkGoalRuntime } from './budgets.js';
 import { enterStage } from './engine.js';
 import type { Engine } from './engine.js';
 import { escalate } from './escalate.js';
@@ -83,6 +84,11 @@ export async function runEngine(input: RunEngineInput): Promise<RunResult> {
     const status = state.goal.status;
     if (status === 'completed') return stop('completed', `goal ${state.goal.id} is completed`);
     if (status === 'escalated') return stop('escalated', ESCALATED_MESSAGE);
+    const runtimeHit = checkGoalRuntime({ state, config: engine.workspace.config, emit: engine.emit }, engine.now());
+    if (runtimeHit !== null) {
+      await escalate(engine, { reason: `goal runtime exceeded: ${runtimeHit.detail}`, repo: null, guardrail: runtimeHit });
+      return stop('escalated', ESCALATED_MESSAGE);
+    }
     if (state.gate.status === 'waiting' && state.gate.type !== null && isCliGate(state.gate.type)) {
       const head = await revParse(paths.janusDir, 'HEAD');
       return stop('gate', `waiting at gate ${state.gate.type}; approve with: janus approve ${gateCommand(state.gate.type) ?? ''} --commit ${head}`);
