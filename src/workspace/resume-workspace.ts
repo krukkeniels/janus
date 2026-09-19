@@ -68,7 +68,7 @@ export async function resumeWorkspace(input: ResumeWorkspaceInput): Promise<Resu
       input.log(`cloning ${name} (${repo.base_branch}) from ${url}`);
       await clone(url, dir, { branch: repo.base_branch });
       if (repoState.head_commit !== null) {
-        await fetch(dir, 'origin', repoState.goal_branch);
+        await fetch(dir, 'origin', { refspec: repoState.goal_branch });
         const headCommit = repoState.head_commit;
         const short = headCommit.slice(0, 7);
         if (await isAncestor(dir, headCommit, 'FETCH_HEAD')) {

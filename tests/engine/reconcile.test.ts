@@ -120,6 +120,22 @@ describe('reconcileRepos', () => {
     expect(result.result.changed).toBe(false);
   });
 
+  it('notes a missing remote goal branch without escalating or pushing', async () => {
+    const ws = await initWorkspace();
+    const head = await createGoalBranch(ws, 'ui-kit');
+    await runGit(ws.fixture.uiKit.bare, ['update-ref', '-d', `refs/heads/${goalBranch}`]);
+    const result = await reconcile(ws);
+    expect(entry(result, 'ui-kit')).toMatchObject({ recordedHead: head, head, localDrift: 'none', remote: 'absent' });
+    expect(result.result.escalations).toEqual([]);
+    expect(result.result.changed).toBe(false);
+    expect(result.state.repos['ui-kit']?.head_commit).toBe(head);
+    expect(result.warnings[0]).toContain('ui-kit: remote goal branch missing; the next push will create it');
+    const drift = readEvents(ws.janusDir).find((event) => event['type'] === 'repo.drift');
+    expect(drift).toMatchObject({ repo: 'ui-kit', local_drift: 'none', remote: 'absent', recorded_head: head, head });
+    // no push happened: the bare repo still has no goal branch ref
+    await expect(runGit(ws.fixture.uiKit.bare, ['rev-parse', `refs/heads/${goalBranch}`])).rejects.toThrow();
+  });
+
   it('only notes a moved base branch', async () => {
     const ws = await initWorkspace();
     const head = await createGoalBranch(ws, 'ui-kit');

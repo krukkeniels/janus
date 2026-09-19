@@ -36,9 +36,17 @@ export async function clone(url: string, dir: string, options: CloneOptions = {}
   await runGit(dirname(dir), args);
 }
 
-export async function fetch(cwd: string, remote = 'origin', refspec?: string): Promise<void> {
+export interface FetchOptions {
+  /** Fetch a single ref into `FETCH_HEAD` instead of updating remote-tracking branches. */
+  refspec?: string;
+  /** Remove local remote-tracking refs for branches the remote no longer has; needed to notice a deleted branch. */
+  prune?: boolean;
+}
+
+export async function fetch(cwd: string, remote = 'origin', options: FetchOptions = {}): Promise<void> {
   const args = ['fetch', '-q', remote];
-  if (refspec !== undefined) args.push(refspec);
+  if (options.prune) args.push('--prune');
+  if (options.refspec !== undefined) args.push(options.refspec);
   await runGit(cwd, args);
 }
 

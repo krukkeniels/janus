@@ -40,7 +40,9 @@ export async function reconcileRepos(engine: Engine): Promise<ReconcileResult> {
     const repoState = state.repos[name];
     if (!repo || !repoState) continue;
     const dir = paths.repoDir(name);
-    await fetch(dir, 'origin');
+    // Prune so a goal branch the remote no longer has is actually noticed as absent, not resolved from a stale
+    // local remote-tracking ref left over from before it was deleted.
+    await fetch(dir, 'origin', { prune: true });
     const remoteBase = await revParse(dir, `refs/remotes/origin/${repo.base_branch}`);
     const entry: RepoReconciliation = {
       repo: name,
@@ -71,7 +73,9 @@ export async function reconcileRepos(engine: Engine): Promise<ReconcileResult> {
         changed = true;
       }
     }
-    const noteworthy = entry.localDrift !== 'none' || entry.baseMoved || entry.remote === 'ahead_fast_forwarded' || entry.remote === 'behind' || entry.remote === 'diverged';
+    const remoteMissing = entry.remote === 'absent' && entry.recordedHead !== null;
+    const noteworthy =
+      entry.localDrift !== 'none' || entry.baseMoved || entry.remote === 'ahead_fast_forwarded' || entry.remote === 'behind' || entry.remote === 'diverged' || remoteMissing;
     if (noteworthy) {
       engine.emit({
         type: 'repo.drift',
@@ -117,6 +121,7 @@ export function describeDrift(entry: RepoReconciliation): string {
   if (entry.remote === 'ahead_fast_forwarded') parts.push(`remote goal branch was ahead; local branch fast-forwarded to ${short(entry.head)}`);
   if (entry.remote === 'behind') parts.push('local goal branch has commits the remote does not (unpushed)');
   if (entry.remote === 'diverged') parts.push('remote goal branch diverged from the local one');
+  if (entry.remote === 'absent' && entry.recordedHead !== null) parts.push('remote goal branch missing; the next push will create it');
   if (entry.baseMoved) parts.push(`base branch moved to ${short(entry.remoteBase)} (the sync step will merge it)`);
   return `${entry.repo}: ${parts.join('; ')}`;
 }
