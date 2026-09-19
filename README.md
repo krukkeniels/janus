@@ -6,7 +6,22 @@ Design: `angular-ai-development-workflow-v2.md`. Task breakdown: `tasks.md`. Imp
 
 ## Status
 
-Early scaffold. The CLI exists with every command from spec §8; most report "not implemented" and name the task that delivers them. `janus init --goal goal.yaml` validates a goal file.
+Early scaffold. The CLI exists with every command from spec §8; most report "not implemented" and name the task that delivers them. `janus init --goal goal.yaml` creates a goal workspace, and `janus init --resume <state-remote> <goal-id>` rebuilds one from the state branch alone.
+
+## Workspace
+
+`janus init --goal goal.yaml [--config config.yaml] [--workspace DIR]` clones every repository listed in the goal at its base branch, creates the `janus/<goal-id>` state branch as a plain clone under `.janus/`, and makes the first checkpoint (state, handover, decisions, telemetry) on it. The state branch is pushed to `state.clone_url` (or `state.repo`) when configured, otherwise to the first repository of the goal.
+
+```text
+<workspace>/
+  .janus/          state branch checkout: goal.yaml, config.yaml, state.yaml, handover.md, decisions.md, telemetry/
+  repos/<name>/    one clone per repository
+  fake/            persisted fake provider state (fake providers only)
+  .pnpm-store/     workspace-local pnpm store handed to agents
+  janus.lock       present only while a janus process runs
+```
+
+Repositories are cloned from `clone_url` in `goal.yaml` when present, otherwise from `bitbucket.clone_url_template` rendered with `bitbucket.url`.
 
 ## Development
 
