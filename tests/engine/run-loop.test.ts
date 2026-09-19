@@ -209,6 +209,22 @@ describe('runEngine', () => {
     expect(eventTypes(ws).filter((type) => type === 'gate.entered')).toHaveLength(2);
   });
 
+  it('does not re-enter an SCM-observed gate that is already waiting', async () => {
+    const ws = await initWorkspace();
+    const observe: Step = { name: 'observe-pr-review', run: async () => ({ kind: 'gate', gate: 'pr_review', summary: 'PRs still open' }) };
+    await run(ws, scriptedSteps());
+    await approve(ws);
+    const first = await run(ws, scriptedSteps({ awaiting_human_review: observe }));
+    expect(first.result).toMatchObject({ reason: 'gate', status: 'awaiting_human_review' });
+    const enteredAt = readState(ws.janusDir).gate.entered_at;
+    const second = await run(ws, scriptedSteps({ awaiting_human_review: observe }));
+    expect(second.result).toMatchObject({ reason: 'gate', status: 'awaiting_human_review' });
+    // One gate.entered for plan_approval (Gate 1) and one for pr_review; the second run of the still-waiting
+    // SCM-observed gate must not add another.
+    expect(eventTypes(ws).filter((type) => type === 'gate.entered')).toHaveLength(2);
+    expect(readState(ws.janusDir).gate.entered_at).toBe(enteredAt);
+  });
+
   it('recovers an interrupted agent step before running', async () => {
     const ws = await initWorkspace();
     await createGoalBranch(ws, 'ui-kit');
