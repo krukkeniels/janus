@@ -1,5 +1,4 @@
-import type { ExitCode } from './exit-codes.js';
-import { ExitCode as Codes } from './exit-codes.js';
+import { ExitCode } from './exit-codes.js';
 
 export interface CliIo {
   stdout(text: string): void;
@@ -27,5 +26,5 @@ export function defaultIo(): CliIo {
 }
 
 export function createContext(io: CliIo): CliContext {
-  return { io, exitCode: Codes.Ok };
+  return { io, exitCode: ExitCode.Ok };
 }
