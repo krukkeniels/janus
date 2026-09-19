@@ -69,6 +69,7 @@ Depends on: T03. Parallel: A.
 - context renderer with byte budgets, change summary, inline diff only for code-writing roles, Angular guidance block (§18.2, §18.4)
 - prompt templates per role, versioned markdown
 - Codex adapter per §18.4: invocation, JSONL parsing for usage, timeout kill, `-o` last message, validation, evidence file; writable roots for the pnpm store
+- model profiles and ladders per §18.6: profile resolution per role and attempt, `--model-profile` override, `model_switch` attempt records, experiment and prompt-version stamping on evidence and events
 - fake runner scripted by role and attempt, persisted
 - `janus agent run <role> --task FILE`
 - opt-in real-Codex smoke test (`JANUS_REAL_CODEX=1`) for a read-only echo and a workspace-write scratch install
@@ -90,7 +91,7 @@ Done when: `docs/spikes/prompt-spike.md` records what worked, what failed, and t
 
 Depends on: T05. Parallel: A.
 
-- checks: codex login, git identity, tokens present, provider reachability (skipped for fakes), user namespaces for bubblewrap, three real Codex probes (§18.4), pnpm store writability, `janus/*` branch-spec warning when the state repo is a product repo
+- checks: codex login, git identity, tokens present, every configured model accepted by Codex (one-token probe), provider reachability (skipped for fakes), user namespaces for bubblewrap, three real Codex probes (§18.4), pnpm store writability, `janus/*` branch-spec warning when the state repo is a product repo
 - `--json` output contract
 
 Done when: each check has a unit test with a simulated failure and a clear remediation message.
@@ -237,8 +238,9 @@ Done when: harness scenarios: publish then dependent pins version, re-publish af
 Depends on: T03. Parallel: D.
 
 - audit that every §27 event is emitted; `janus status --telemetry` deriving v1 metrics; human wait from gate events; optional cost table
+- `janus telemetry export` and `janus telemetry compare` per §18.6: per model, role, and prompt version breakdown across one or more event logs
 
-Done when: metrics test computes expected numbers from a fixture event log.
+Done when: metrics test computes expected numbers from a fixture event log; compare test over two fixture logs with different models reports the expected per-model rows.
 
 ## T22 Dogfood runbook
 

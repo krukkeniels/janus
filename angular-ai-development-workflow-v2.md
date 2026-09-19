@@ -44,6 +44,7 @@ Status: draft for review. Supersedes `angular-ai-development-workflow-v1.md`. v2
 | Fakes | Persist to disk so they survive across `janus run` processes (§29). |
 | Operator skill | New section 35: thin conversational front door over the CLI. |
 | Build order | Vertical slices, one repo first (§30). Manual prompt spike before the execution loop is built. |
+| Model experiments | Named model profiles, per-role model ladders on retry, experiment tags on every agent run and event, and a `telemetry compare` command (§18.6). |
 
 ---
 
@@ -445,7 +446,9 @@ Rules:
 janus init --goal goal.yaml [--workspace DIR]
 janus init --resume <state-remote> <goal-id>
 janus run [--until STAGE] [--max-wait 45m] [--dry-run]
+janus run --model-profile <name>         per-invocation model profile override
 janus status [--json] [--telemetry]
+janus telemetry export [--csv] | compare <events.jsonl> ...
 janus approve plan --commit SHA [--exception ID ...]
 janus approve revised-plan --commit SHA
 janus reject plan --reason "..."
@@ -784,6 +787,39 @@ Per-role settings in `config.yaml`: model, reasoning effort, timeout. Class dete
 
 Scripted by role and attempt number; applies prepared patches, writes prepared reports, returns prepared results; state persisted under `fake/agents.json`.
 
+### 18.6 Model selection and experiments
+
+Janus must make it cheap to compare models (for example `gpt-5.6-sol` against a smaller or faster model) per role without changing code or prompts.
+
+**Model profiles.** `config.yaml` defines named profiles. A profile sets, per role, the model, reasoning effort, and an optional ladder of fallback models tried on successive retries of the same failure (cheap first, strong later, or the reverse). `workflow.model_profile` selects the default; `janus run --model-profile <name>` overrides for that invocation and is recorded in state and telemetry.
+
+```yaml
+model_profiles:
+  default:
+    implementation: { model: gpt-5.6-sol, effort: xhigh }
+    debug:          { model: gpt-5.6-sol, effort: high, ladder: [gpt-5.6-sol, gpt-5.6-sol:xhigh] }
+    review:         { model: gpt-5.6-sol, effort: xhigh }
+    discovery:      { model: gpt-5.6-sol, effort: medium }
+  fast-first:
+    implementation: { model: gpt-5.6-mini, effort: medium, ladder: [gpt-5.6-mini, gpt-5.6-sol] }
+    debug:          { model: gpt-5.6-mini, effort: medium, ladder: [gpt-5.6-mini, gpt-5.6-sol, gpt-5.6-sol:xhigh] }
+```
+
+Model names are opaque strings passed to `codex exec -m`; `janus doctor` verifies each configured model is accepted by Codex with a one-token probe.
+
+**Ladders.** For roles with a ladder, attempt `n` uses ladder entry `min(n, len-1)`. A ladder step is recorded as `model_switch` in the attempt record so no-progress detection can distinguish "same model, same failure" from "new model, same failure". Switching models never adds budget.
+
+**Experiment tags.** `config.yaml` may declare `experiment: { id, hypothesis, notes }`. The id, active profile, resolved model, effort, Codex version, and prompt template version are stamped on every `evidence/agents/<run-id>.yaml` and on `agent.started` and `agent.finished` events. Prompt templates are versioned so a comparison never mixes prompt changes with model changes silently.
+
+**Comparison.** `janus telemetry export` writes the event log with resolved dimensions as JSONL or CSV. `janus telemetry compare <events.jsonl> ...` accepts one or more event logs (from different workspaces or goals) and reports per model, per role, per prompt version: runs, success rate, attempts to green, no-progress iterations, policy violations, review findings caused, tokens (input, cached, output, reasoning), wall time, and estimated cost when a price table exists. Comparison is descriptive; it never changes workflow behavior.
+
+**Within-goal experiments.** Two supported designs, both recorded in `decisions.md` when enabled:
+
+- role split: different roles on different models (for example implementation on a strong model, checkpoint and triage on a cheaper one)
+- attempt ladder: as above, which yields per-attempt outcome data for each model on the same failure
+
+Randomized per-task assignment is out of scope for v1; comparisons across goals or across repeated dogfood runs are the intended method.
+
 ---
 
 ## 19. Autonomy rules
@@ -878,7 +914,8 @@ Append-only events in `telemetry/events.jsonl`:
 
 ```text
 goal.created, stage.entered, stage.exited
-agent.started, agent.finished
+agent.started, agent.finished        (role, repo, run_id, model, effort, prompt_version, profile, experiment_id, tokens, duration, status)
+agent.model_switch
 policy.checked, commit.created, push.completed
 sync.started, sync.completed, sync.conflict
 ci.build.found, ci.build.triggered, ci.build.finished, ci.build.infra_retry
@@ -891,7 +928,7 @@ pr.created, pr.comment.received, pr.comment.answered, pr.approved, pr.declined, 
 goal.completed
 ```
 
-`janus status --telemetry` derives the v1 metrics from events. Cost estimation is optional via a price table.
+`janus status --telemetry` derives the v1 metrics from events. `janus telemetry compare` breaks them down per model, role, and prompt version (§18.6). Cost estimation is optional via a price table.
 
 ---
 
@@ -939,7 +976,7 @@ agents:
   max_inline_diff_bytes: 60000
   pnpm_store: workspace           # workspace | global (adds store path as writable root)
   allow_unsandboxed: false
-  roles:
+  roles:                          # timeouts only; models come from the active profile
     implementation: { timeout_minutes: 60 }
     debug:          { timeout_minutes: 45 }
     fix:            { timeout_minutes: 45 }
@@ -947,9 +984,24 @@ agents:
     discovery:      { timeout_minutes: 30 }
     planning:       { timeout_minutes: 45 }
     checkpoint:     { timeout_minutes: 20 }
-    review:         { timeout_minutes: 60, model: null }
+    review:         { timeout_minutes: 60 }
     triage:         { timeout_minutes: 20 }
     qa:             { timeout_minutes: 30 }
+
+workflow_models:
+  profile: default                # selected model profile; --model-profile overrides per run
+
+model_profiles:                   # see §18.6
+  default:
+    "*":            { model: gpt-5.6-sol, effort: high }
+    implementation: { model: gpt-5.6-sol, effort: xhigh }
+    review:         { model: gpt-5.6-sol, effort: xhigh }
+    debug:          { model: gpt-5.6-sol, effort: high, ladder: [gpt-5.6-sol, gpt-5.6-sol:xhigh] }
+
+experiment:
+  id: null
+  hypothesis: null
+  notes: null
 
 policy:
   forbidden_test_patterns: ["xit(", "xdescribe(", "fit(", "fdescribe(", ".skip(", ".only("]
