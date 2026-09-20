@@ -14,7 +14,9 @@
     "build": "tsc -p tsconfig.build.json",
     "dev": "tsx src/cli/entry.ts",
     "test": "vitest run",
-    "test:watch": "vitest",
+    "test:unit": "vitest run --project unit",
+    "test:integration": "vitest run --project integration",
+    "test:watch": "vitest --project unit",
     "lint": "eslint .",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
