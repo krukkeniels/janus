@@ -58,14 +58,29 @@ export interface Harness {
  * remote per repo, a bare state remote, and the persisted fakes, with every `AgentRunner.run()` bracketed by the
  * §31.29 reflog audit. `janus init` has already run when this resolves.
  *
- * Audit target labels: product repos are `repos/<name>`, their remotes are `remote:<name>`, the state remote is
- * `remote:state`, and the state checkout is `.janus`. The `remote:` prefix keeps a repo literally named `state`
- * (`repos/state`) from colliding with the state remote's `remote:state` label — `captureRefLogs` throws on a
- * duplicate label, so labels must stay unique by construction.
+ * Audit target labels: product repos are `repos/<name>`, their remotes are `remote:<name>`, the state checkout is
+ * `.janus`, and the state remote is `state-remote` — deliberately outside the `remote:<name>` namespace, so a
+ * product repo literally named `state` (whose remote label would be `remote:state`) can never collide with it.
+ * `captureRefLogs` throws `duplicate audit target label: <label>` on a collision, so labels must stay unique by
+ * construction, not by convention.
  */
 export async function createHarness(specs: RepoGraphSpec[], options: HarnessOptions = {}): Promise<Harness> {
   const fixture = await graphFixture(specs, options.goalId === undefined ? {} : { goalId: options.goalId });
   const workspaceParent = tempDir('janus-harness-');
+
+  // Registered immediately after the only two temp-resource-creating calls above, and before any fallible setup
+  // step (`janus init`, `workspacePaths`, the audit target build), so a thrown error during setup still leaves
+  // vitest holding a cleanup callback for this test — nothing created so far is left on disk.
+  const cleanup = (): void => {
+    if (process.env['JANUS_KEEP_TMP'] === '1') return;
+    for (const dir of [workspaceParent, ...fixture.tempRoots]) {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  };
+  onTestFinished(() => {
+    cleanup();
+  });
+
   const root = join(workspaceParent, 'ws');
   const init = await runCli(['init', '--goal', fixture.goalPath, '--workspace', root]);
   if (init.code !== ExitCode.Ok) {
@@ -84,7 +99,7 @@ export async function createHarness(specs: RepoGraphSpec[], options: HarnessOpti
       if (remote === undefined) throw new Error(`harness: no remote for ${name}`);
       return { label: `remote:${name}`, dir: remote.bare };
     }),
-    { label: 'remote:state', dir: fixture.stateBare },
+    { label: 'state-remote', dir: fixture.stateBare },
   ];
 
   const agentGitWrites: AgentGitWrite[] = [];
@@ -93,13 +108,6 @@ export async function createHarness(specs: RepoGraphSpec[], options: HarnessOpti
     agent: auditAgentRunner(inner, auditTargets, agentGitWrites),
     ci: createFakeCiProvider({ fakeDir: paths.fakeDir, now }),
     scm: createFakeScmProvider({ fakeDir: paths.fakeDir, now }),
-  };
-
-  const cleanup = (): void => {
-    if (process.env['JANUS_KEEP_TMP'] === '1') return;
-    for (const dir of [workspaceParent, ...fixture.tempRoots]) {
-      rmSync(dir, { recursive: true, force: true });
-    }
   };
 
   const harness: Harness = {
@@ -125,9 +133,6 @@ export async function createHarness(specs: RepoGraphSpec[], options: HarnessOpti
     },
     cleanup,
   };
-  onTestFinished(() => {
-    cleanup();
-  });
   return harness;
 }
 

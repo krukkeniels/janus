@@ -2,8 +2,9 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { ExitCode } from '../../src/cli/exit-codes.js';
+import { commitAll } from '../../src/git/ops.js';
 import { readFakeAgents } from '../../src/providers/fake/agent-runner.js';
-import { createHarness, expectNoAgentGitWrites } from './harness/harness.js';
+import { createHarness, expectNoAgentGitWrites, expectStatePushed } from './harness/harness.js';
 
 const SPECS = [
   { name: 'ui-kit', kind: 'library' as const },
@@ -20,7 +21,7 @@ describe('createHarness', () => {
     expect(harness.state().goal.status).toBe('created');
     expect(existsSync(harness.fakeDir)).toBe(true);
     expect(harness.auditTargets.map((target) => target.label).sort()).toEqual(
-      ['.janus', 'remote:shell', 'remote:state', 'remote:ui-kit', 'repos/shell', 'repos/ui-kit'].sort(),
+      ['.janus', 'remote:shell', 'remote:ui-kit', 'repos/shell', 'repos/ui-kit', 'state-remote'].sort(),
     );
 
     const outcome = await harness.providers.agent.run({ runId: 'run-0001', role: 'discovery', repo: 'ui-kit' });
@@ -50,5 +51,28 @@ describe('createHarness', () => {
     expect(existsSync(root)).toBe(false);
     expect(existsSync(bare)).toBe(false);
     expect(existsSync(join(harness.fixture.dir, 'goal.yaml'))).toBe(false);
+  });
+
+  it('builds and audits cleanly when a product repo is named "state"', async () => {
+    const harness = await createHarness([{ name: 'state', kind: 'library' as const }]);
+    expect(harness.auditTargets.map((target) => target.label).sort()).toEqual(
+      ['.janus', 'repos/state', 'remote:state', 'state-remote'].sort(),
+    );
+    expectNoAgentGitWrites(harness);
+  });
+});
+
+describe('expectStatePushed', () => {
+  it('resolves when the state checkout and its bare remote are at the same commit', async () => {
+    const harness = await createHarness(SPECS);
+    await expect(expectStatePushed(harness)).resolves.toBeUndefined();
+  });
+
+  it('rejects with the branch, the local HEAD, and the remote sha when they diverge', async () => {
+    const harness = await createHarness(SPECS);
+    const sha = await commitAll(harness.janusDir, 'chore(test): local-only checkpoint', { allowEmpty: true });
+    await expect(expectStatePushed(harness)).rejects.toThrow(
+      `state branch ${harness.stateBranch}: local HEAD ${sha} but remote `,
+    );
   });
 });
