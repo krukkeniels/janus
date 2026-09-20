@@ -26,7 +26,13 @@ export interface FakeAgentScriptEntry {
   result?: Partial<AgentResult>;
   tokens?: AgentTokenUsage;
   durationMs?: number;
-  /** An adapter-level failure to simulate (timeout, invalid output, ...). Suppresses `result`. */
+  /**
+   * An adapter-level failure to simulate (timeout, invalid output, ...).
+   *
+   * Mirrors the real Codex adapter (commit `4a6e3e7`): when `result` is also set, both are returned — a failed run
+   * can still have produced a validated answer, which is what `evidence.ts` needs to write to the audit trail.
+   * Omit `result` to simulate a failure that produced no answer at all.
+   */
   failure?: AgentRunFailure;
 }
 
@@ -127,8 +133,11 @@ export function createFakeAgentRunner(input: FakeAgentRunnerInput): AgentRunner 
       }
 
       const failure = scripted?.failure ?? null;
+      // A scripted failure suppresses `result` unless the script also names one: the real adapter (commit
+      // `4a6e3e7`) keeps the validated answer alongside a failure, since it is the only surviving copy for the
+      // evidence trail once the run is done. `failure === null` covers the ordinary success path.
       let result: AgentResult | null = null;
-      if (failure === null) {
+      if (failure === null || scripted?.result !== undefined) {
         const merged = { ...baseResult(task.role, status, summary), ...(scripted?.result ?? {}) };
         const validated = validateAgentResult(task.role, merged);
         if (!validated.ok) {

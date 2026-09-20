@@ -129,6 +129,26 @@ describe('createFakeAgentRunner', () => {
     expect(outcome.timedOut).toBe(true);
   });
 
+  it('keeps a scripted result alongside a scripted failure, matching the real adapter (commit 4a6e3e7)', async () => {
+    const { paths } = await workspace();
+    seedFakeAgents(paths.fakeDir, {
+      debug: [
+        {
+          status: 'failed',
+          summary: 'timed out mid-fix',
+          failure: { kind: 'timeout', detail: 'killed after 45 minutes' },
+          result: { changes_made: ['src/widget.ts'], recommended_next_action: 'resume the fix on retry' },
+        },
+      ],
+    });
+    const runner = createFakeAgentRunner({ paths, now: clock });
+    const outcome = await runner.run(agentTaskFixture({ runId: 'run-0016', role: 'debug', repo: 'ui-kit', attempt: 1 }));
+    expect(outcome.status).toBe('failed');
+    expect(outcome.failure).toEqual({ kind: 'timeout', detail: 'killed after 45 minutes' });
+    expect(outcome.result?.changes_made).toEqual(['src/widget.ts']);
+    expect(outcome.result?.recommended_next_action).toBe('resume the fix on retry');
+  });
+
   it('refuses a scripted result the real output schema would reject', async () => {
     const { paths } = await workspace();
     seedFakeAgents(paths.fakeDir, {
