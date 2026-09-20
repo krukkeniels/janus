@@ -11,28 +11,40 @@ import type { AgentRunner } from '../../src/providers/types.js';
 import { EVIDENCE_DIR } from '../../src/state/files.js';
 import { createHarness, expectNoAgentGitWrites, expectStatePushed } from './harness/harness.js';
 
-/** A three-repo dependency graph: a library, a Module Federation remote that uses it, and the shell that loads both. */
+/**
+ * A three-repo dependency graph: a library, a Module Federation remote that uses it, and the shell that loads both.
+ *
+ * Declared in reverse dependency order on purpose. `goal.yaml` order is what `state.repos` follows, so declaring
+ * it this way makes declaration order and the topological order differ, and an assertion on the latter can fail.
+ */
 const GRAPH = [
-  { name: 'ui-kit', kind: 'library' as const },
-  { name: 'orders-remote', kind: 'remote' as const, dependsOn: ['ui-kit'] },
   { name: 'shell', kind: 'shell' as const, dependsOn: ['ui-kit', 'orders-remote'], loadsRemotes: ['orders-remote'] },
+  { name: 'orders-remote', kind: 'remote' as const, dependsOn: ['ui-kit'] },
+  { name: 'ui-kit', kind: 'library' as const },
 ];
+
+/** The only order Kahn's algorithm can produce for GRAPH: each repo after every repo it depends on. */
+const TOPOLOGICAL = ['ui-kit', 'orders-remote', 'shell'];
 
 describe('T04 smoke: init and one checkpoint through the harness', () => {
   it('clones the graph in dependency order and pushes the first checkpoint', async () => {
     const harness = await createHarness(GRAPH);
 
     const state = harness.state();
-    expect(Object.keys(state.repos)).toEqual(['ui-kit', 'orders-remote', 'shell']);
+    // `createInitialState` keeps goal declaration order; the topological order lives in the `goal.created` event,
+    // which is the clone order `createWorkspace` actually used.
+    expect(Object.keys(state.repos).sort()).toEqual([...TOPOLOGICAL].sort());
     expect(state.goal.status).toBe('created');
-    for (const name of ['ui-kit', 'orders-remote', 'shell']) {
+    for (const name of TOPOLOGICAL) {
       const dir = join(harness.root, 'repos', name);
       expect(await currentBranch(dir)).toBe('main');
       expect(state.repos[name]?.base_commit).toBe(await revParse(dir, 'HEAD'));
       expect(state.repos[name]?.goal_branch).toBe('ai/angular-15-to-16');
     }
     await expectStatePushed(harness);
-    expect(harness.events().map((event) => event['type'])).toEqual(['goal.created']);
+    const events = harness.events();
+    expect(events.map((event) => event['type'])).toEqual(['goal.created']);
+    expect(events[0]?.['repos']).toEqual(TOPOLOGICAL);
     expectNoAgentGitWrites(harness);
   });
 
@@ -89,7 +101,7 @@ describe('T04 smoke: init and one checkpoint through the harness', () => {
     expectNoAgentGitWrites(harness);
   });
 
-  it('fails the run when an agent performs a git write (spec §31.29)', async () => {
+  it('records every git write an agent performs, with the run it happened in (spec §31.29)', async () => {
     // The runner is built before the harness exists, so it reads the repo path from a binding the harness fills in.
     let repoDir = '';
     const naughty: AgentRunner = {
@@ -99,7 +111,8 @@ describe('T04 smoke: init and one checkpoint through the harness', () => {
         return { runId: request.runId, status: 'completed', summary: 'committed, which agents must never do' };
       },
     };
-    const harness = await createHarness(GRAPH, { agentRunner: naughty });
+    // The deliberate violation below would otherwise trip the automatic end-of-test §31.29 check.
+    const harness = await createHarness(GRAPH, { agentRunner: naughty, expectAgentGitWrites: true });
     repoDir = join(harness.root, 'repos', 'ui-kit');
 
     await harness.providers.agent.run({ runId: 'run-0042', role: 'implementation', repo: 'ui-kit' });

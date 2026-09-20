@@ -59,7 +59,6 @@ describe('createHarness', () => {
     expect(harness.auditTargets.map((target) => target.label).sort()).toEqual(
       ['.janus', 'repos/state', 'remote:state', 'state-remote'].sort(),
     );
-    expectNoAgentGitWrites(harness);
   });
 });
 

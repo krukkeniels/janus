@@ -32,6 +32,11 @@ export interface HarnessOptions {
   now?: () => Date;
   /** Replaces the fake agent runner; the audit wrapper is applied to whatever is passed. */
   agentRunner?: AgentRunner;
+  /**
+   * Opts this harness out of the automatic §31.29 check, for a test that deliberately makes an agent write.
+   * Everything else gets the check for free, so forgetting `expectNoAgentGitWrites` cannot silently drop it.
+   */
+  expectAgentGitWrites?: true;
 }
 
 export interface Harness {
@@ -45,7 +50,14 @@ export interface Harness {
   /** Spec §31.29: git writes observed while an agent was in flight. Empty on a healthy run. */
   agentGitWrites: AgentGitWrite[];
   auditTargets: AuditTarget[];
-  run(argv: string[], overrides?: CliOverrides): Promise<CliResult>;
+  /**
+   * Runs the CLI in the workspace with the audited providers injected.
+   *
+   * `providers` is deliberately not overridable: replacing the bag here would swap out the audited agent runner,
+   * and every §31.29 check after it would pass without auditing anything. Supply a custom runner through
+   * `HarnessOptions.agentRunner` instead, which is wrapped by the audit.
+   */
+  run(argv: string[], overrides?: Omit<CliOverrides, 'providers'>): Promise<CliResult>;
   state(): JanusState;
   events(): RecordedEvent[];
   /** Reads `.janus/evidence/<relativePath>`, failing with the directory listing when it is missing. */
@@ -103,6 +115,14 @@ export async function createHarness(specs: RepoGraphSpec[], options: HarnessOpti
   ];
 
   const agentGitWrites: AgentGitWrite[] = [];
+  if (options.expectAgentGitWrites !== true) {
+    // Spec §31.29 holds by default, not when a test remembers to ask for it. Registered AFTER the cleanup
+    // callback above: vitest runs `onTestFinished` callbacks last-registered-first, so this one reports while the
+    // workspace is still on disk (the message itself only needs the labels and shas already in `agentGitWrites`).
+    onTestFinished(() => {
+      assertNoAgentGitWrites(agentGitWrites);
+    });
+  }
   const inner = options.agentRunner ?? createFakeAgentRunner({ fakeDir: paths.fakeDir, now });
   const providers: Providers = {
     agent: auditAgentRunner(inner, auditTargets, agentGitWrites),
@@ -136,12 +156,21 @@ export async function createHarness(specs: RepoGraphSpec[], options: HarnessOpti
   return harness;
 }
 
-/** Spec §31.29: fails with every offending reflog entry when any agent performed a git write. */
-export function expectNoAgentGitWrites(harness: Harness): void {
-  if (harness.agentGitWrites.length === 0) return;
+function assertNoAgentGitWrites(writes: readonly AgentGitWrite[]): void {
+  if (writes.length === 0) return;
   throw new Error(
-    `spec §31.29 violated: ${harness.agentGitWrites.length} git ref update(s) happened while an agent was running:\n${formatGitWrites(harness.agentGitWrites)}`,
+    `spec §31.29 violated: ${writes.length} git ref update(s) happened while an agent was running:\n${formatGitWrites(writes)}`,
   );
+}
+
+/**
+ * Spec §31.29: fails with every offending reflog entry when any agent performed a git write.
+ *
+ * `createHarness` already runs this check when the test finishes, unless `expectAgentGitWrites` opted out; this
+ * stays exported so a test can assert the property at a specific point, or name it for the reader.
+ */
+export function expectNoAgentGitWrites(harness: Harness): void {
+  assertNoAgentGitWrites(harness.agentGitWrites);
 }
 
 /** Spec §7: the state branch checkout and its bare remote are at the same commit. */
