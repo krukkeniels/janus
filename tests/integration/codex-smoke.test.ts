@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { createCodexAgentRunner } from '../../src/agents/codex/adapter.js';
@@ -266,6 +266,150 @@ describe.skipIf(!ENABLED)('real codex smoke test', () => {
       expect(withFlag.exitCode).toBe(0);
       expect(inRepo.exitCode).toBe(0);
       expect(trusted.exitCode).not.toBe(0);
+    },
+    TEN_MINUTES,
+  );
+
+  /**
+   * T06 probe S1a: a report-writing role (§3.3) under `workspace-write`, network off, cwd
+   * `.janus/reports/<run-id>/`, that directory its only writable root. Also records whether that cwd passes
+   * Codex's git-work-tree check — it does in production because `.janus` is a single-branch clone (§5), so the
+   * probe builds it as one.
+   */
+  it(
+    'probe S1a: a report-writing agent writes into its report directory and nowhere else',
+    async () => {
+      const paths = workspacePaths(tempDir('janus-probe-s1a-'));
+      mkdirSync(paths.janusDir, { recursive: true });
+      // Mirrors §5: `.janus/` is a git checkout in every real workspace.
+      await runGit(paths.janusDir, ['init', '-q', '-b', 'janus/probe']);
+      const sibling = paths.repoDir('ui-kit');
+      mkdirSync(sibling, { recursive: true });
+      writeFileSync(join(sibling, 'package.json'), `${JSON.stringify({ name: 'ui-kit', version: '1.0.0' }, null, 2)}\n`);
+
+      const runner = createCodexAgentRunner({ paths });
+      const task = buildAgentTask({
+        runId: 'probe-s1a',
+        role: 'discovery',
+        repo: null,
+        attempt: 1,
+        paths,
+        config,
+        profile: 'default',
+        globalPnpmStore: null,
+        context: {
+          ...CONTEXT,
+          goal: 'Survey ui-kit for an Angular major upgrade',
+          planSlice:
+            'Read ../../repos/ui-kit/package.json, then write a file named deps-and-build.md in your working directory whose first line is "# deps-and-build". Do not create any other file.',
+        },
+        guardrails: [],
+        budget: '(probe S1a)',
+      });
+      expect(task.cwd).toBe(join(paths.janusDir, 'reports', 'probe-s1a'));
+      expect(task.writableRoots).toEqual([task.cwd]);
+      expect(task.network).toBe(false);
+      expect(task.skipGitRepoCheck).toBe(false);
+      mkdirSync(task.cwd, { recursive: true });
+
+      const outcome = await runner.run(task, promptFixture(task));
+      const report = join(task.cwd, 'deps-and-build.md');
+      const wroteReport = existsSync(report);
+      const escaped = existsSync(join(sibling, 'deps-and-build.md'));
+
+      recordProbe({
+        probe: 'S1a',
+        question: 'Does a report-writing role write into .janus/reports/<run-id>/ under workspace-write with network off?',
+        outcome: wroteReport && !escaped && outcome.failure === null ? 'pass' : 'fail',
+        detail: outcome.failure === null ? outcome.summary : `${outcome.failure.kind}: ${outcome.failure.detail}`,
+        data: {
+          wrote_report: wroteReport,
+          wrote_outside_report_dir: escaped,
+          could_read_sibling_repo: outcome.result?.summary.toLowerCase().includes('ui-kit') ?? false,
+          tokens: outcome.tokens,
+          duration_ms: outcome.durationMs,
+        },
+      });
+
+      expect(outcome.failure, JSON.stringify(outcome.failure)).toBeNull();
+      expect(wroteReport).toBe(true);
+      expect(escaped).toBe(false);
+    },
+    TEN_MINUTES,
+  );
+
+  /**
+   * T06 probe S1b: §18.4's default — "Janus sets `npm_config_store_dir=<workspace>/.pnpm-store` in every
+   * code-writing agent's environment so a single writable root suffices ... No `.npmrc` is written, because pnpm
+   * reads `.npmrc` only from a project root."
+   */
+  it(
+    'probe S1b: a code-writing agent installs through the workspace pnpm store and writes no .npmrc',
+    async () => {
+      const paths = workspacePaths(tempDir('janus-probe-s1b-'));
+      const repo = paths.repoDir('scratch');
+      mkdirSync(repo, { recursive: true });
+      mkdirSync(paths.pnpmStoreDir, { recursive: true });
+      writeFileSync(
+        join(repo, 'package.json'),
+        `${JSON.stringify(
+          { name: 'scratch', version: '0.0.0', private: true, dependencies: { 'is-odd': '3.0.1', 'is-even': '1.0.0' } },
+          null,
+          2,
+        )}\n`,
+      );
+      await runGit(repo, ['init', '-q', '-b', 'main']);
+      await runGit(repo, ['add', 'package.json']);
+      await runGit(repo, ['commit', '-q', '-m', 'scratch']);
+      const headBefore = await runGit(repo, ['rev-parse', 'HEAD']);
+
+      const runner = createCodexAgentRunner({ paths });
+      const task = buildAgentTask({
+        runId: 'probe-s1b',
+        role: 'implementation',
+        repo: 'scratch',
+        attempt: 1,
+        paths,
+        config,
+        profile: 'default',
+        globalPnpmStore: null,
+        context: {
+          ...CONTEXT,
+          planSlice: 'Run `pnpm install` in this directory so node_modules exists. Change nothing else. Do not commit.',
+        },
+        guardrails: [],
+        budget: '(probe S1b)',
+      });
+      expect(task.env['npm_config_store_dir']).toBe(paths.pnpmStoreDir);
+      expect(task.writableRoots).toEqual([repo, paths.pnpmStoreDir]);
+
+      const outcome = await runner.run(task, promptFixture(task));
+      const storeEntries = existsSync(paths.pnpmStoreDir) ? readdirSync(paths.pnpmStoreDir) : [];
+      const npmrcInRepo = existsSync(join(repo, '.npmrc'));
+      const npmrcInWorkspace = existsSync(join(paths.root, '.npmrc'));
+
+      recordProbe({
+        probe: 'S1b',
+        question: 'Does npm_config_store_dir alone make the workspace store the single extra writable root, with no .npmrc?',
+        outcome: storeEntries.length > 0 && !npmrcInRepo && !npmrcInWorkspace ? 'pass' : 'fail',
+        detail: outcome.failure === null ? outcome.summary : `${outcome.failure.kind}: ${outcome.failure.detail}`,
+        data: {
+          store_entries: storeEntries.length,
+          npmrc_in_repo: npmrcInRepo,
+          npmrc_in_workspace: npmrcInWorkspace,
+          node_modules: existsSync(join(repo, 'node_modules')),
+          tokens: outcome.tokens,
+          duration_ms: outcome.durationMs,
+        },
+      });
+
+      expect(outcome.failure, JSON.stringify(outcome.failure)).toBeNull();
+      expect(existsSync(join(repo, 'node_modules'))).toBe(true);
+      expect(storeEntries.length).toBeGreaterThan(0);
+      expect(npmrcInRepo).toBe(false);
+      expect(npmrcInWorkspace).toBe(false);
+      // §32 rule 11 again, on a run that really did install packages.
+      expect(await runGit(repo, ['rev-parse', 'HEAD'])).toBe(headBefore);
     },
     TEN_MINUTES,
   );

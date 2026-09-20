@@ -109,6 +109,38 @@ T05's own read-only smoke test was red.
 class only; `buildCodexArgs` emits the flag; `AgentEvidence.skip_git_repo_check` records it; §18.4 and §3.3 amended.
 **This spec amendment needs the spec owner's ratification.**
 
+### S1 — report-writing cwd and the pnpm store (open question 3, bullets 1 and 2)
+
+**S1a — report-writing class.** cwd `.janus/reports/<run-id>/`, `-s workspace-write`,
+`-c sandbox_workspace_write.network_access=false`, that directory the only `--add-dir`.
+
+| Observation | Result |
+|---|---|
+| Wrote its report into the report directory | yes |
+| Wrote anything into `repos/ui-kit/` | no |
+| Could read a sibling repo it had no write access to | yes |
+| Tokens (input / cached / output / reasoning / total) | 100610 / 81280 / 2696 / 588 / 103306 |
+| Wall time | 65452 ms |
+
+The report cwd passes Codex's git-work-tree check **because `.janus/` is a single-branch clone** (§5), not because
+the check is lenient. Any future test that builds a workspace by hand must `git init` `.janus/` or this class will
+fail at spawn for a reason that has nothing to do with the agent.
+
+**S1b — the workspace pnpm store.**
+
+| Observation | Result |
+|---|---|
+| Entries in `<workspace>/.pnpm-store` after the install | 1 |
+| `.npmrc` created in the repo | no |
+| `.npmrc` created at the workspace root | no |
+| `node_modules` present | yes |
+| Repo HEAD moved | no (§32 rule 11) |
+| Tokens / wall time | 124582 / 103168 / 1977 / 928 / 126559 tokens; 52755 ms |
+
+**Verdict:** confirmed as specified — a report-writing role writes only into its `.janus/reports/<run-id>/` cwd
+(the git-work-tree check passes because `.janus/` is a real checkout, not by accident), and a code-writing role
+installs entirely through `npm_config_store_dir` with no `.npmrc` written anywhere.
+
 ## Findings and resulting changes
 
 *(written last, from the probe sections)*
