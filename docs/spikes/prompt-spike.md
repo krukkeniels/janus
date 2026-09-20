@@ -58,6 +58,30 @@ Without `JANUS_REAL_CODEX=1` the whole file is skipped, which is how CI and ever
 
 *(one section per probe, appended by the task that runs it)*
 
+### R1 — the real Codex JSONL event shape (open question 2)
+
+Ran a `workspace-write` implementation task in a scratch repo through `createCodexAgentRunner` with the real
+`spawnCodex` wrapped so the stream could be kept. Captured to `tests/fixtures/codex/real-workspace-write.jsonl`.
+
+| Observation | Result |
+|---|---|
+| Event types seen | `item.completed`, `item.started`, `thread.started`, `turn.completed`, `turn.started` |
+| Unparseable lines | 0 (of 14 events) |
+| `turn.completed.usage` keys | `input_tokens`, `cached_input_tokens`, `cache_write_input_tokens`, `output_tokens`, `reasoning_output_tokens` |
+| `total_tokens` present? | **no** |
+| Reasoning-token spelling | flat `reasoning_output_tokens` (the nested `output_tokens_details.reasoning_tokens` form was not seen) |
+| Item kind key | `item.type` — the hand-written fixtures said `item.item_type` |
+| Codex banner stream | stderr, not stdout |
+
+**Verdict: the fixtures were wrong, and so was the parser.** `parseCodexUsage` computed `total` from a
+`total_tokens` key that does not exist, so every real run recorded `total: 0`.
+
+**Changes:** `src/agents/codex/jsonl.ts` derives `total = input + output` when `total_tokens` is absent;
+`implementation-success.jsonl` and `usage-nested.jsonl` renamed `item_type` to `type`;
+`real-workspace-write.jsonl` added as the first fixture captured from the binary. `cache_write_input_tokens` is
+recorded here and deliberately **not** added to `AgentTokenUsage` — §18.6's comparison names input, cached,
+output and reasoning, and nothing consumes a fifth counter.
+
 ## Findings and resulting changes
 
 *(written last, from the probe sections)*

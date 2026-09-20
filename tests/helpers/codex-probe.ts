@@ -1,5 +1,5 @@
-import { appendFileSync, mkdirSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
 /**
@@ -36,5 +36,28 @@ export function recordProbe(record: Omit<ProbeRecord, 'recorded_at'>): string {
   mkdirSync(dirname(path), { recursive: true });
   const line: ProbeRecord = { ...record, recorded_at: new Date().toISOString() };
   appendFileSync(path, `${JSON.stringify(line)}\n`);
+  return path;
+}
+
+/** `tests/fixtures/codex/`, where a captured stream becomes a checked-in fixture. */
+export const CODEX_FIXTURES_DIR = join(import.meta.dirname, '..', 'fixtures', 'codex');
+
+/**
+ * Writes a captured Codex stream into `tests/fixtures/codex/<name>` — but only under `JANUS_CAPTURE_FIXTURES=1`,
+ * so the ordinary probe lane never dirties the working tree.
+ *
+ * Every `from -> to` pair in `redact` is applied, then the home directory and the Codex thread id, which are the
+ * two things a real stream always carries that must not reach the repository (§32 rule 12). The result is still
+ * reviewed by a human in `git diff` before it is committed; this only removes what is mechanically removable.
+ */
+export function captureFixture(name: string, jsonl: string, redact: Record<string, string>): string | null {
+  if (process.env['JANUS_CAPTURE_FIXTURES'] !== '1') return null;
+  let text = jsonl;
+  for (const [from, to] of Object.entries(redact)) text = text.split(from).join(to);
+  text = text.split(homedir()).join('<home>');
+  text = text.replace(/"thread_id":"[^"]*"/gu, '"thread_id":"01JANUS0000000000000000000"');
+  const path = join(CODEX_FIXTURES_DIR, name);
+  mkdirSync(CODEX_FIXTURES_DIR, { recursive: true });
+  writeFileSync(path, text.endsWith('\n') ? text : `${text}\n`);
   return path;
 }
