@@ -57,6 +57,7 @@ export function stubFs(
     rmrf: () => {
       if (options.rmrfError !== undefined) throw new Error(options.rmrfError);
     },
+    writeText: () => undefined,
   };
 }
 

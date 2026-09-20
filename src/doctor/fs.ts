@@ -29,6 +29,12 @@ export interface DoctorFs {
    * is already computed.
    */
   rmrf(path: string): void;
+  /**
+   * Writes `content` to `path`, overwriting it. Creates no parent directories — the caller `mkdirp`s first. Like
+   * `mkdirp`, this is used only on paths inside a scratch directory that `mkdtemp` just created, so it is not
+   * specially guarded the way `mkdtemp`/`rmrf` are.
+   */
+  writeText(path: string, content: string): void;
 }
 
 export const nodeFs: DoctorFs = {
@@ -58,5 +64,8 @@ export const nodeFs: DoctorFs = {
   mkdtemp: (prefix) => mkdtempSync(prefix),
   rmrf: (path) => {
     rmSync(path, { recursive: true, force: true });
+  },
+  writeText: (path, content) => {
+    writeFileSync(path, content);
   },
 };
