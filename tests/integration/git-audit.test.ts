@@ -109,6 +109,56 @@ describe('auditAgentRunner', () => {
     expect(message).toContain('(during agent run run-0007, role implementation)');
   });
 
+  /** An agent whose whole run is the given git command: the only ref update inside the audited window. */
+  function gitAgent(dir: string, args: string[]): AgentRunner {
+    return {
+      name: 'fake',
+      run: async (request) => {
+        await runGit(dir, args);
+        return { runId: request.runId, status: 'completed', summary: `ran git ${args.join(' ')}` };
+      },
+    };
+  }
+
+  // git logs refs/heads, refs/remotes, refs/notes and HEAD, but never refs/tags unless core.logAllRefUpdates is
+  // `always` — which a workspace clone made by `janus init` does not set. An audit that skipped unlogged refs
+  // would be structurally blind to every tag write.
+  it('records a tag an agent created, though git keeps no reflog for tags', async () => {
+    const dir = await repo('tag-create');
+    const sink: AgentGitWrite[] = [];
+    const runner = auditAgentRunner(gitAgent(dir, ['tag', '-a', 'v1', '-m', 'v1']), [{ label: 'repos/tag', dir }], sink);
+
+    await runner.run({ runId: 'run-0010', role: 'implementation', repo: 'tag-create' });
+
+    expect(sink.map((write) => `${write.label} ${write.ref}`)).toContain('repos/tag refs/tags/v1');
+    expect(sink.every((write) => write.runId === 'run-0010')).toBe(true);
+  });
+
+  it('records a tag an agent moved to another commit', async () => {
+    const dir = await repo('tag-move');
+    const moved = await commitAll(dir, 'chore(tag-move): second', { allowEmpty: true });
+    await runGit(dir, ['tag', 'v1', 'HEAD~1']);
+    const sink: AgentGitWrite[] = [];
+    const runner = auditAgentRunner(gitAgent(dir, ['tag', '-f', 'v1', 'HEAD']), [{ label: 'repos/tag', dir }], sink);
+
+    await runner.run({ runId: 'run-0011', role: 'implementation', repo: 'tag-move' });
+
+    expect(sink.map((write) => `${write.label} ${write.ref} ${write.sha}`)).toEqual([`repos/tag refs/tags/v1 ${moved}`]);
+  });
+
+  it('records a tag an agent deleted', async () => {
+    const dir = await repo('tag-delete');
+    await runGit(dir, ['tag', 'v1']);
+    const sink: AgentGitWrite[] = [];
+    const runner = auditAgentRunner(gitAgent(dir, ['tag', '-d', 'v1']), [{ label: 'repos/tag', dir }], sink);
+
+    await runner.run({ runId: 'run-0012', role: 'implementation', repo: 'tag-delete' });
+
+    expect(sink).toEqual([
+      { label: 'repos/tag', ref: 'refs/tags/v1', sha: '', subject: 'ref deleted', runId: 'run-0012', role: 'implementation' },
+    ]);
+  });
+
   it('still records the writes when the agent throws', async () => {
     const dir = await repo('throwing');
     const sink: AgentGitWrite[] = [];

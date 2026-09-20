@@ -21,14 +21,15 @@ describe('graphFixture', () => {
     expect(goal.repos[1]?.ci.pr_build_type_id).toBe('Fe_OrdersRemote_Build');
   });
 
-  it('omits empty relation lists and enables reflogs on every bare remote', async () => {
+  it('omits empty relation lists and logs every ref update, tags included, on every bare remote', async () => {
     const fixture = await graphFixture([{ name: 'ui-kit', kind: 'library' }]);
     expect(readFileSync(fixture.goalPath, 'utf8')).not.toContain('depends_on');
     expect(readFileSync(fixture.goalPath, 'utf8')).not.toContain('coupled_with');
     const bare = fixture.repos['ui-kit']?.bare;
     if (bare === undefined) throw new Error('expected a ui-kit remote');
-    expect(await runGit(bare, ['config', '--get', 'core.logAllRefUpdates'])).toBe('true');
-    expect(await runGit(fixture.stateBare, ['config', '--get', 'core.logAllRefUpdates'])).toBe('true');
+    // `always`, not `true`: `true` would leave a pushed tag with no reflog in the receiving bare repository.
+    expect(await runGit(bare, ['config', '--get', 'core.logAllRefUpdates'])).toBe('always');
+    expect(await runGit(fixture.stateBare, ['config', '--get', 'core.logAllRefUpdates'])).toBe('always');
     expect(fixture.tempRoots.length).toBeGreaterThanOrEqual(3);
   });
 });

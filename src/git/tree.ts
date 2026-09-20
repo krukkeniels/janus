@@ -72,6 +72,27 @@ export async function listRefs(cwd: string): Promise<string[]> {
   return output === '' ? [] : output.split('\n');
 }
 
+export interface RefSha {
+  ref: string;
+  /** `%(objectname)`: the object the ref points at directly, so an annotated tag reads as its tag object. */
+  sha: string;
+}
+
+/**
+ * Every ref with the object it points at, in git's own sorted order.
+ *
+ * The sha is what lets a caller watch a ref that git keeps no reflog for (`refs/tags/*` is never logged unless
+ * `core.logAllRefUpdates=always`), by comparing where it points across two observations.
+ */
+export async function listRefShas(cwd: string): Promise<RefSha[]> {
+  const output = await runGit(cwd, ['for-each-ref', '--format=%(refname) %(objectname)']);
+  if (output === '') return [];
+  return output.split('\n').map((line) => {
+    const space = line.indexOf(' ');
+    return space === -1 ? { ref: line, sha: '' } : { ref: line.slice(0, space), sha: line.slice(space + 1) };
+  });
+}
+
 /**
  * True when `ref` has a reflog.
  *

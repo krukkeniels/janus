@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { checkoutBranch, commitAll, initRepo, revParse } from '../../src/git/ops.js';
 import { runGit } from '../../src/git/run.js';
-import { listRefs, merge, reflog, reflogExists, resetHard, workingTreeDiff } from '../../src/git/tree.js';
+import { listRefShas, listRefs, merge, reflog, reflogExists, resetHard, workingTreeDiff } from '../../src/git/tree.js';
 import { tempDir } from '../helpers/git-fixtures.js';
 
 async function repoWithFile(): Promise<string> {
@@ -109,6 +109,18 @@ describe('listRefs', () => {
     await runGit(dir, ['branch', 'side']);
     await runGit(dir, ['tag', 'v1']);
     expect(await listRefs(dir)).toEqual(['refs/heads/main', 'refs/heads/side', 'refs/tags/v1']);
+  });
+});
+
+describe('listRefShas', () => {
+  it('pairs every ref with the object it points at, including tags git keeps no reflog for', async () => {
+    const dir = await repoWithFile();
+    const head = await runGit(dir, ['rev-parse', 'HEAD']);
+    await runGit(dir, ['tag', 'v1']);
+    expect(await listRefShas(dir)).toEqual([
+      { ref: 'refs/heads/main', sha: head },
+      { ref: 'refs/tags/v1', sha: head },
+    ]);
   });
 });
 

@@ -1,4 +1,6 @@
-import { listRefs, reflog, reflogExists } from '../../../src/git/tree.js';
+import { tryRevParse } from '../../../src/git/ops.js';
+import { listRefShas, reflog, reflogExists } from '../../../src/git/tree.js';
+import type { RefSha } from '../../../src/git/tree.js';
 import type { AgentRunOutcome, AgentRunRequest, AgentRunner } from '../../../src/providers/types.js';
 
 /** One audited git repository: a label used in failure messages and the directory git runs in. */
@@ -28,11 +30,23 @@ export interface AgentGitWrite extends GitWrite {
 }
 
 /**
- * Reads HEAD's reflog plus the reflog of every ref `git for-each-ref` reports, for every target.
+ * The stand-in entry recorded for a ref git keeps no reflog for, so that ref is still watched.
+ *
+ * `core.logAllRefUpdates` logs `refs/heads/*`, `refs/remotes/*`, `refs/notes/*` and HEAD, but never `refs/tags/*`
+ * unless it is set to `always` — and a workspace clone made by `janus init` does not set it. Skipping an unlogged
+ * ref would drop it from BOTH snapshots, so creating, moving or deleting a tag would be a git write the audit
+ * cannot see. Recording where the ref points instead makes a creation a new entry, a move a changed entry, and a
+ * deletion a vanished ref, all of which `diffRefLogs` already reports.
+ */
+const NO_REFLOG_SUBJECT = 'ref present (no reflog)';
+
+/**
+ * Reads HEAD's reflog plus the reflog of every ref `git for-each-ref` reports, for every target, falling back to
+ * `"<sha> ref present (no reflog)"` for refs git does not log.
  *
  * Remote-tracking refs are included on purpose: they are how a `git push` from inside a workspace clone becomes
- * visible ("update by push"). The bare repositories the fixtures create enable `core.logAllRefUpdates`, so a push
- * is witnessed on the receiving side too.
+ * visible ("update by push"). The bare repositories the fixtures create enable `core.logAllRefUpdates=always`, so
+ * a push — of a branch or of a tag — is witnessed on the receiving side too.
  */
 export async function captureRefLogs(targets: readonly AuditTarget[]): Promise<RefLogSnapshot> {
   const snapshot: RefLogSnapshot = new Map();
@@ -41,13 +55,18 @@ export async function captureRefLogs(targets: readonly AuditTarget[]): Promise<R
       throw new Error(`duplicate audit target label: ${target.label}`);
     }
     const refs: RefLogs = new Map();
-    for (const ref of ['HEAD', ...(await listRefs(target.dir))]) {
-      if (!(await reflogExists(target.dir, ref))) continue;
-      const entries = await reflog(target.dir, ref);
-      refs.set(
-        ref,
-        entries.map((entry) => `${entry.sha} ${entry.subject}`),
-      );
+    // HEAD is not reported by `for-each-ref`; it is null in a repository whose HEAD is unborn (a fresh bare one).
+    const head: RefSha[] = [{ ref: 'HEAD', sha: (await tryRevParse(target.dir, 'HEAD')) ?? '' }];
+    for (const { ref, sha } of [...head, ...(await listRefShas(target.dir))]) {
+      if (await reflogExists(target.dir, ref)) {
+        const entries = await reflog(target.dir, ref);
+        refs.set(
+          ref,
+          entries.map((entry) => `${entry.sha} ${entry.subject}`),
+        );
+      } else if (sha !== '') {
+        refs.set(ref, [`${sha} ${NO_REFLOG_SUBJECT}`]);
+      }
     }
     snapshot.set(target.label, refs);
   }
@@ -60,6 +79,9 @@ export async function captureRefLogs(targets: readonly AuditTarget[]): Promise<R
  * A reflog only grows at the front, so the entries added during the window are the prefix of the new list that
  * sits on top of the old one. When the new list is not the old list with a prefix added — a ref was deleted and
  * recreated, or a reflog was rewritten, both of which are themselves git writes — the whole new list is reported.
+ *
+ * A ref git keeps no reflog for is held as a single `"<sha> ref present (no reflog)"` entry, so moving it breaks
+ * the tail comparison and the whole (one-entry) list is reported; creating one reports that single entry.
  *
  * A ref (and its reflog) can also be erased outright — `git branch -D`, `git update-ref -d`, or a deleting push
  * all do this — which is itself a history rewrite under spec §32 rule 11. Any label/ref present in `before` but

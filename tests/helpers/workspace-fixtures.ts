@@ -66,8 +66,9 @@ function deriveE2e(specs: readonly RepoGraphSpec[]): GraphFixtureE2e {
  * N working repos with one commit each and a bare clone as their remote, a bare state remote, and the
  * `goal.yaml` / `config.yaml` pair that points at them with fake providers. `depends_on`, `coupled_with`, and
  * `loads_remotes` are written verbatim and omitted when empty, so the file stays the shape §4 describes and the
- * existing `loadGoal` / `validateGoal` accept unchanged. Bare repos get `core.logAllRefUpdates` (off by default
- * in a bare repo) so a push into them is witnessed by the §31.29 reflog audit.
+ * existing `loadGoal` / `validateGoal` accept unchanged. Bare repos get `core.logAllRefUpdates=always` (logging is
+ * off entirely by default in a bare repo, and `true` would still leave `refs/tags/*` unlogged) so any push into
+ * them — a branch or a tag — is witnessed by the §31.29 reflog audit.
  */
 export async function graphFixture(specs: RepoGraphSpec[], options: GraphFixtureOptions = {}): Promise<GraphFixture> {
   const goalId = options.goalId ?? 'angular-15-to-16';
@@ -77,12 +78,12 @@ export async function graphFixture(specs: RepoGraphSpec[], options: GraphFixture
 
   for (const spec of specs) {
     const remote = await createRemoteWithCommit(spec.name);
-    await runGit(remote.bare, ['config', 'core.logAllRefUpdates', 'true']);
+    await runGit(remote.bare, ['config', 'core.logAllRefUpdates', 'always']);
     repos[spec.name] = remote;
     tempRoots.push(dirname(remote.bare));
   }
   const stateBare = await createBareRepo('janus-state', `janus/${goalId}`);
-  await runGit(stateBare, ['config', 'core.logAllRefUpdates', 'true']);
+  await runGit(stateBare, ['config', 'core.logAllRefUpdates', 'always']);
   tempRoots.push(dirname(stateBare));
 
   const goalRepos = specs.map((spec) => {
