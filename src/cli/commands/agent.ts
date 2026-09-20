@@ -59,6 +59,12 @@ async function agentRunCommand(ctx: CliContext, roleArgument: string, options: A
       throw new ConfigError('--model-profile', [`model profile "${profile}" is not defined in config.yaml model_profiles`]);
     }
     const now = new Date();
+    const dryRun = options.dryRun === true;
+    // `pnpm store path` shells out to a real subprocess; skip it for --dry-run so a text preview never depends on
+    // a working pnpm (and never fails a preview a real run would also fail). The placeholder is only used to
+    // stand in as a writable root in the printed `--add-dir` list — it is never passed to a spawned process.
+    const globalPnpmStore =
+      config.agents.pnpm_store === 'global' ? (dryRun ? '<unresolved: --dry-run skips `pnpm store path`>' : await resolveGlobalPnpmStore()) : null;
     const task = buildAgentTask({
       runId: manualRunId(now),
       role,
@@ -67,13 +73,13 @@ async function agentRunCommand(ctx: CliContext, roleArgument: string, options: A
       paths,
       config,
       profile,
-      globalPnpmStore: config.agents.pnpm_store === 'global' ? await resolveGlobalPnpmStore() : null,
+      globalPnpmStore,
       context: contextInputFrom(file),
       guardrails: file.guardrails,
       budget: file.budget,
     });
 
-    if (options.dryRun === true) {
+    if (dryRun) {
       const rendered = renderContextPackage(task.context, {
         maxContextBytes: config.agents.max_context_bytes,
         maxInlineDiffBytes: config.agents.max_inline_diff_bytes,

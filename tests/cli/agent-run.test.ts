@@ -77,6 +77,13 @@ describe('janus agent run', () => {
     expect(readEvents(ws.janusDir).some((event) => event['type'] === 'agent.started')).toBe(false);
   });
 
+  it('--dry-run for a report-writing role creates no report directory', async () => {
+    const { ws, taskPath } = await workspaceWithTask({ ...TASK_FILE, repo: null });
+    const result = await runCli(['agent', 'run', 'qa', '--task', taskPath, '--dry-run'], { cwd: ws.root });
+    expect(result.code).toBe(ExitCode.Ok);
+    expect(existsSync(join(ws.janusDir, 'reports'))).toBe(false);
+  });
+
   it('exits 2 for an unknown role', async () => {
     const { ws, taskPath } = await workspaceWithTask();
     const result = await runCli(['agent', 'run', 'architect', '--task', taskPath], { cwd: ws.root });

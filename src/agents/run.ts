@@ -1,3 +1,4 @@
+import { mkdirSync } from 'node:fs';
 import type { Engine } from '../engine/engine.js';
 import type { AgentRunner } from '../providers/types.js';
 import { buildAgentEvidence, writeAgentEvidence } from './evidence.js';
@@ -71,6 +72,15 @@ export async function runAgent(input: RunAgentInput): Promise<AgentRunRecord> {
     network: task.network,
   });
   engine.markInFlight({ agent_run_id: task.runId, repo: task.repo });
+
+  // `planSandbox` is I/O-free on purpose (so `--dry-run` and any other planning-only caller never touch the
+  // filesystem); for the report-writing class it sets `task.cwd` to `.janus/reports/<run-id>/` without creating
+  // it. This is the one place every runner passes through, fake and Codex alike, so the directory is created
+  // here, right before the runner is invoked: the Codex adapter spawns with `task.cwd` as the child's cwd, and a
+  // cwd that does not exist would fail the spawn.
+  if (task.sandboxClass === 'report-writing') {
+    mkdirSync(task.cwd, { recursive: true });
+  }
 
   const outcome = await input.runner.run(task);
   const finishedAt = engine.now().toISOString();

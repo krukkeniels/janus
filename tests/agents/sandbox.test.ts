@@ -42,14 +42,14 @@ describe('planSandbox', () => {
     ).toThrow(SandboxPlanError);
   });
 
-  it('gives a report-writing role its own report directory, network off, and creates it', () => {
+  it('gives a report-writing role its own report directory and network off, without creating it (planning stays I/O-free)', () => {
     const p = paths();
     const plan = planSandbox({ role: 'discovery', runId: 'run-0003', repo: null, paths: p, config: config(), globalPnpmStore: null });
     expect(plan.sandbox).toBe('workspace-write');
     expect(plan.network).toBe(false);
     expect(plan.cwd).toBe(join(p.janusDir, 'reports', 'run-0003'));
     expect(plan.writableRoots).toEqual([plan.cwd]);
-    expect(existsSync(plan.cwd)).toBe(true);
+    expect(existsSync(plan.cwd)).toBe(false);
   });
 
   it('gives a read-only role the workspace root and no writable root', () => {

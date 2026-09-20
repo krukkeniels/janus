@@ -1,5 +1,4 @@
 import { execFile } from 'node:child_process';
-import { mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -71,8 +70,10 @@ export function planSandbox(input: PlanSandboxInput): SandboxPlan {
   }
 
   if (cls === 'report-writing') {
+    // The directory itself is not created here: this planner is pure I/O-free. It is created in `runAgent`
+    // (`src/agents/run.ts`), immediately before the runner is invoked, so `--dry-run` and any other caller that
+    // only wants a plan never touches the filesystem.
     const dir = join(input.paths.janusDir, REPORTS_DIR, input.runId);
-    mkdirSync(dir, { recursive: true });
     return {
       sandbox: unsandboxed ? 'danger-full-access' : 'workspace-write',
       network: false,

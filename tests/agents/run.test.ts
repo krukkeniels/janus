@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { runAgent } from '../../src/agents/run.js';
@@ -121,6 +121,38 @@ describe('runAgent', () => {
         budget_added: false,
       });
       expect(workspace.state.execution.budgets).toEqual(before);
+    } finally {
+      workspace.release();
+    }
+  });
+
+  it('creates the report-writing role\'s report directory before invoking the runner (§18.4 cwd)', async () => {
+    const ws = await initWorkspace();
+    const workspace = await openWorkspace(ws.root);
+    try {
+      const { engine } = testEngine(workspace, clock);
+      const reportDir = join(ws.janusDir, 'reports', 'run-0105');
+      let existedDuringRun = false;
+      const watching: AgentRunner = {
+        name: 'fake',
+        run: async (task) => {
+          existedDuringRun = existsSync(task.cwd);
+          return stubOutcome(task);
+        },
+      };
+      const task = agentTaskFixture({
+        runId: 'run-0105',
+        role: 'discovery',
+        sandboxClass: 'report-writing',
+        repo: null,
+        cwd: reportDir,
+        writableRoots: [reportDir],
+        network: false,
+      });
+      expect(existsSync(reportDir)).toBe(false);
+      await runAgent({ engine, runner: watching, task, previousModel: null });
+      expect(existedDuringRun).toBe(true);
+      expect(existsSync(reportDir)).toBe(true);
     } finally {
       workspace.release();
     }
