@@ -37,4 +37,32 @@ describe('stripComments', () => {
     // The regex will match from first /* to first */, leaving "still comment */ more"
     expect(stripped).toContain('more');
   });
+
+  it('does not let a glob string open a block comment (CRITICAL 1 repro)', () => {
+    // 'x/**' contains the two characters /*, and '**/y' contains */ — a regex-based stripper reads the
+    // first as a comment open and the second (in a wholly unrelated string) as its close, deleting
+    // everything in between, including the `statements: 80` threshold line.
+    const source = "a: ['x/**'],\nstatements: 80,\nb: ['**/y']";
+    expect(stripComments(source)).toBe(source);
+  });
+
+  it('still strips a genuine block comment next to glob-shaped strings', () => {
+    const source = "a: ['x/**'], /* real comment */ statements: 80,";
+    expect(stripComments(source)).toBe("a: ['x/**'],  statements: 80,");
+  });
+
+  it('does not strip a // that appears inside a string literal', () => {
+    const source = "const url = 'https://example.com/path';";
+    expect(stripComments(source)).toBe(source);
+  });
+
+  it('does not let an apostrophe inside a double-quoted string end the string early', () => {
+    const source = 'const s = "it\'s // not a comment";';
+    expect(stripComments(source)).toBe(source);
+  });
+
+  it('honours a backslash-escaped quote inside a string literal', () => {
+    const source = 'const s = \'a \\\'quoted\\\' // value\';';
+    expect(stripComments(source)).toBe(source);
+  });
 });
