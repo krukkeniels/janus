@@ -117,6 +117,17 @@ describe('forbiddenTestPatternsCheck', () => {
     expect(await forbiddenTestPatternsCheck.run(ctx)).toEqual([]);
   });
 
+  it('flags it.todo( added by the default config (spec §14\'s seventh pattern)', async () => {
+    // it.todo( is a TEST_DECLARATION too, so converting a real test into it leaves countTestDeclarations
+    // unchanged and testFileRemovalCheck untouched; forbidden_test_patterns is the only check that can catch
+    // this neutering, and only if the default actually includes it.todo(.
+    const ctx = policyContext({ files: [{ path: 'a.spec.ts', added: ["it.todo('write this test later');"] }] });
+    const findings = await forbiddenTestPatternsCheck.run(ctx);
+    expect(findings).toHaveLength(1);
+    expect(findings?.[0]?.check).toBe('tests.forbidden_pattern_added');
+    expect(findings?.[0]?.detail).toContain('it.todo(');
+  });
+
   it('honours a configured pattern list', async () => {
     const config = configSchema.parse({
       workflow: { ci_provider: 'fake', scm_provider: 'fake' },

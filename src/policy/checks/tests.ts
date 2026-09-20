@@ -67,8 +67,8 @@ export function isTautologicalExpectation(line: string): string | null {
 
 /**
  * Spec §14: "forbidden test patterns added — `xit(`, `xdescribe(`, `fit(`, `fdescribe(`, `.skip(`, `.only(`,
- * tautological expectations". The concrete pattern list is `config.policy.forbidden_test_patterns` (that same
- * six-pattern default); this check is fully config-driven and does not hardcode any pattern itself.
+ * `it.todo(`, tautological expectations". The concrete pattern list is `config.policy.forbidden_test_patterns`
+ * (that same seven-pattern default); this check is fully config-driven and does not hardcode any pattern itself.
  *
  * Only **added** lines are examined: removing an `xit(` is a repair, and flagging it would make the check fight
  * the fix it is supposed to produce. Every file is examined, not only test files — a `.only(` left in a

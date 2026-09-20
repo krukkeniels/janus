@@ -165,7 +165,7 @@ export const configSchema = z
       .object({
         forbidden_test_patterns: z
           .array(z.string().min(1))
-          .default(['xit(', 'xdescribe(', 'fit(', 'fdescribe(', '.skip(', '.only(']),
+          .default(['xit(', 'xdescribe(', 'fit(', 'fdescribe(', '.skip(', '.only(', 'it.todo(']),
         forbidden_paths: z.array(z.string().min(1)).default(['.teamcity/**', '.github/**']),
         max_test_count_decrease_percent: z.number().min(0).max(100).default(0),
         allow_test_file_deletion: z.boolean().default(false),

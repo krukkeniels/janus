@@ -27,6 +27,17 @@ describe('configSchema', () => {
     expect(config.digest.max_bytes).toBe(65536);
     expect(config.digest.redact).toBe(true);
     expect(config.policy.forbidden_paths).toEqual(['.teamcity/**', '.github/**']);
+    // Spec §14's table names seven default forbidden test patterns; it.todo( is the one that neuters a test
+    // without tripping countTestDeclarations (it.todo( still counts as a declaration) or testFileRemovalCheck.
+    expect(config.policy.forbidden_test_patterns).toEqual([
+      'xit(',
+      'xdescribe(',
+      'fit(',
+      'fdescribe(',
+      '.skip(',
+      '.only(',
+      'it.todo(',
+    ]);
     expect(config.experiment.id).toBeNull();
     expect(config.telemetry.price_table).toBeNull();
   });
