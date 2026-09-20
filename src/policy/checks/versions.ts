@@ -11,8 +11,13 @@ const MANIFEST = /(?:^|\/)package\.json$/u;
  * digits come next, which is also correct for a prerelease (`17.0.0-next.3` reads as 17). Only the `@angular/`
  * scope is matched: §14 says "any `@angular/*` major above `target_version`", and `@angular-eslint`,
  * `@angular-devkit` and `@angular/cli`'s own peers version independently of the framework.
+ *
+ * The major is terminated by `(?!\d)` — a non-digit boundary — rather than by requiring a literal `.` after
+ * it. npm accepts bare-major and comparator-only ranges (`"18"`, `">=18"`) with no `.` anywhere in the string,
+ * and a check whose whole job is catching an over-target major cannot afford to let the two range forms a
+ * `package.json` author is most likely to write by hand sail through unmatched.
  */
-const ANGULAR_DEPENDENCY = /"(@angular\/[^"]+)"\s*:\s*"[\^~>=<v\s]*(\d+)\./gu;
+const ANGULAR_DEPENDENCY = /"(@angular\/[^"]+)"\s*:\s*"[\^~>=<v\s]*(\d+)(?!\d)/gu;
 
 /**
  * Spec §14: "Angular version beyond target — any `@angular/*` major above `target_version`."

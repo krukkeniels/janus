@@ -22,9 +22,25 @@ export const SECRET_PATTERNS: readonly SecretPattern[] = [
   { label: 'Slack token', re: /\bxox[abprs]-[A-Za-z0-9-]{10,}\b/u },
   { label: 'private key block', re: /-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP )?PRIVATE KEY-----/u },
   { label: 'JSON web token', re: /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/u },
+  /**
+   * `api[_-]key` and `access[_-]key` require the separator — no `?` on it. With the separator optional, the
+   * pattern also matched camelCase `apiKey`/`accessKey`, and that shape is not a reliable secret signal in an
+   * Angular codebase: `environment.ts`'s AngularFire block conventionally reads `apiKey: '<firebase-key>'`,
+   * and a Firebase web `apiKey` is designed to be public (it identifies the project, it does not authenticate
+   * it). Because `secrets.detected` is a violation, a false positive here does not just add noise to a
+   * report — it blocks the commit and hands a fix agent the job of "removing the violation", which for this
+   * shape means deleting legitimate, intentionally-public config.
+   *
+   * The trade-off this accepts: a secret assigned *only* under a bare camelCase `apiKey`/`accessKey` name,
+   * in a value with no recognisable token shape of its own (no `ghp_`, `AKIA`, `xox*-`, JWT or PEM shape),
+   * will be missed by this check. That is the gap left deliberately for §21's AI checkpoint and the human
+   * reviewer to catch — the same fallback §32 rule 12 already relies on for every other false negative this
+   * check accepts. Little real coverage is lost even so: a value with a recognisable shape (e.g.
+   * `accessKey: 'AKIA...'`) is still caught by that shape's own pattern regardless of the variable name.
+   */
   {
     label: 'credential-shaped assignment',
-    re: /\b(?:token|password|secret|api[_-]?key|access[_-]?key)["']?\s*[:=]\s*["'][^"'\s]{12,}["']/iu,
+    re: /\b(?:token|password|secret|api[_-]key|access[_-]key)["']?\s*[:=]\s*["'][^"'\s]{12,}["']/iu,
   },
   { label: 'credentialed URL', re: /\b[a-z][a-z0-9+.-]*:\/\/[^/\s:@]+:[^/\s@]+@/iu },
 ];

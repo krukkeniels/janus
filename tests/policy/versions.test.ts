@@ -64,4 +64,27 @@ describe('angularVersionCheck', () => {
     });
     expect(await angularVersionCheck.run(ctx)).toEqual([]);
   });
+
+  it('flags a bare-major range with no dot anywhere in the version string', async () => {
+    const ctx = policyContext({ targetVersion: 16, files: [{ path: 'package.json', added: ['"@angular/core": "18",'] }] });
+    const findings = await angularVersionCheck.run(ctx);
+    expect(findings).toHaveLength(1);
+    expect(findings?.[0]?.detail).toContain('@angular/core');
+    expect(findings?.[0]?.detail).toContain('18');
+  });
+
+  it('flags a >= comparator range with no dot anywhere in the version string', async () => {
+    const ctx = policyContext({ targetVersion: 16, files: [{ path: 'package.json', added: ['"@angular/core": ">=18",'] }] });
+    const findings = await angularVersionCheck.run(ctx);
+    expect(findings).toHaveLength(1);
+    expect(findings?.[0]?.detail).toContain('@angular/core');
+    expect(findings?.[0]?.detail).toContain('18');
+  });
+
+  it('still reads the correct major from a full semver range once the bare-major fix is in place', async () => {
+    const ctx = policyContext({ targetVersion: 16, files: [{ path: 'package.json', added: ['"@angular/core": "^17.1.2",'] }] });
+    const findings = await angularVersionCheck.run(ctx);
+    expect(findings).toHaveLength(1);
+    expect(findings?.[0]?.detail).toContain('major 17');
+  });
 });

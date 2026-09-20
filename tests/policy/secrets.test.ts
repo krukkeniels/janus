@@ -4,6 +4,10 @@ import { policyContext } from '../helpers/policy-fixtures.js';
 
 const GITHUB_TOKEN = `ghp_${'a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8'}`;
 const AWS_KEY = 'AKIAIOSFODNN7EXAMPLE';
+const FIREBASE_LOOKING_KEY = 'AIzaSyDOCAbC123dEf456GhI789jKl01234';
+const SLACK_BOT_TOKEN = 'xoxb-1234567890123-1234567890123-abcdefghijklmnopqrstuvwxyz0123456789';
+const JWT =
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c';
 
 describe('secretsCheck', () => {
   it('passes a diff with no secret-shaped text', async () => {
@@ -55,6 +59,47 @@ describe('secretsCheck', () => {
     const ctx = policyContext({
       files: [{ path: 'src/a.ts', added: ["  token: process.env['JANUS_BITBUCKET_TOKEN'],", "  password: '',"] }],
     });
+    expect(await secretsCheck.run(ctx)).toEqual([]);
+  });
+
+  it('does not flag a camelCase apiKey — a Firebase web apiKey is designed to be public', async () => {
+    const ctx = policyContext({
+      files: [{ path: 'src/environments/environment.ts', added: [`  apiKey: '${FIREBASE_LOOKING_KEY}',`] }],
+    });
+    expect(await secretsCheck.run(ctx)).toEqual([]);
+  });
+
+  it('still flags a snake_case api_key assignment', async () => {
+    const ctx = policyContext({ files: [{ path: 'src/a.ts', added: [`  api_key: '${FIREBASE_LOOKING_KEY}',`] }] });
+    const findings = await secretsCheck.run(ctx);
+    expect(findings).toHaveLength(1);
+    expect(findings?.[0]?.detail).toContain('credential-shaped assignment');
+  });
+
+  it('flags a Slack bot token', async () => {
+    const ctx = policyContext({ files: [{ path: 'src/a.ts', added: [`const t = '${SLACK_BOT_TOKEN}';`] }] });
+    const findings = await secretsCheck.run(ctx);
+    expect(findings).toHaveLength(1);
+    expect(findings?.[0]?.detail).toContain('Slack token');
+    expect(JSON.stringify(findings)).not.toContain(SLACK_BOT_TOKEN);
+  });
+
+  it('does not flag a short string that merely starts with a Slack-shaped prefix', async () => {
+    const ctx = policyContext({ files: [{ path: 'src/a.ts', added: ["const sku = 'xoxb-a1';"] }] });
+    expect(await secretsCheck.run(ctx)).toEqual([]);
+  });
+
+  it('flags a JSON web token', async () => {
+    const ctx = policyContext({ files: [{ path: 'src/a.ts', added: [`const t = '${JWT}';`] }] });
+    const findings = await secretsCheck.run(ctx);
+    expect(findings).toHaveLength(1);
+    expect(findings?.[0]?.detail).toContain('JSON web token');
+    expect(JSON.stringify(findings)).not.toContain(JWT);
+  });
+
+  it('does not flag a two-segment base64url-looking string that is not a three-segment JWT', async () => {
+    const twoSegments = JWT.slice(0, JWT.lastIndexOf('.'));
+    const ctx = policyContext({ files: [{ path: 'src/a.ts', added: [`const t = '${twoSegments}';`] }] });
     expect(await secretsCheck.run(ctx)).toEqual([]);
   });
 
