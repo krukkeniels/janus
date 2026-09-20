@@ -141,6 +141,68 @@ fail at spawn for a reason that has nothing to do with the agent.
 (the git-work-tree check passes because `.janus/` is a real checkout, not by accident), and a code-writing role
 installs entirely through `npm_config_store_dir` with no `.npmrc` written anywhere.
 
+### A1 / A2 — `ng update --allow-dirty` and the migration footprint (open question 3, bullets 3 and 4)
+
+**A1 — `ng update` run directly, no agent.** `~/janus-spike/ng15-footprint`, Angular 15 -> 16, one file
+deliberately uncommitted first.
+
+| Measure | Value |
+|---|---|
+| `ng update ... --allow-dirty` refused the dirty tree? | no — printed `Repository is not clean. Update changes will be mixed with pre-existing changes.` and proceeded |
+| `ng update` exit code | 0 |
+| Changed files | 3 |
+| Lines added / removed | 1669 / 1144 |
+| Top-level paths touched | `src` (1), `pnpm-lock.yaml` (1), `package.json` (1) |
+| Paths outside §12's example `allowed_scope` | none |
+| `pnpm install && ng build` after the migration | green |
+
+The migration's own `** Executing migrations of package '@angular/core' **` / `'@angular/cli'` steps all reported
+"Migration completed (No changes made)" on this scaffold — no interfaces to strip, no `moduleId` usage, no
+`defaultProject`/`defaultCollection` config. The 3 changed files are `package.json` (dependency version bumps),
+`pnpm-lock.yaml` (the resulting resolution), and `src/main.ts` (the pre-existing uncommitted line from Step 1, not
+a migration edit). On a scaffold this bare, the footprint is dominated by the manifest and lockfile, not by
+source-tree rewrites — a real application with `CanActivate`/`Resolve` guards or `moduleId` usage would add `src/**`
+entries the migration itself changes.
+
+**A2 — the same upgrade, run by a code-writing agent** under `-s workspace-write`,
+`network_access=true`, writable roots `[repos/ng15-app, .pnpm-store]`, `npm_config_store_dir` set, Node 18 first on
+`PATH`.
+
+| Measure | Value |
+|---|---|
+| Result status | `completed` |
+| `@angular/core` after the run | `^16.2.12` |
+| Changed files it left in the tree | 3 |
+| Files it *reported* in `changes_made` | 2 |
+| HEAD moved / reflog moved | no, no (§32 rule 11) |
+| Tokens (input / cached / output / reasoning / total) | 366012 / 338304 / 3755 / 1234 / 369767 |
+| Wall time | 135762 ms (~2.3 minutes) |
+
+**Recommended §12 default `allowed_scope` for an Angular application package**, derived from A1's footprint:
+
+```yaml
+allowed_scope:
+  - package.json
+  - pnpm-lock.yaml
+  - angular.json
+  - tsconfig*.json
+  - src/**
+  - projects/**
+```
+
+Step 5's scan against §12's example scope found nothing out of bounds on this scaffold — no `.browserslistrc`,
+`karma.conf.js`, `.editorconfig`, `README.md`, or `e2e/**` edits, because the migration touched no such files
+here. §12's example scope is sufficient for this footprint; the two-line placeholder for out-of-scope additions is
+deliberately omitted above since Step 5 printed nothing.
+
+**Verdict:** both A1 and A2 confirm §18.4's claims — `ng update --allow-dirty` does not refuse a dirty tree, and a
+code-writing agent inside the T05 sandbox plan can complete the same upgrade unsupervised, in about 2.3 minutes on
+this scaffold, well inside the 45-minute budget. `changes_made` **did under-report the real footprint** (2 vs the
+3 files actually left dirty in the tree) — the agent's self-reported change list is not a reliable audit of what a
+migration touched; Task 7 should have the planning prompt tell the agent to enumerate changed files with `git
+status --porcelain` rather than reconstruct the list from memory, and any verification step that trusts
+`changes_made` alone should cross-check it against the real tree.
+
 ## Findings and resulting changes
 
 *(written last, from the probe sections)*

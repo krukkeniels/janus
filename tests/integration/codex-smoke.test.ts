@@ -1,4 +1,5 @@
-import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { createCodexAgentRunner } from '../../src/agents/codex/adapter.js';
@@ -14,6 +15,9 @@ import { tempDir } from '../helpers/git-fixtures.js';
 
 const ENABLED = process.env['JANUS_REAL_CODEX'] === '1';
 const TEN_MINUTES = 600_000;
+const FORTY_FIVE_MINUTES = 2_700_000;
+const SPIKE_APP = process.env['JANUS_SPIKE_APP'] ?? join(homedir(), 'janus-spike', 'ng15-app');
+const NODE18_BIN = process.env['JANUS_SPIKE_NODE18_BIN'] ?? join(homedir(), '.nvm', 'versions', 'node', 'v18.20.8', 'bin');
 
 // `guardrails.max_agent_runtime_minutes` must be at least the largest default role timeout (60, spec §18.1's
 // `implementation`/`review` defaults) or the schema's "role timeout may not exceed the ceiling" check
@@ -22,6 +26,13 @@ const TEN_MINUTES = 600_000;
 const config = configSchema.parse({
   workflow: { agent_runner: 'codex', ci_provider: 'fake', scm_provider: 'fake' },
   agents: { roles: { review: { timeout_minutes: 5 }, implementation: { timeout_minutes: 10 } } },
+  guardrails: { max_agent_runtime_minutes: 60 },
+});
+
+/** A2 runs a real Angular major upgrade; 10 minutes is not enough and the §20 ceiling has to rise with it. */
+const angularConfig = configSchema.parse({
+  workflow: { agent_runner: 'codex', ci_provider: 'fake', scm_provider: 'fake' },
+  agents: { roles: { implementation: { timeout_minutes: 45 } } },
   guardrails: { max_agent_runtime_minutes: 60 },
 });
 
@@ -412,5 +423,100 @@ describe.skipIf(!ENABLED)('real codex smoke test', () => {
       expect(await runGit(repo, ['rev-parse', 'HEAD'])).toBe(headBefore);
     },
     TEN_MINUTES,
+  );
+
+  /**
+   * T06 probe A2: can a code-writing agent, inside the T05 sandbox plan, run the Angular 15 -> 16 upgrade on a
+   * dirty tree? Uses a copy of the spike app so the pristine one stays reusable, and prepends Node 18 to PATH
+   * because Angular CLI 15 refuses Node 24 (`^14.20 || ^16.14 || ^18.10`).
+   */
+  it(
+    'probe A2: a code-writing agent runs ng update --allow-dirty and leaves the tree dirty and uncommitted',
+    async () => {
+      if (!existsSync(SPIKE_APP) || !existsSync(NODE18_BIN)) {
+        recordProbe({
+          probe: 'A2',
+          question: 'Can a code-writing agent run ng update --allow-dirty inside the sandbox plan?',
+          outcome: 'fail',
+          detail: `missing prerequisite: app=${SPIKE_APP} exists=${String(existsSync(SPIKE_APP))}, node18=${NODE18_BIN} exists=${String(existsSync(NODE18_BIN))}`,
+          data: {},
+        });
+        throw new Error(`probe A2 needs ${SPIKE_APP} and ${NODE18_BIN}; see docs/spikes/prompt-spike.md runbook`);
+      }
+
+      const paths = workspacePaths(tempDir('janus-probe-a2-'));
+      const repo = paths.repoDir('ng15-app');
+      mkdirSync(paths.reposDir, { recursive: true });
+      mkdirSync(paths.pnpmStoreDir, { recursive: true });
+      cpSync(SPIKE_APP, repo, {
+        recursive: true,
+        filter: (src) => !/[/\\](node_modules|\.angular|dist|\.git)([/\\]|$)/u.test(src),
+      });
+      await runGit(repo, ['init', '-q', '-b', 'main']);
+      await runGit(repo, ['add', '-A']);
+      await runGit(repo, ['commit', '-q', '-m', 'spike baseline']);
+      // §18.4: the tree is intentionally uncommitted when an agent starts.
+      writeFileSync(join(repo, 'src', 'main.ts'), `${readFileSync(join(repo, 'src', 'main.ts'), 'utf8')}\n// janus spike: intentionally uncommitted\n`);
+      const headBefore = await runGit(repo, ['rev-parse', 'HEAD']);
+
+      const previousPath = process.env['PATH'] ?? '';
+      process.env['PATH'] = `${NODE18_BIN}:${previousPath}`;
+      let outcome;
+      try {
+        const runner = createCodexAgentRunner({ paths });
+        const task = buildAgentTask({
+          runId: 'probe-a2',
+          role: 'implementation',
+          repo: 'ng15-app',
+          attempt: 1,
+          paths,
+          config: angularConfig,
+          profile: 'default',
+          globalPnpmStore: null,
+          context: {
+            ...CONTEXT,
+            goal: 'Upgrade this application from Angular 15 to Angular 16',
+            repository: 'ng15-app (application), base branch main, no dependencies',
+            planSlice:
+              'wp-01-ng15-app-angular16: run `pnpm install`, then `npx ng update @angular/core@16 @angular/cli@16 --allow-dirty`, then `npx ng build`. Report every file the migration changed. Change nothing beyond what the migration changes plus whatever `ng build` needs to pass.',
+          },
+          guardrails: ['files outside this repository are out of scope'],
+          budget: '(probe A2)',
+        });
+        expect(task.timeoutMinutes).toBe(45);
+        outcome = await runner.run(task, promptFixture(task));
+      } finally {
+        process.env['PATH'] = previousPath;
+      }
+
+      const status = await runGit(repo, ['status', '--porcelain']);
+      const changedFiles = status.split('\n').filter((line) => line.trim() !== '').length;
+      const pkg = JSON.parse(readFileSync(join(repo, 'package.json'), 'utf8')) as { dependencies?: Record<string, string> };
+      const core = pkg.dependencies?.['@angular/core'] ?? '(absent)';
+
+      recordProbe({
+        probe: 'A2',
+        question: 'Can a code-writing agent run ng update --allow-dirty inside the sandbox plan?',
+        outcome: outcome.failure === null && core.includes('16') ? 'pass' : 'fail',
+        detail: outcome.failure === null ? outcome.summary : `${outcome.failure.kind}: ${outcome.failure.detail}`,
+        data: {
+          angular_core_after: core,
+          changed_files: changedFiles,
+          changes_made_reported: outcome.result?.changes_made.length ?? null,
+          status_completed: outcome.status,
+          tokens: outcome.tokens,
+          duration_ms: outcome.durationMs,
+          head_moved: (await runGit(repo, ['rev-parse', 'HEAD'])) !== headBefore,
+        },
+      });
+
+      expect(outcome.failure, JSON.stringify(outcome.failure)).toBeNull();
+      expect(core).toContain('16');
+      expect(changedFiles).toBeGreaterThan(1);
+      // §32 rule 11, on the most realistic run in the whole spike.
+      expect(await runGit(repo, ['rev-parse', 'HEAD'])).toBe(headBefore);
+      expect(await runGit(repo, ['reflog', 'show', '--format=%H', 'HEAD'])).toBe(headBefore);
+    },
+    FORTY_FIVE_MINUTES,
   );
 });
