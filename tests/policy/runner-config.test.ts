@@ -230,6 +230,55 @@ describe('runnerConfigCheck', () => {
     expect(findings?.[0]?.detail).toContain('exclude');
   });
 
+  it('flags a lowered threshold with descending alignment ([20, 80] -> [40])', async () => {
+    // [20, 80] -> [40]: Ascending would compare 20 vs 40 (no flag), but descending catches 80 vs 40
+    const ctx = policyContext({
+      files: [{ path: 'jest.config.js', removed: ["global: { statements: 80 }", "override: { statements: 20 }"], added: ["global: { statements: 40 }"] }],
+      head: { 'jest.config.js': 'global: { statements: 80 }\noverride: { statements: 20 }' },
+      working: { 'jest.config.js': 'global: { statements: 40 }' },
+    });
+    const findings = await runnerConfigCheck.run(ctx);
+    expect(findings).toHaveLength(1);
+    expect(findings?.[0]?.check).toBe('runner_config.weakened');
+    expect(findings?.[0]?.detail).toContain('statements');
+    expect(findings?.[0]?.detail).toContain('80');
+    expect(findings?.[0]?.detail).toContain('40');
+  });
+
+  it('flags a middle value lowering with triple nesting ([10, 50, 80] -> [10, 40, 80])', async () => {
+    // [10, 50, 80] -> [10, 40, 80]: Middle value dropped from 50 to 40
+    const ctx = policyContext({
+      files: [{ path: 'jest.config.js', added: ["override1: { statements: 10 }", "override2: { statements: 40 }", "global: { statements: 80 }"] }],
+      head: { 'jest.config.js': 'override1: { statements: 10 }\noverride2: { statements: 50 }\nglobal: { statements: 80 }' },
+      working: { 'jest.config.js': 'override1: { statements: 10 }\noverride2: { statements: 40 }\nglobal: { statements: 80 }' },
+    });
+    const findings = await runnerConfigCheck.run(ctx);
+    expect(findings).toHaveLength(1);
+    expect(findings?.[0]?.check).toBe('runner_config.weakened');
+    expect(findings?.[0]?.detail).toContain('50');
+    expect(findings?.[0]?.detail).toContain('40');
+  });
+
+  it('allows deduped values ([50, 50] -> [50])', async () => {
+    // [50, 50] -> [50]: Removing a duplicate is not a lowering
+    const ctx = policyContext({
+      files: [{ path: 'jest.config.js', removed: ["override: { statements: 50 }"] }],
+      head: { 'jest.config.js': 'global: { statements: 50 }\noverride: { statements: 50 }' },
+      working: { 'jest.config.js': 'global: { statements: 50 }' },
+    });
+    expect(await runnerConfigCheck.run(ctx)).toEqual([]);
+  });
+
+  it('allows adding a stricter override ([80] -> [80, 90])', async () => {
+    // [80] -> [80, 90]: Adding a stricter override (90%) is not a lowering
+    const ctx = policyContext({
+      files: [{ path: 'jest.config.js', added: ["override: { statements: 90 }"] }],
+      head: { 'jest.config.js': 'global: { statements: 80 }' },
+      working: { 'jest.config.js': 'global: { statements: 80 }\noverride: { statements: 90 }' },
+    });
+    expect(await runnerConfigCheck.run(ctx)).toEqual([]);
+  });
+
   it('ignores a threshold change in a file that is not a runner config', async () => {
     const ctx = policyContext({
       files: [{ path: 'src/app.ts', removed: ['statements: 80,'], added: ['statements: 10,'] }],

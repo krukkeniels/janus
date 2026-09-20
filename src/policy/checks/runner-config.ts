@@ -110,12 +110,17 @@ export const runnerConfigCheck: PolicyCheck = {
           findings.push(
             violation('runner_config.weakened', `${file.path} removed the ${key} coverage threshold, which was ${before_0}`, {
               path: file.path,
+              // line is null here: the threshold was in HEAD, but we cannot reliably report which line in the file it was on
             }),
           );
           continue;
         }
-        // Compare pairwise: check up to the shorter length
+
+        // Dual alignment: compare both ascending and descending to catch all lowering cases
         const minLen = Math.min(beforeValues.length, afterValues.length);
+        let flagged = false;
+
+        // Ascending comparison
         for (let i = 0; i < minLen; i++) {
           const before_i = beforeValues[i];
           const after_i = afterValues[i];
@@ -125,7 +130,26 @@ export const runnerConfigCheck: PolicyCheck = {
                 path: file.path,
               }),
             );
+            flagged = true;
             break;
+          }
+        }
+
+        // Descending comparison (only if ascending didn't find a violation)
+        if (!flagged) {
+          const beforeDesc = [...beforeValues].sort((a, b) => b - a);
+          const afterDesc = [...afterValues].sort((a, b) => b - a);
+          for (let i = 0; i < minLen; i++) {
+            const before_i = beforeDesc[i];
+            const after_i = afterDesc[i];
+            if (before_i !== undefined && after_i !== undefined && after_i < before_i) {
+              findings.push(
+                violation('runner_config.weakened', `${file.path} lowered the ${key} coverage threshold from ${before_i} to ${after_i}`, {
+                  path: file.path,
+                }),
+              );
+              break;
+            }
           }
         }
       }
@@ -138,18 +162,25 @@ export const runnerConfigCheck: PolicyCheck = {
       const exclusionKeyInHead =
         headSource === null ? false : /["']?\b(?:exclude|testPathIgnorePatterns|coveragePathIgnorePatterns)\b["']?\s*:/u.test(headSource);
 
-      for (const line of workingStripped.split('\n')) {
+      const workingLines = workingStripped.split('\n');
+      for (let lineIndex = 0; lineIndex < workingLines.length; lineIndex++) {
+        const line = workingLines[lineIndex];
+        if (line === undefined) continue;
         const match = EXCLUSION_KEY.exec(line);
         if (match === null) continue;
 
         const keyName = match[1];
         if (keyName === undefined) continue;
 
+        // Working tree line number (1-based)
+        const lineNum = lineIndex + 1;
+
         // If the exclusion key doesn't appear in HEAD, this is a new exclusion mechanism → violation
         if (!exclusionKeyInHead) {
           findings.push(
             violation('runner_config.weakened', `${file.path} adds a test exclusion (${keyName})`, {
               path: file.path,
+              line: lineNum,
               evidence: line.trim(),
             }),
           );
@@ -171,6 +202,7 @@ export const runnerConfigCheck: PolicyCheck = {
             findings.push(
               violation('runner_config.weakened', `${file.path} adds a test exclusion (${keyName}) with pattern ${pattern}`, {
                 path: file.path,
+                line: lineNum,
                 evidence: line.trim(),
               }),
             );
