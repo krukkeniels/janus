@@ -11,7 +11,6 @@ const stubbed: string[][] = [
   ['review', 'sync'],
   ['doctor'],
   ['doctor', '--json'],
-  ['agent', 'run', 'debug', '--task', 'task.yaml'],
   ['ci', 'wait', '--repo', 'shell', '--build', '42'],
   ['ci', 'trigger', '--repo', 'shell'],
   ['ci', 'digest', '--repo', 'shell', '--build', '42'],
