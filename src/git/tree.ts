@@ -34,22 +34,65 @@ export interface WorkingTreeDiff {
   patch: string;
 }
 
-/** Diff of the working tree against HEAD, including untracked files (registered as intent-to-add). Ignored files are excluded. */
+/**
+ * Diff of the working tree against HEAD, including untracked files (registered as intent-to-add). Ignored files
+ * are excluded.
+ *
+ * `--name-status -z` rather than the newline-and-tab form: with `-z` git emits NUL-separated records and never
+ * quotes a path, while the default form C-quotes any path containing a non-ASCII byte
+ * (`A\t"\303\246\303\270\303\245.txt"`) and cannot represent a path containing a newline at all. T08's policy
+ * checks match these paths against `allowed_scope` and `forbidden_paths` globs (§12, §14, §28), so a quoted path
+ * would silently miss every glob it should have hit — and a mis-split record would attribute a rename's old path
+ * to the wrong file. T03 deferred this until a consumer arrived; T08 is that consumer.
+ */
 export async function workingTreeDiff(cwd: string): Promise<WorkingTreeDiff> {
   await runGit(cwd, ['add', '--intent-to-add', '.']);
-  const nameStatus = await runGit(cwd, ['diff', 'HEAD', '--name-status', '-M']);
+  const nameStatus = await runGit(cwd, ['diff', 'HEAD', '--name-status', '-z', '-M']);
   const patch = await runGit(cwd, ['diff', 'HEAD', '-M']);
-  const files = nameStatus === '' ? [] : nameStatus.split('\n').map(parseNameStatus);
-  return { files, patch };
+  return { files: parseNameStatusZ(nameStatus), patch };
 }
 
-function parseNameStatus(line: string): ChangedFile {
-  const [rawStatus, first, second] = line.split('\t');
-  const status = (rawStatus ?? 'M').charAt(0) as ChangeStatus;
-  if (status === 'R' && first !== undefined && second !== undefined) {
-    return { status, path: second, previousPath: first };
+/**
+ * The `-z` record grammar: one status record (`A`, `M`, `D`, `T`, or `R<score>` / `C<score>`), then one path
+ * record — or two, old then new, when the status is a rename or a copy. The stream ends with a NUL, so splitting
+ * on `\0` yields a trailing empty record that is dropped.
+ *
+ * A copy is recorded as `R`: `ChangeStatus` has no `C` member, `-M` alone never enables copy detection (that is
+ * `-C`), and for every policy check "this path came from that path" is the only thing that matters.
+ *
+ * An unmerged path (`U`) throws. Policy checks run on a diff a code-writing agent produced, never mid-merge — the
+ * sync-conflict role leaves conflicts for the orchestrator to finish (§18.2, §19) — so a `U` here means the caller
+ * is looking at a tree it has no business committing, and guessing would hide that.
+ */
+export function parseNameStatusZ(output: string): ChangedFile[] {
+  const records = output.split('\0').filter((record) => record !== '');
+  const files: ChangedFile[] = [];
+  let index = 0;
+  while (index < records.length) {
+    const raw = records[index];
+    if (raw === undefined) break;
+    const status = raw.charAt(0);
+    if (status === 'U') {
+      throw new Error(`git diff --name-status -z: unmerged path ${records[index + 1] ?? '(unnamed)'}`);
+    }
+    if (status === 'R' || status === 'C') {
+      const previousPath = records[index + 1];
+      const path = records[index + 2];
+      if (previousPath === undefined || path === undefined) {
+        throw new Error(`git diff --name-status -z: incomplete rename record "${raw}"`);
+      }
+      files.push({ status: 'R', path, previousPath });
+      index += 3;
+      continue;
+    }
+    const path = records[index + 1];
+    if (path === undefined) {
+      throw new Error(`git diff --name-status -z: status "${raw}" with no path`);
+    }
+    files.push({ status: status as ChangeStatus, path });
+    index += 2;
   }
-  return { status, path: first ?? '' };
+  return files;
 }
 
 /** Discards every change: tracked files back to HEAD, untracked files and directories removed, ignored files kept. Also abandons an in-progress merge. */

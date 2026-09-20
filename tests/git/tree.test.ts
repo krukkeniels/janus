@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { checkoutBranch, commitAll, initRepo, revParse } from '../../src/git/ops.js';
 import { runGit } from '../../src/git/run.js';
-import { listRefShas, listRefs, merge, reflog, reflogExists, resetHard, workingTreeDiff } from '../../src/git/tree.js';
+import { listRefShas, listRefs, merge, parseNameStatusZ, reflog, reflogExists, resetHard, workingTreeDiff } from '../../src/git/tree.js';
 import { tempDir } from '../helpers/git-fixtures.js';
 
 async function repoWithFile(): Promise<string> {
@@ -73,6 +73,26 @@ describe('workingTreeDiff and resetHard', () => {
     expect(await workingTreeDiff(dir)).toEqual({ files: [], patch: '' });
   });
 
+  it('parses paths with spaces and non-ASCII characters without quoting', async () => {
+    const dir = await repoWithFile();
+    writeFileSync(join(dir, 'with space.txt'), 'spaced\n');
+    writeFileSync(join(dir, 'æøå.txt'), 'nordic\n');
+    const diff = await workingTreeDiff(dir);
+    const byPath = Object.fromEntries(diff.files.map((file) => [file.path, file.status]));
+    expect(byPath['with space.txt']).toBe('A');
+    expect(byPath['æøå.txt']).toBe('A');
+    expect(Object.keys(byPath)).not.toContain('"\\303\\246\\303\\270\\303\\245.txt"');
+  });
+
+  it('attributes a rename of a path with a space to the right old and new names', async () => {
+    const dir = await repoWithFile();
+    writeFileSync(join(dir, 'old name.txt'), 'a\nb\nc\nd\ne\n');
+    await commitAll(dir, 'feat(r): add a spaced path');
+    await runGit(dir, ['mv', 'old name.txt', 'new name.txt']);
+    const diff = await workingTreeDiff(dir);
+    expect(diff.files).toEqual([{ status: 'R', path: 'new name.txt', previousPath: 'old name.txt' }]);
+  });
+
   it('resetHard discards tracked changes and untracked files', async () => {
     const dir = await repoWithFile();
     writeFileSync(join(dir, 'shared.txt'), 'changed\n');
@@ -81,6 +101,38 @@ describe('workingTreeDiff and resetHard', () => {
     writeFileSync(join(dir, 'junkdir', 'x.txt'), 'x\n');
     await resetHard(dir);
     expect(await runGit(dir, ['status', '--porcelain'])).toBe('');
+  });
+});
+
+describe('parseNameStatusZ', () => {
+  it('reads two records for an ordinary change and three for a rename', () => {
+    expect(parseNameStatusZ('D\0keep.txt\0R100\0old name.txt\0new name.txt\0A\0un tracked.txt\0')).toEqual([
+      { status: 'D', path: 'keep.txt' },
+      { status: 'R', path: 'new name.txt', previousPath: 'old name.txt' },
+      { status: 'A', path: 'un tracked.txt' },
+    ]);
+  });
+
+  it('returns nothing for an empty stream', () => {
+    expect(parseNameStatusZ('')).toEqual([]);
+  });
+
+  it('treats a copy as a rename, because both carry an old and a new path', () => {
+    expect(parseNameStatusZ('C90\0src/a.ts\0src/b.ts\0')).toEqual([
+      { status: 'R', path: 'src/b.ts', previousPath: 'src/a.ts' },
+    ]);
+  });
+
+  it('throws when a rename record is missing its second path', () => {
+    expect(() => parseNameStatusZ('R100\0only-one.txt\0')).toThrow('incomplete rename record');
+  });
+
+  it('throws when a status record has no path at all', () => {
+    expect(() => parseNameStatusZ('M\0')).toThrow('status "M" with no path');
+  });
+
+  it('throws on an unmerged path, which no caller may policy-check', () => {
+    expect(() => parseNameStatusZ('U\0src/conflict.ts\0')).toThrow('unmerged path src/conflict.ts');
   });
 });
 
