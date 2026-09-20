@@ -100,6 +100,10 @@ export interface AgentOutcome {
   timedOut: boolean;
   /** `codex --version` for the Codex adapter; null for the fake runner. */
   runnerVersion: string | null;
+  /** Bytes of the rendered prompt, for the evidence file and §18.6 comparisons. Null when no prompt was rendered. */
+  promptBytes: number | null;
+  /** Reductions the §18.2 renderer applied, one line each. Empty when nothing was truncated. */
+  truncations: string[];
 }
 
 export function outcomeSummary(result: AgentResult | null, failure: AgentRunFailure | null): string {

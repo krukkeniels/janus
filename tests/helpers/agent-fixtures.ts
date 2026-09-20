@@ -98,6 +98,8 @@ export function stubOutcome(task: AgentTask, overrides: Partial<AgentOutcome> = 
     signal: null,
     timedOut: false,
     runnerVersion: null,
+    promptBytes: null,
+    truncations: [],
     ...overrides,
   };
 }

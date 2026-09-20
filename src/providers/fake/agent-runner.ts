@@ -101,6 +101,8 @@ export function createFakeAgentRunner(input: FakeAgentRunnerInput): AgentRunner 
         signal: null,
         timedOut: false,
         runnerVersion: null,
+        promptBytes: null,
+        truncations: [],
       };
     },
   };
