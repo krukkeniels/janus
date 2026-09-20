@@ -67,6 +67,43 @@ describe('codexLoginCheck', () => {
     expect(finding?.status).toBe('fail');
     expect(finding?.remediation).toContain('codex login');
   });
+
+  it('passes when an affirmative status line follows a banner line (whole-string anchor would miss it)', async () => {
+    const ctx = doctorContext({
+      run: stubRunner([
+        { match: (r) => isLogin(r.bin, r.args), result: { exitCode: 0, stdout: 'OpenAI Codex v0.146.0\nLogged in using ChatGPT\n' } },
+      ]),
+    });
+    const [finding] = await codexLoginCheck.run(ctx);
+    expect(finding?.status).toBe('pass');
+  });
+
+  it('fails when a negative status line follows a banner line', async () => {
+    const ctx = doctorContext({
+      run: stubRunner([{ match: (r) => isLogin(r.bin, r.args), result: { exitCode: 0, stdout: 'OpenAI Codex v0.146.0\nNot logged in\n' } }]),
+    });
+    const [finding] = await codexLoginCheck.run(ctx);
+    expect(finding?.status).toBe('fail');
+    expect(finding?.remediation).toContain('codex login');
+  });
+
+  it('fails on "Logged in: false", which a bare `/^logged in\\b/i` prefix check would false-positive on', async () => {
+    const ctx = doctorContext({
+      run: stubRunner([{ match: (r) => isLogin(r.bin, r.args), result: { exitCode: 0, stdout: 'Logged in: false\n' } }]),
+    });
+    const [finding] = await codexLoginCheck.run(ctx);
+    expect(finding?.status).toBe('fail');
+    expect(finding?.remediation).toContain('codex login');
+  });
+
+  it('fails on an unrecognised status body, rather than passing by default', async () => {
+    const ctx = doctorContext({
+      run: stubRunner([{ match: (r) => isLogin(r.bin, r.args), result: { exitCode: 0, stdout: 'some unexpected codex output\n' } }]),
+    });
+    const [finding] = await codexLoginCheck.run(ctx);
+    expect(finding?.status).toBe('fail');
+    expect(finding?.remediation).toContain('codex login');
+  });
 });
 
 describe('distinctModels', () => {
@@ -162,5 +199,18 @@ describe('codexModelsCheck', () => {
     expect(findings[0]?.detail).toContain('EACCES');
     expect(findings[0]?.remediation).not.toBeNull();
     expect(findings[0]?.remediation).toContain('writable');
+  });
+
+  it('still resolves with the real probe finding when cleanup of the scratch directory fails', async () => {
+    // A scratch dir that will not delete (EBUSY, a lingering open handle, ...) must not turn a real probe result
+    // into an uncaught exception out of run() — the probe already succeeded or failed on its own merits.
+    const ctx = doctorContext({
+      fs: stubFs({ rmrfError: 'EBUSY: resource busy or locked, rmdir' }),
+      run: stubRunner([{ match: (r) => isExec(r.bin, r.args), result: { exitCode: 0 } }]),
+    });
+    const findings = await codexModelsCheck.run(ctx);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.id).toBe('codex.model[gpt-5.6-sol]');
+    expect(findings[0]?.status).toBe('pass');
   });
 });

@@ -37,10 +37,13 @@ export function stubHttp(result: Partial<HttpProbeResult>): HttpProbe {
 
 /**
  * A `DoctorFs` backed by a plain map of path to contents. `writableError` makes `probeWritable` report a failure.
- * `mkdtempError` makes `mkdtemp` throw instead of returning a fake path, so a check's "the temp filesystem is
- * unwritable" path can be exercised without ever touching the real filesystem.
+ * `mkdtempError` makes `mkdtemp` throw instead of returning a fake path, and `rmrfError` makes `rmrf` throw, so a
+ * check's "the temp filesystem is unwritable" and "cleanup failed" paths can both be exercised without ever
+ * touching the real filesystem.
  */
-export function stubFs(options: { files?: Record<string, string>; writableError?: string; mkdtempError?: string } = {}): DoctorFs {
+export function stubFs(
+  options: { files?: Record<string, string>; writableError?: string; mkdtempError?: string; rmrfError?: string } = {},
+): DoctorFs {
   const files = options.files ?? {};
   return {
     readText: (path) => files[path] ?? null,
@@ -50,6 +53,9 @@ export function stubFs(options: { files?: Record<string, string>; writableError?
     mkdtemp: (prefix) => {
       if (options.mkdtempError !== undefined) throw new Error(options.mkdtempError);
       return `${prefix}stub`;
+    },
+    rmrf: () => {
+      if (options.rmrfError !== undefined) throw new Error(options.rmrfError);
     },
   };
 }

@@ -22,6 +22,13 @@ export interface DoctorFs {
    * propagate out of `run()` and take down the whole `runDoctor` pass.
    */
   mkdtemp(prefix: string): string;
+  /**
+   * Recursively removes `path`. Also **can throw** — `{ force: true }` on the underlying `rmSync` suppresses only
+   * "the path is already gone", not a real removal failure (`EPERM`, `EBUSY`, a lingering open handle). The
+   * caller decides how much a failed cleanup matters; `codex.model` treats it as non-fatal once its real result
+   * is already computed.
+   */
+  rmrf(path: string): void;
 }
 
 export const nodeFs: DoctorFs = {
@@ -49,4 +56,7 @@ export const nodeFs: DoctorFs = {
     }
   },
   mkdtemp: (prefix) => mkdtempSync(prefix),
+  rmrf: (path) => {
+    rmSync(path, { recursive: true, force: true });
+  },
 };

@@ -1,4 +1,3 @@
-import { rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parseLadderEntry } from '../../agents/models.js';
@@ -59,14 +58,36 @@ export const codexBinaryCheck: DoctorCheck = {
   },
 };
 
+/** Anywhere in the output, case-insensitive — an explicit negative Codex can print. Checked before any positive match. */
+const NOT_LOGGED_IN = /not\s+(?:logged\s+in|authenticated)/i;
+
 /**
- * True only when `output` **starts with** "logged in" (case-insensitive). Anchoring at the start, rather than
- * checking for the substring anywhere, matters because `'not logged in'.includes('logged in')` is `true` — a bare
- * substring check false-passes every "Not logged in" / "Not authenticated" message Codex can print, since those
- * negative messages all *contain* the positive phrase. None of them start with it.
+ * A line is an affirmative login status only when it starts with "logged in" and is not immediately followed by
+ * `:` or `?` (allowing whitespace in between) — which rules out "Logged in: false" and "logged in? no", both of
+ * which satisfy a bare `/^logged in\b/i` prefix check but are not affirmative.
+ */
+const AFFIRMATIVE_LOGIN_LINE = /^logged in(?!\s*[:?])/i;
+
+/**
+ * Fail-safe, not a bare substring or a whole-string anchor:
+ *
+ * 1. An explicit negative shape ("not logged in", "not authenticated") anywhere in the output returns `false`
+ *    immediately, regardless of what else is present. A bare substring check on the *positive* phrase alone was
+ *    the original bug — `'not logged in'.includes('logged in')` is `true` — so the negative shape is checked
+ *    first and wins.
+ * 2. Otherwise, each line is checked independently for an affirmative status line. Codex prints a banner
+ *    (`OpenAI Codex v0.146.0`, ...) ahead of the actual status on at least some invocations, so anchoring against
+ *    the *whole string* (`^` matching only the very first character) would miss a real "Logged in ..." line that
+ *    isn't first. Per-line anchoring finds it wherever it sits.
+ * 3. Anything else — no negative shape, no affirmative line — is `false`. An unrecognised shape must fail loudly,
+ *    not pass by default.
  */
 function isLoggedIn(output: string): boolean {
-  return /^logged in\b/i.test(output.trim());
+  if (NOT_LOGGED_IN.test(output)) return false;
+  return output
+    .split('\n')
+    .map((line) => line.trim())
+    .some((line) => AFFIRMATIVE_LOGIN_LINE.test(line));
 }
 
 export const codexLoginCheck: DoctorCheck = {
@@ -207,7 +228,15 @@ export const codexModelsCheck: DoctorCheck = {
       }
       return findings;
     } finally {
-      rmSync(scratch, { recursive: true, force: true });
+      try {
+        // Through the `DoctorFs` seam, not a direct `node:fs` call — same reasoning as `mkdtemp` above. A
+        // cleanup failure here (EPERM, EBUSY, a lingering open handle) must not escape `run()`: the probe's real
+        // result, pushed onto `findings` above, already stands on its own merits and a scratch dir that will not
+        // delete is not itself a reason to fail the check.
+        ctx.fs.rmrf(scratch);
+      } catch {
+        // best-effort cleanup only; deliberately swallowed
+      }
     }
   },
 };
