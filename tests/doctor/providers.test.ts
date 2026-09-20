@@ -279,3 +279,78 @@ describe('the real fetchProbe rejects a credentialed URL before touching the net
     expect(finding?.detail).toContain('example.invalid');
   });
 });
+
+/**
+ * C-2 regression: a credential passed as a URL *query string* (rather than userinfo) is never redacted by a
+ * userinfo-only regex, and it leaks specifically from the `pass` branch — no failure path is needed, because the
+ * probe genuinely succeeds. §32 rule 12 makes no distinction between "the operator's provider needs userinfo
+ * auth" and "the operator's provider needs query-string auth"; both must be scrubbed before `detail` is built.
+ *
+ * The configured `teamcity.url`/`bitbucket.url` values below deliberately already contain a query string. Both
+ * checks build the probed URL by string concatenation (`${base}/app/rest/server` etc.), so a query string already
+ * present in the configured base ends up folded into the final URL's query component once concatenated (URL
+ * query strings run to the end of the string, `/` included) — exactly the shape an operator would hit if their
+ * configured provider URL already carried a static query-string token for an intermediate proxy. Not a realistic
+ * token: `SUPERSECRET`/`xxxxxxxx` are placeholders to prove redaction, not real credential shapes.
+ */
+describe('a credential in a URL query string never reaches a report field on the pass path (C-2 regression)', () => {
+  it('a bare ?access_token= query string is redacted even though the probe succeeds', async () => {
+    const config = configSchema.parse({
+      workflow: { ci_provider: 'teamcity', scm_provider: 'fake' },
+      teamcity: { url: 'https://teamcity.example.internal/api?access_token=SUPERSECRET' },
+    });
+    const ctx = doctorContext({ config, env: { JANUS_TEAMCITY_TOKEN: 't' }, http: stubHttp({ ok: true, status: 200 }) });
+    const [finding] = await ciReachabilityCheck.run(ctx);
+    expect(finding?.status).toBe('pass');
+    const serialised = JSON.stringify(finding);
+    expect(serialised).not.toContain('SUPERSECRET');
+    expect(finding?.detail).toContain('teamcity.example.internal');
+    expect(finding?.detail).toContain('query string redacted');
+  });
+
+  it('userinfo and a ?access_token= query string together are both redacted on a successful probe', async () => {
+    const config = configSchema.parse({
+      workflow: { ci_provider: 'teamcity', scm_provider: 'fake' },
+      teamcity: { url: 'https://ci-bot:xxxxxxxx@teamcity.example.internal/api?access_token=SUPERSECRET' },
+    });
+    const ctx = doctorContext({ config, env: { JANUS_TEAMCITY_TOKEN: 't' }, http: stubHttp({ ok: true, status: 200 }) });
+    const [finding] = await ciReachabilityCheck.run(ctx);
+    expect(finding?.status).toBe('pass');
+    const serialised = JSON.stringify(finding);
+    expect(serialised).not.toContain('SUPERSECRET');
+    expect(serialised).not.toContain('ci-bot');
+    expect(serialised).not.toContain('xxxxxxxx');
+    expect(finding?.detail).toContain('teamcity.example.internal');
+  });
+
+  it('the same shape is redacted for scmReachabilityCheck too', async () => {
+    const config = configSchema.parse({
+      workflow: { ci_provider: 'fake', scm_provider: 'bitbucket-server' },
+      bitbucket: { url: 'https://scm-bot:xxxxxxxx@bitbucket.example.internal/api?token=SUPERSECRET' },
+    });
+    const ctx = doctorContext({ config, env: { JANUS_BITBUCKET_TOKEN: 't' }, http: stubHttp({ ok: true, status: 200 }) });
+    const [finding] = await scmReachabilityCheck.run(ctx);
+    expect(finding?.status).toBe('pass');
+    const serialised = JSON.stringify(finding);
+    expect(serialised).not.toContain('SUPERSECRET');
+    expect(serialised).not.toContain('scm-bot');
+    expect(serialised).not.toContain('xxxxxxxx');
+  });
+
+  it('a query-string credential embedded in a probe error message is redacted too (best-effort text path)', async () => {
+    const ctx = doctorContext({
+      config: teamcity,
+      env: { JANUS_TEAMCITY_TOKEN: 't' },
+      http: stubHttp({
+        ok: false,
+        status: null,
+        error: 'connect ECONNREFUSED to https://teamcity.example.internal/app/rest/server?access_token=SUPERSECRET',
+      }),
+    });
+    const [finding] = await ciReachabilityCheck.run(ctx);
+    expect(finding?.status).toBe('fail');
+    const serialised = JSON.stringify(finding);
+    expect(serialised).not.toContain('SUPERSECRET');
+    expect(finding?.detail).toContain('ECONNREFUSED');
+  });
+});
