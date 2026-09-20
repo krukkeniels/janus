@@ -39,7 +39,8 @@ describe('gitIdentityCheck', () => {
     const ctx = doctorContext({ run: stubRunner([{ match: (r) => r.bin === 'git', result: { stdout: 'nonsense\n' } }]) });
     const [finding] = await gitIdentityCheck.run(ctx);
     expect(finding?.status).toBe('fail');
-    expect(finding?.remediation).not.toBeNull();
+    expect(finding?.remediation).toContain('user.name');
+    expect(finding?.remediation).toContain('user.email');
   });
 });
 
@@ -76,6 +77,14 @@ describe('tokensCheck', () => {
     expect(findings[0]?.id).toBe('tokens');
     expect(findings[0]?.status).toBe('skip');
   });
+
+  it('skips outside a workspace, before it can even ask which providers are configured', async () => {
+    const findings = await tokensCheck.run(doctorContext({ config: null, env: {} }));
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.id).toBe('tokens');
+    expect(findings[0]?.status).toBe('skip');
+    expect(findings[0]?.remediation).toContain('janus init');
+  });
 });
 
 describe('branchSpecCheck', () => {
@@ -108,5 +117,28 @@ describe('branchSpecCheck', () => {
     const [finding] = await branchSpecCheck.run(doctorContext({ config: null, goal: null }));
     expect(finding?.status).toBe('skip');
     expect(finding?.remediation).toContain('janus init');
+  });
+
+  it('reports warn, not an uncaught exception, when stateRemote cannot resolve the remote (ConfigError)', async () => {
+    // state.repo is set but bitbucket.url is not configured, so stateRemote's own resolution throws
+    // ConfigError('config.yaml', ['state.clone_url: required because bitbucket.url is not configured']) before
+    // it ever returns. Confirm that premise directly, then confirm the check turns it into a graceful finding
+    // instead of letting it escape run() (where runDoctor's generic handler would misreport it as a doctor bug).
+    const config = configSchema.parse({
+      workflow: { ci_provider: 'fake', scm_provider: 'fake' },
+      state: { repo: { project: 'FE', slug: 'janus-state' } },
+    });
+    expect(config.bitbucket.url).toBeUndefined();
+    const { stateRemote } = await import('../../src/workspace/remotes.js');
+    const { ConfigError } = await import('../../src/config/errors.js');
+    expect(() => stateRemote(goal, config)).toThrow(ConfigError);
+    expect(() => stateRemote(goal, config)).toThrow('state.clone_url: required because bitbucket.url is not configured');
+
+    const [finding] = await branchSpecCheck.run(doctorContext({ config, goal, paths }));
+    expect(finding?.status).toBe('warn');
+    expect(finding?.detail).toContain('cannot tell where the state branch lives');
+    expect(finding?.detail).toContain('state.clone_url');
+    expect(finding?.remediation).toContain('state.clone_url');
+    expect(finding?.remediation).toContain('bitbucket.url');
   });
 });

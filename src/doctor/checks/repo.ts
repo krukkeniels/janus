@@ -144,7 +144,7 @@ export const branchSpecCheck: DoctorCheck = {
         title: branchSpecCheck.title,
         status: 'warn',
         detail: `the state branch ${branch} lives in the product repository ${remote.remoteName}, whose CI watches branches`,
-        remediation: `exclude janus/* from that repository's VCS root branch spec (and keep ai/* included), or give the goal a dedicated state repository with state.repo / state.clone_url in .janus/config.yaml (§33)`,
+        remediation: `exclude janus/* from that repository's VCS root branch spec, keeping ai/* included (needs edit access to that shared CI config) — or give the goal a dedicated state repository via state.repo / state.clone_url in .janus/config.yaml (a new repo to create and own, but no shared CI config to touch) (§33)`,
       },
     ];
   },
