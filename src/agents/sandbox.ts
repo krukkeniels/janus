@@ -30,8 +30,6 @@ export interface SandboxPlan {
   writableRoots: string[];
   /** Environment additions for the child. Never holds a secret; §32 rule 12. */
   env: Record<string, string>;
-  /** The keys of `env`, for the evidence file. Values are never recorded. */
-  envKeys: string[];
 }
 
 export interface PlanSandboxInput {
@@ -69,7 +67,6 @@ export function planSandbox(input: PlanSandboxInput): SandboxPlan {
       cwd: input.paths.root,
       writableRoots: [],
       env: {},
-      envKeys: [],
     };
   }
 
@@ -82,7 +79,6 @@ export function planSandbox(input: PlanSandboxInput): SandboxPlan {
       cwd: dir,
       writableRoots: unsandboxed ? [] : [dir],
       env: {},
-      envKeys: [],
     };
   }
 
@@ -91,7 +87,7 @@ export function planSandbox(input: PlanSandboxInput): SandboxPlan {
   }
   const repoDir = input.paths.repoDir(input.repo);
   if (unsandboxed) {
-    return { sandbox: 'danger-full-access', network: true, cwd: repoDir, writableRoots: [], env: {}, envKeys: [] };
+    return { sandbox: 'danger-full-access', network: true, cwd: repoDir, writableRoots: [], env: {} };
   }
   if (input.config.agents.pnpm_store === 'global') {
     if (input.globalPnpmStore === null) {
@@ -106,7 +102,6 @@ export function planSandbox(input: PlanSandboxInput): SandboxPlan {
       cwd: repoDir,
       writableRoots: [repoDir, input.globalPnpmStore, join(homedir(), '.cache')],
       env: {},
-      envKeys: [],
     };
   }
   return {
@@ -115,7 +110,6 @@ export function planSandbox(input: PlanSandboxInput): SandboxPlan {
     cwd: repoDir,
     writableRoots: [repoDir, input.paths.pnpmStoreDir],
     env: { npm_config_store_dir: input.paths.pnpmStoreDir },
-    envKeys: ['npm_config_store_dir'],
   };
 }
 

@@ -20,7 +20,6 @@ describe('planSandbox', () => {
     expect(plan.cwd).toBe(p.repoDir('ui-kit'));
     expect(plan.writableRoots).toEqual([p.repoDir('ui-kit'), p.pnpmStoreDir]);
     expect(plan.env).toEqual({ npm_config_store_dir: p.pnpmStoreDir });
-    expect(plan.envKeys).toEqual(['npm_config_store_dir']);
   });
 
   it('adds the global store and the user cache as writable roots when agents.pnpm_store is global', () => {

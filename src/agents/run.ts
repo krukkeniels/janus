@@ -46,6 +46,9 @@ export async function runAgent(input: RunAgentInput): Promise<AgentRunRecord> {
       from_effort: input.previousModel.effort,
       to_model: task.model.model,
       to_effort: task.model.effort,
+      // `AgentModelSwitchEvent.ladder_index` is non-null; the `?? 0` only ever matters for a role with no ladder,
+      // and `isModelSwitch` can only fire there on an effort-only change (model is fixed with no ladder), so `0`
+      // never claims a ladder step that did not happen.
       ladder_index: task.model.ladderIndex ?? 0,
       profile: task.profile,
       experiment_id: task.experimentId,

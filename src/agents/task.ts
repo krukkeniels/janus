@@ -73,6 +73,5 @@ export function buildAgentTask(input: BuildAgentTaskInput): AgentTask {
     experimentId: input.config.experiment.id,
     sandbox: plan.sandbox,
     env: plan.env,
-    envKeys: plan.envKeys,
   };
 }

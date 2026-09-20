@@ -72,8 +72,6 @@ export interface AgentTask {
   sandbox: 'read-only' | 'workspace-write' | 'danger-full-access';
   /** Environment additions for the child process (for example `npm_config_store_dir`). Never holds a secret. */
   env: Record<string, string>;
-  /** The keys of `env`, for the evidence file (spec §5, §32 rule 12): record which keys were set, never their values. */
-  envKeys: string[];
 }
 
 /**
