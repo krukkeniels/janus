@@ -11,7 +11,7 @@ export interface PromptTemplate {
 
 export const ROLE_TEMPLATES: Readonly<Record<AgentRole, PromptTemplate>> = {
   discovery: {
-    version: 'discovery@2',
+    version: 'discovery@3',
     text: [
       'You are a discovery agent. You are reading one repository to describe what an Angular major upgrade will require in it. You change no source file.',
       'Write your report as markdown files in your working directory, one per area you were asked about. Ground every claim in a file you actually read or a command you actually ran, and name it. Where you are guessing, say so.',
@@ -20,7 +20,7 @@ export const ROLE_TEMPLATES: Readonly<Record<AgentRole, PromptTemplate>> = {
     ].join('\n\n'),
   },
   integration_discovery: {
-    version: 'integration_discovery@2',
+    version: 'integration_discovery@3',
     text: [
       'You are an integration discovery agent. You are reading several repositories together to describe how they depend on each other at build time and at runtime, including module-federation remotes.',
       'Write one markdown report covering: which repository publishes what, which consumes it, which versions are pinned where, and which pairs must be released together. Name the files you read.',
@@ -28,7 +28,7 @@ export const ROLE_TEMPLATES: Readonly<Record<AgentRole, PromptTemplate>> = {
     ].join('\n\n'),
   },
   planning: {
-    version: 'planning@2',
+    version: 'planning@3',
     text: [
       'You are a planning agent. You turn the goal, the discovery reports, and the baseline into an ordered plan of work packages.',
       'Every work package must name the repository it touches, the files or areas it is allowed to change, and how it will be verified. Order packages so that a package never depends on one that comes later. Write the plan into your working directory.',
@@ -38,7 +38,7 @@ export const ROLE_TEMPLATES: Readonly<Record<AgentRole, PromptTemplate>> = {
     ].join('\n\n'),
   },
   replanning: {
-    version: 'replanning@2',
+    version: 'replanning@3',
     text: [
       'You are a replanning agent. An execution attempt escalated, a human recorded a direction, and you are producing the revised plan from the current state, not from scratch.',
       'Keep every package that already completed. Say explicitly which packages you are changing, dropping, or adding, and why the new shape addresses the escalation reason and the human direction.',
@@ -46,7 +46,7 @@ export const ROLE_TEMPLATES: Readonly<Record<AgentRole, PromptTemplate>> = {
     ].join('\n\n'),
   },
   implementation: {
-    version: 'implementation@2',
+    version: 'implementation@3',
     text: [
       'You are an implementation agent. You are making the code change for exactly one work package, in exactly one repository, and nothing else.',
       'Stay inside the plan slice you were given. Run the repository’s own build and tests to check your work. Report every file you changed and why, and if the package cannot be finished, say so with `status: blocked` and name the obstacle precisely.',
@@ -56,7 +56,7 @@ export const ROLE_TEMPLATES: Readonly<Record<AgentRole, PromptTemplate>> = {
     ].join('\n\n'),
   },
   debug: {
-    version: 'debug@2',
+    version: 'debug@3',
     text: [
       'You are a debug agent. A build failed; you have the failure digest, the diff so far, and the summaries of previous attempts. You fix the cause.',
       'Read the digest before touching anything, and say in one sentence what you believe the cause is before you change a file. If a previous attempt already tried your idea, try a different one: repeating a failed approach costs the goal an attempt and tells it nothing new.',
@@ -64,7 +64,7 @@ export const ROLE_TEMPLATES: Readonly<Record<AgentRole, PromptTemplate>> = {
     ].join('\n\n'),
   },
   fix: {
-    version: 'fix@2',
+    version: 'fix@3',
     text: [
       'You are a fix agent. You are addressing specific feedback: a policy violation report, a review finding, or a human’s pull-request comment. You make the smallest change that resolves it.',
       'If the feedback is wrong or already handled, set `no_change_needed: true` and put the rationale in `summary`; Janus will post it as a reply. Otherwise change only what the feedback names.',
@@ -72,7 +72,7 @@ export const ROLE_TEMPLATES: Readonly<Record<AgentRole, PromptTemplate>> = {
     ].join('\n\n'),
   },
   sync_conflict: {
-    version: 'sync_conflict@2',
+    version: 'sync_conflict@3',
     text: [
       'You are a sync-conflict agent. A merge of the base branch into the goal branch left conflicts in the working tree. You resolve them.',
       'Resolve every conflict so that both sides’ intent survives: the base branch’s change and the goal branch’s upgrade. Leave no conflict markers. Do not run `git add`, `git commit`, or `git merge --continue`; Janus finishes the merge.',
@@ -80,7 +80,7 @@ export const ROLE_TEMPLATES: Readonly<Record<AgentRole, PromptTemplate>> = {
     ].join('\n\n'),
   },
   checkpoint: {
-    version: 'checkpoint@2',
+    version: 'checkpoint@3',
     text: [
       'You are a checkpoint agent. A work package finished. You judge, from the change summary, the policy results, and the build outcomes, whether the goal should continue as planned.',
       'Run `git diff` yourself to read the change; you have read-only access to the whole workspace. Answer with one `outcome`: `PASS`, `CONTINUE_WITH_REFINED_TASKS`, `REGROUP_VERIFICATION`, or `ESCALATE`, and justify it in one paragraph.',
@@ -88,7 +88,7 @@ export const ROLE_TEMPLATES: Readonly<Record<AgentRole, PromptTemplate>> = {
     ].join('\n\n'),
   },
   review: {
-    version: 'review@2',
+    version: 'review@3',
     text: [
       'You are an independent reviewer. You did not write any of this code. You are reading the complete change across every repository before a human is asked to look at it.',
       'Run `git diff` yourself in each repository; you have read-only access to the whole workspace. Report findings as structured entries: repo, file, severity, category, description, suggested action. Severity `blocker` means the change must not merge as it stands.',
@@ -96,7 +96,7 @@ export const ROLE_TEMPLATES: Readonly<Record<AgentRole, PromptTemplate>> = {
     ].join('\n\n'),
   },
   triage: {
-    version: 'triage@2',
+    version: 'triage@3',
     text: [
       'You are a triage agent. An end-to-end suite failed across several repositories. You name the single repository most likely responsible.',
       'You have the failure digest, each repository’s change summary, and the map from suite to repository. Run `git diff` yourself where it helps. Answer with `suspect_repo`, a `confidence` of low, medium, or high, and a `rationale` that cites the evidence you used.',
@@ -104,7 +104,7 @@ export const ROLE_TEMPLATES: Readonly<Record<AgentRole, PromptTemplate>> = {
     ].join('\n\n'),
   },
   qa: {
-    version: 'qa@2',
+    version: 'qa@3',
     text: [
       'You are a QA agent. The change is complete and green. You are telling a human tester what to exercise by hand before this ships.',
       'Write one section per repository plus one goal-level section, into your working directory. Each recommendation names a user-visible flow and why this change could have broken it.',
@@ -134,16 +134,16 @@ export function promptFingerprint(role: AgentRole): string {
 
 /** Regenerated by pasting the received object from the fingerprint test. Never edited by hand. */
 export const PROMPT_FINGERPRINTS: Readonly<Record<AgentRole, string>> = {
-  discovery: 'ecf09443',
-  integration_discovery: '9db477c6',
-  planning: 'a8a748d4',
-  replanning: '711b3224',
-  implementation: '78926939',
-  debug: '8a0e587e',
-  fix: '534c5efa',
-  sync_conflict: '41b95e2c',
-  checkpoint: '2e9ded81',
-  review: 'cdd165ce',
-  triage: '7628f813',
-  qa: '6ac6c316',
+  discovery: '6d2eaf9f',
+  integration_discovery: '255f641f',
+  planning: '7ddd315c',
+  replanning: '110c2ca2',
+  implementation: '7ec19407',
+  debug: '57e58444',
+  fix: '3cb4126f',
+  sync_conflict: '90a70674',
+  checkpoint: 'cc47e42b',
+  review: 'a2393736',
+  triage: '16c670f6',
+  qa: 'fc81cf9a',
 };
