@@ -285,4 +285,69 @@ describe('runnerConfigCheck', () => {
     });
     expect(await runnerConfigCheck.run(ctx)).toBeNull();
   });
+
+  it('judges a rename out of runner-config naming by the old path too (git mv to .disabled)', async () => {
+    // IMPORTANT 4 repro: filtering on isRunnerConfig(file.path) alone made `git mv karma.conf.js
+    // karma.conf.js.disabled` invisible to this check — 0 findings AND absent from checks_run — even though the
+    // rename disables the config exactly as effectively as deleting it. The check must run (and catch a
+    // threshold lowered in the same diff) whichever name — new or old — is a runner config.
+    const ctx = policyContext({
+      files: [
+        {
+          path: 'karma.conf.js.disabled',
+          status: 'R',
+          previousPath: 'karma.conf.js',
+          removed: ['statements: 80,'],
+          added: ['statements: 40,'],
+        },
+      ],
+      head: { 'karma.conf.js': 'statements: 80,' },
+      working: { 'karma.conf.js.disabled': 'statements: 40,' },
+    });
+    const findings = await runnerConfigCheck.run(ctx);
+    expect(findings).not.toBeNull();
+    expect(findings).toHaveLength(1);
+    expect(findings?.[0]?.check).toBe('runner_config.weakened');
+    expect(findings?.[0]?.detail).toContain('80');
+    expect(findings?.[0]?.detail).toContain('40');
+  });
+
+  it('flags moving an existing HEAD pattern from an inclusion key into an exclusion key', async () => {
+    // IMPORTANT 5 repro: headPatterns used to be built from every quoted literal in the whole HEAD file, under
+    // any key. HEAD already has an exclusion key (testPathIgnorePatterns, with only 'node_modules' excluded) and
+    // separately quotes 'src/app/calc.spec.ts' under testRegex (an inclusion key). Once the exclusion key exists
+    // in HEAD at all, the old code compared a newly-added exclusion literal against every literal in the whole
+    // file — so adding 'src/app/calc.spec.ts' to the exclusion list read as "already in HEAD" and was invisible,
+    // even though it was never excluded there. Only literals that were themselves under an exclusion key in
+    // HEAD may count as "already excluded".
+    const ctx = policyContext({
+      files: [
+        {
+          path: 'jest.config.js',
+          removed: ["  testPathIgnorePatterns: ['node_modules'],"],
+          added: ["  testPathIgnorePatterns: ['node_modules', 'src/app/calc.spec.ts'],"],
+        },
+      ],
+      head: { 'jest.config.js': "testRegex: 'src/app/calc.spec.ts',\n  testPathIgnorePatterns: ['node_modules']," },
+      working: {
+        'jest.config.js': "testRegex: 'src/app/calc.spec.ts',\n  testPathIgnorePatterns: ['node_modules', 'src/app/calc.spec.ts'],",
+      },
+    });
+    const findings = await runnerConfigCheck.run(ctx);
+    expect(findings).toHaveLength(1);
+    expect(findings?.[0]?.check).toBe('runner_config.weakened');
+    expect(findings?.[0]?.detail).toContain('testPathIgnorePatterns');
+    expect(findings?.[0]?.detail).toContain('calc.spec.ts');
+  });
+
+  it('still allows a literal that is genuinely already under the same exclusion key', async () => {
+    // Companion to the move-detection test above: reformatting or duplicating an already-excluded pattern must
+    // not start flagging once headPatterns is scoped to exclusion-key lines only.
+    const ctx = policyContext({
+      files: [{ path: 'jest.config.js', added: ["  testPathIgnorePatterns: ['node_modules', 'node_modules'],"] }],
+      head: { 'jest.config.js': "testPathIgnorePatterns: ['node_modules']," },
+      working: { 'jest.config.js': "testPathIgnorePatterns: ['node_modules', 'node_modules']," },
+    });
+    expect(await runnerConfigCheck.run(ctx)).toEqual([]);
+  });
 });

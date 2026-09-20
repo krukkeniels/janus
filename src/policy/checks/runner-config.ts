@@ -47,25 +47,6 @@ export function thresholdsIn(source: string): Map<string, number[]> {
 }
 
 /**
- * Extracts all quoted string literals from comment-stripped source.
- *
- * Recognizes both single- and double-quoted strings. Returns a Set of the literal values
- * (without quotes), so patterns can be compared.
- */
-function quotedLiterals(source: string): Set<string> {
-  const literals = new Set<string>();
-  const stripped = stripComments(source);
-  // Match both single and double quoted strings, capturing the content
-  for (const match of stripped.matchAll(/['"]([^'"]*)['"]/gu)) {
-    const literal = match[1];
-    if (literal !== undefined) {
-      literals.add(literal);
-    }
-  }
-  return literals;
-}
-
-/**
  * Keys whose appearance on an ADDED line means tests stopped running.
  *
  * `testMatch` and `testRegex` are deliberately absent: narrowing them can exclude tests, but changing them is
@@ -73,6 +54,30 @@ function quotedLiterals(source: string): Set<string> {
  * legitimate case teaches an operator to wave the real one through.
  */
 const EXCLUSION_KEY = /["']?\b(exclude|testPathIgnorePatterns|coveragePathIgnorePatterns)\b["']?\s*:/u;
+
+/**
+ * Extracts the quoted string literals that appear on a line carrying one of the exclusion keys, from
+ * comment-stripped source.
+ *
+ * Deliberately narrower than "every quoted literal in the file": a pattern quoted under `include` or
+ * `testRegex` is not a pattern the file excludes, and comparing against the whole file's literals (as an
+ * earlier version of this check did) makes it invisible to move an existing glob from an inclusion key into an
+ * exclusion one — the pattern was already "in HEAD", just under a key that has nothing to do with exclusion.
+ */
+function exclusionPatternsIn(source: string): Set<string> {
+  const patterns = new Set<string>();
+  const stripped = stripComments(source);
+  for (const line of stripped.split('\n')) {
+    if (!EXCLUSION_KEY.test(line)) continue;
+    for (const match of line.matchAll(/['"]([^'"]*)['"]/gu)) {
+      const literal = match[1];
+      if (literal !== undefined) {
+        patterns.add(literal);
+      }
+    }
+  }
+  return patterns;
+}
 
 /**
  * Spec §14: "Runner configs (`karma.conf.js`, `jest.config.*`) may change, but lowering coverage thresholds or
@@ -89,7 +94,13 @@ export const runnerConfigCheck: PolicyCheck = {
   id: 'runner_config.weakened',
   title: 'no runner config lowered a coverage threshold or excluded tests',
   run: async (ctx) => {
-    const configs = ctx.analysis.files.filter((file) => isRunnerConfig(file.path));
+    // A rename is judged by either name, the same as every sibling check (`scope.ts`'s `pathsOf`,
+    // `testFileRemovalCheck` and `testCountCheck` in `tests.ts`): `git mv karma.conf.js karma.conf.js.disabled`
+    // has a new path that is no longer a runner config, and filtering on the new path alone would let a config
+    // that was quietly disabled by rename skip this check entirely, with no finding and no entry in `checks_run`.
+    const configs = ctx.analysis.files.filter(
+      (file) => isRunnerConfig(file.path) || (file.previousPath !== null && isRunnerConfig(file.previousPath)),
+    );
     if (configs.length === 0) return null;
     const findings: PolicyFinding[] = [];
     for (const file of configs) {
@@ -155,7 +166,7 @@ export const runnerConfigCheck: PolicyCheck = {
       }
 
       // Check for new exclusions
-      const headPatterns = headSource === null ? new Set<string>() : quotedLiterals(headSource);
+      const headPatterns = headSource === null ? new Set<string>() : exclusionPatternsIn(headSource);
       const workingStripped = workingSource === null ? '' : stripComments(workingSource);
 
       // Check if the exclusion key itself appears in HEAD
