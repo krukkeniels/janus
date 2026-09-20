@@ -15,7 +15,7 @@ Update this table when a task merges to `main`. A task is done when its plan's f
 | T01 | done | f2a35a2 (2026-09-19) | 77 tests; commander pinned to 14 for the Node 20 floor |
 | T02 | done | 2055b8f (2026-09-19) | 151 tests; store dir via `npm_config_store_dir`, `clone_url` fields added |
 | T03 | done | 48ae5d3 (2026-09-20) | 557 tests; gate-entry ordering fixed after final review; §6/§26/§27 spec edits |
-| T04 to T24 | pending | | next: T04 (agent runner) |
+| T04 to T24 | pending | | next: T04 (integration harness), then T05 (agent runner) |
 
 ---
 
@@ -65,7 +65,7 @@ Done when: unit tests cover every transition, every budget row, every resume cas
 Depends on: T03. Parallel: A (with T05 to T08).
 
 - helper that creates N temp git repos with a dependency graph, a bare "remote" for each, and a bare state remote
-- scripted fake runner, fake CI, fake SCM stubs (full implementations land in T05 to T08) with persistence under `fake/`
+- scripted fake runner, fake CI, fake SCM stubs (full implementations land in T05 (runner), T09 (CI), T10 (SCM)) with persistence under `fake/`
 - assertions on state, evidence files, and reflogs (no git writes by agent processes, §31.29)
 - `pnpm test:integration` target
 
