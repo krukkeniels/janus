@@ -1,3 +1,4 @@
+import { createCodexAgentRunner } from '../agents/codex/adapter.js';
 import type { JanusConfig } from '../config/config-schema.js';
 import type { WorkspacePaths } from '../workspace/layout.js';
 import { createFakeAgentRunner } from './fake/agent-runner.js';
@@ -30,17 +31,18 @@ export interface CreateProvidersInput {
 export function createProviders(input: CreateProvidersInput): Providers {
   const { workflow } = input.config;
   const fakeDir = input.paths.fakeDir;
-  if (workflow.agent_runner !== 'fake') {
-    throw new ProviderNotImplementedError(`agent runner "${workflow.agent_runner}"`, 'T05', 'workflow.agent_runner: fake');
-  }
   if (workflow.ci_provider !== 'fake') {
     throw new ProviderNotImplementedError(`CI provider "${workflow.ci_provider}"`, 'T09', 'workflow.ci_provider: fake');
   }
   if (workflow.scm_provider !== 'fake') {
     throw new ProviderNotImplementedError(`SCM provider "${workflow.scm_provider}"`, 'T10', 'workflow.scm_provider: fake');
   }
+  const agent =
+    workflow.agent_runner === 'codex'
+      ? createCodexAgentRunner({ paths: input.paths, config: input.config })
+      : createFakeAgentRunner({ fakeDir, now: input.now });
   return {
-    agent: createFakeAgentRunner({ fakeDir, now: input.now }),
+    agent,
     ci: createFakeCiProvider({ fakeDir, now: input.now }),
     scm: createFakeScmProvider({ fakeDir, now: input.now }),
   };

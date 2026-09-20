@@ -21,6 +21,13 @@ describe('createProviders', () => {
     expect(providers.agent.name).toBe('fake');
     expect(providers.ci.name).toBe('fake');
     expect(providers.scm.name).toBe('fake');
+
+    const codexProviders = createProviders({
+      config: config({ agent_runner: 'codex', ci_provider: 'fake', scm_provider: 'fake' }),
+      paths: paths(),
+      now,
+    });
+    expect(codexProviders.agent.name).toBe('codex');
   });
 
   it('names the task that will implement each real provider', () => {
@@ -33,11 +40,6 @@ describe('createProviders', () => {
       }
       throw new Error('expected createProviders to throw');
     };
-
-    const agent = attempt({ agent_runner: 'codex', ci_provider: 'fake', scm_provider: 'fake' });
-    expect(agent.task).toBe('T05');
-    expect(agent.message).toContain('agent runner "codex" is not implemented yet (planned in T05)');
-    expect(agent.message).toContain('workflow.agent_runner: fake');
 
     expect(attempt({ agent_runner: 'fake', ci_provider: 'teamcity', scm_provider: 'fake' }).task).toBe('T09');
     expect(attempt({ agent_runner: 'fake', ci_provider: 'local', scm_provider: 'fake' }).task).toBe('T09');

@@ -41,6 +41,8 @@ function evidenceFor(paths = workspacePaths(tempDir('janus-evidence-'))) {
       runnerVersion: 'codex-cli 0.48.0',
       promptBytes: 91_204,
       truncations: ['... [janus truncated the inline diff: 12 of 72012 bytes omitted at agents.max_inline_diff_bytes] ...'],
+      jsonlTruncated: true,
+      stderrTruncated: false,
     },
   });
   return { paths, task, evidence };
@@ -70,6 +72,8 @@ describe('agent evidence', () => {
     expect(written['timed_out']).toBe(false);
     expect(written['tokens']).toEqual({ input: 184_320, cached_input: 172_032, output: 9_184, reasoning: 7_040, total: 193_504 });
     expect((written['result'] as Record<string, unknown>)['summary']).toBe('raised @angular/core to 16.2.12');
+    expect(written['jsonl_truncated']).toBe(true);
+    expect(written['stderr_truncated']).toBe(false);
   });
 
   it('records paths relative to the workspace, so no home directory leaks into the state branch', () => {

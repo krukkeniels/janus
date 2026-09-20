@@ -102,6 +102,11 @@ export interface AgentOutcome {
   promptBytes: number | null;
   /** Reductions the §18.2 renderer applied, one line each. Empty when nothing was truncated. */
   truncations: string[];
+  /** `CodexSpawnResult.jsonlTruncated`: true when the `--json` event stream was capped and so is missing its
+   * earliest lines. Always false for the fake runner. Recorded on evidence so a capped run never looks complete. */
+  jsonlTruncated: boolean;
+  /** `CodexSpawnResult.stderrTruncated`, for the same reason. */
+  stderrTruncated: boolean;
 }
 
 export function outcomeSummary(result: AgentResult | null, failure: AgentRunFailure | null): string {

@@ -103,6 +103,8 @@ export function createFakeAgentRunner(input: FakeAgentRunnerInput): AgentRunner 
         runnerVersion: null,
         promptBytes: null,
         truncations: [],
+        jsonlTruncated: false,
+        stderrTruncated: false,
       };
     },
   };

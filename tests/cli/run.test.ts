@@ -118,12 +118,13 @@ describe('janus run', () => {
     const ws = await initWorkspace();
     const configPath = join(ws.janusDir, CONFIG_FILE);
     const config = parse(readFileSync(configPath, 'utf8')) as Record<string, unknown>;
-    config['workflow'] = { agent_runner: 'codex', ci_provider: 'fake', scm_provider: 'fake' };
+    config['workflow'] = { agent_runner: 'fake', ci_provider: 'teamcity', scm_provider: 'fake' };
+    config['teamcity'] = { url: 'https://tc.invalid' };
     writeFileSync(configPath, stringify(config));
 
     const result = await runCli(['run'], { cwd: ws.root }, { steps: scriptedSteps() });
     expect(result.code).toBe(ExitCode.NotImplemented);
-    expect(result.stderr).toContain('agent runner "codex" is not implemented yet (planned in T05)');
+    expect(result.stderr).toContain('CI provider "teamcity" is not implemented yet (planned in T09)');
     expect(existsSync(join(ws.root, 'janus.lock'))).toBe(false);
   });
 });

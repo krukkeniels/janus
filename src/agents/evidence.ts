@@ -41,6 +41,10 @@ export interface AgentEvidence {
   prompt_version: string;
   prompt_bytes: number | null;
   truncations: string[];
+  /** True when the `--json` event stream or stderr was capped mid-run, so this evidence may be missing data even
+   * though the run otherwise looks complete. */
+  jsonl_truncated: boolean;
+  stderr_truncated: boolean;
   sandbox: AgentTask['sandbox'];
   network: boolean;
   timeout_minutes: number;
@@ -91,6 +95,8 @@ export function buildAgentEvidence(input: BuildAgentEvidenceInput): AgentEvidenc
     prompt_version: task.promptVersion,
     prompt_bytes: outcome.promptBytes,
     truncations: outcome.truncations,
+    jsonl_truncated: outcome.jsonlTruncated,
+    stderr_truncated: outcome.stderrTruncated,
     sandbox: task.sandbox,
     network: task.network,
     timeout_minutes: task.timeoutMinutes,
