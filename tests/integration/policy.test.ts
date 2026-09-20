@@ -171,6 +171,8 @@ describe('policy flow in the harness', () => {
       expect(await revParse(dir, 'HEAD')).toBe(head);
       expect(await runGit(dir, ['status', '--porcelain'])).toBe('');
       expect(existsSync(join(dir, 'forbidden.ts'))).toBe(false);
+      expect(outcome.patchWithheld).toBe(false);
+      if (outcome.patch === null) throw new Error('expected a patch');
       const patch = readFileSync(join(workspace.paths.janusDir, outcome.patch), 'utf8');
       expect(patch).toContain('forbidden.ts');
 

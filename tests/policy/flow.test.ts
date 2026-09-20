@@ -8,7 +8,7 @@ import { clone, commitAll, push, revParse } from '../../src/git/ops.js';
 import { runGit } from '../../src/git/run.js';
 import { runPolicyFlow } from '../../src/policy/flow.js';
 import type { PolicyFixContext } from '../../src/policy/flow.js';
-import { policyPatchPath } from '../../src/policy/report.js';
+import { policyPatchPath, renderPolicyReportForAgent } from '../../src/policy/report.js';
 import type { PolicyReport } from '../../src/policy/types.js';
 import type { AgentRunner, Providers } from '../../src/providers/types.js';
 import { readEvents } from '../../src/telemetry/events.js';
@@ -347,6 +347,8 @@ describe('runPolicyFlow', () => {
       expect(await revParse(dir, 'HEAD')).toBe(head);
       expect(await runGit(dir, ['status', '--porcelain'])).toBe('');
       expect(existsSync(join(dir, 'a.spec.ts'))).toBe(false);
+      expect(outcome.patchWithheld).toBe(false);
+      if (outcome.patch === null) throw new Error('expected a patch');
       const patch = readFileSync(join(workspace.paths.janusDir, outcome.patch), 'utf8');
       expect(patch).toContain('a.spec.ts');
       expect(patch).toContain("xit('skipped'");
@@ -478,6 +480,64 @@ describe('runPolicyFlow', () => {
       expect(outcome.report.violations.map((finding) => finding.check)).toContain('scope.outside_allowed');
       expect(outcome.report.files.map((file) => file.path)).toContain('ci.yml.tmp');
       expect(outcome.fix?.runId).toBe('run-0002');
+    } finally {
+      workspace.release();
+    }
+  });
+
+  it('never lets a detected secret reach evidence, the agent report, or an exported patch (§32 rule 12)', async () => {
+    // PROMOTED regression: earlier controller verification checked only the two artefacts someone thought of
+    // (evidence YAML, the fix agent's rendered report) and missed a third — the exported .patch, which is
+    // `git diff HEAD -M` verbatim and is committed and pushed alongside `.janus`. This test drives a realistic
+    // token through the whole flow and checks all three places at once, plus that the patch simply does not
+    // exist (Critical 2's fix: it must be withheld entirely, not merely redacted).
+    const SECRET = 'AKIAABCDEFGHIJKLMNOP'; // AWS access key id shape: AKIA + 16 alnum
+    const workspace = await openWorkspace(ws.root);
+    try {
+      const { engine, warnings } = testEngine(workspace);
+      seedWorkPackage(workspace, 'ui-kit');
+      const dir = workspace.paths.repoDir('ui-kit');
+      const head = await revParse(dir, 'HEAD');
+      writeFileSync(join(dir, 'config.ts'), `export const key = '${SECRET}';\n`);
+
+      const outcome = await runPolicyFlow({
+        engine,
+        // A fix agent that makes no edit: the secret survives the recheck, forcing a reset.
+        providers: providersWith(fixRunner(() => {}), workspace),
+        repo: 'ui-kit',
+        workPackageId: 'wp-01',
+        attempt: 1,
+        runId: 'run-0001',
+        fixRunId: 'run-0002',
+        allowedScope: ['**'],
+        commitType: 'feat',
+        commitSubject: 'add config',
+        fixContext: FIX_CONTEXT,
+        globalPnpmStore: null,
+        profile: 'default',
+      });
+
+      expect(outcome.kind).toBe('reset');
+      if (outcome.kind !== 'reset') throw new Error('expected reset');
+      expect(outcome.report.violations.map((finding) => finding.check)).toContain('secrets.detected');
+      expect(await revParse(dir, 'HEAD')).toBe(head);
+      expect(await runGit(dir, ['status', '--porcelain'])).toBe('');
+
+      // 1. The patch was withheld, not merely redacted: no path is recorded, and nothing was written to disk.
+      expect(outcome.patchWithheld).toBe(true);
+      expect(outcome.patch).toBeNull();
+      expect(existsSync(policyPatchPath(workspace.paths.janusDir, outcome.report.attempt_id))).toBe(false);
+
+      // 2. The YAML evidence file never carries the secret.
+      const evidenceYaml = readFileSync(join(workspace.paths.janusDir, outcome.evidence), 'utf8');
+      expect(evidenceYaml).not.toContain(SECRET);
+
+      // 3. The report as the fix agent reads it never carries the secret either.
+      const renderedForAgent = renderPolicyReportForAgent(outcome.report);
+      expect(renderedForAgent).not.toContain(SECRET);
+
+      // A human must still be able to find the withheld attempt from the warning line.
+      expect(warnings.some((line) => line.includes(outcome.report.attempt_id) && line.includes('withheld'))).toBe(true);
     } finally {
       workspace.release();
     }

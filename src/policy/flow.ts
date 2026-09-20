@@ -81,8 +81,15 @@ export type PolicyFlowOutcome =
       kind: 'reset';
       report: PolicyReport;
       evidence: string;
-      /** `.janus`-relative path of the exported patch. */
-      patch: string;
+      /** `.janus`-relative path of the exported patch, or null when it was withheld — see `patchWithheld`. */
+      patch: string | null;
+      /**
+       * True when `report` contains a `secrets.detected` violation, in which case no patch was written at all:
+       * §32 rule 12 ("secrets never enter `.janus`, prompts, or evidence") applies to the patch just as much as
+       * to the report, and `.janus` is committed and pushed by `checkpoint`'s `commitAll` — there is no safe name
+       * under which a diff already identified as carrying a secret could be written there.
+       */
+      patchWithheld: boolean;
       /** The increment this reset charged, or null when the counter was already at its limit. */
       increment: BudgetIncrement | null;
       /** Set when `policy_violations` is at `max_policy_violations_per_package`; T12 escalates on it (§20). */
@@ -271,6 +278,18 @@ async function commitPass(
  *
  * The inline diff excludes generated files (`inlineDiffFrom`): `renderContextPackage` refuses a diff containing
  * a lockfile, and an `ng update` diff always contains one.
+ *
+ * §32 rule 12, applied to this call specifically: when `report` carries a `secrets.detected` violation, its
+ * offending line is still in `analysis` (findings never quote it, but they don't remove it from the diff), so
+ * `inlineDiffFrom(analysis)` hands that line to this fix agent's prompt uninterrupted. That is deliberate and
+ * unavoidable — the agent that is supposed to remove the secret has to be able to read it — and it is the one
+ * place in this flow where rule 12 is knowingly not "secrets never enter prompts" to the letter. What *is*
+ * guaranteed: nothing durable carries the raw prompt text back out. `buildAgentEvidence`
+ * (`src/agents/evidence.ts`) records only `prompt_bytes`, a count, never the rendered prompt itself, so
+ * `evidence/agents/<run-id>.yaml` does not leak it. This does not cover every possible path a value could take
+ * once inside the prompt — an agent's own free-text `summary`/`changes_made` in its result, which evidence does
+ * store, could in principle echo it back if the agent chose to quote it. That residual gap is unaddressed here;
+ * it is not the one Critical 2 closes.
  */
 async function runFixAgent(input: PolicyFlowInput, analysis: DiffAnalysis, report: PolicyReport): Promise<PolicyFixRecord> {
   const { engine } = input;
@@ -318,12 +337,27 @@ async function reset(
 ): Promise<PolicyFlowOutcome> {
   const { engine, repo } = input;
   const { paths } = engine.workspace;
+  // §32 rule 12: "secrets never enter .janus, prompts, or evidence." The patch this function would otherwise
+  // write is `git diff HEAD -M` verbatim — exactly the text a `secrets.detected` violation just matched — and
+  // `.janus` is committed and pushed by `checkpoint`'s `commitAll`. Writing it here would be the one code path
+  // that has affirmatively identified a secret and then exports it to a remote anyway. Losing the patch is the
+  // correct trade: a secret pushed to a remote branch cannot be un-pushed. The diff itself is not recoverable
+  // from anything Janus keeps once the tree is reset below — that is the intended cost, not an oversight.
+  const patchWithheld = checked.report.violations.some((finding) => finding.check === 'secrets.detected');
   // The patch is written BEFORE the reset, and carries generated files too: it exists for a human to re-apply.
-  const patch = writePolicyPatch(paths, checked.report.attempt_id, analysis.patch);
+  const patch = patchWithheld ? null : writePolicyPatch(paths, checked.report.attempt_id, analysis.patch);
   await resetHard(paths.repoDir(repo));
-  engine.warn(
-    `policy check ${checked.report.attempt_id} failed with ${checked.report.violations.length} violation(s); ` +
-      `${repo} was reset and the diff saved to ${patch}`,
-  );
-  return { kind: 'reset', report: checked.report, evidence: checked.evidence, patch, increment, guardrail, fix };
+  if (patchWithheld) {
+    engine.warn(
+      `policy check ${checked.report.attempt_id} found a secret-shaped value; ${repo} was reset and the patch ` +
+        'was withheld rather than exported (§32 rule 12) — the diff is not recoverable from Janus evidence; ' +
+        'rotate the secret if it may have already reached a remote in an earlier attempt',
+    );
+  } else {
+    engine.warn(
+      `policy check ${checked.report.attempt_id} failed with ${checked.report.violations.length} violation(s); ` +
+        `${repo} was reset and the diff saved to ${patch}`,
+    );
+  }
+  return { kind: 'reset', report: checked.report, evidence: checked.evidence, patch, patchWithheld, increment, guardrail, fix };
 }
