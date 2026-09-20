@@ -6,6 +6,17 @@ Source spec: `angular-ai-development-workflow-v2.md` (§N references).
 
 Conventions for every task: TypeScript strict, Node 20+, pnpm, vitest, zod for schemas, conventional commits `type(scope): subject`, no task done without its tests green in CI.
 
+## Status
+
+Update this table when a task merges to `main`. A task is done when its plan's final whole-branch review is clean and the merged tree passes lint, typecheck, build, and tests.
+
+| Task | Status | Merged | Notes |
+|---|---|---|---|
+| T01 | done | f2a35a2 (2026-09-19) | 77 tests; commander pinned to 14 for the Node 20 floor |
+| T02 | done | 2055b8f (2026-09-19) | 151 tests; store dir via `npm_config_store_dir`, `clone_url` fields added |
+| T03 | done | 48ae5d3 (2026-09-20) | 557 tests; gate-entry ordering fixed after final review; §6/§26/§27 spec edits |
+| T04 to T24 | pending | | next: T04 (agent runner) |
+
 ---
 
 # Slice 1: one repo, local CI, fake SCM, full loop
