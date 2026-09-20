@@ -84,7 +84,7 @@ describe('workingTreeDiff and resetHard', () => {
     expect(Object.keys(byPath)).not.toContain('"\\303\\246\\303\\270\\303\\245.txt"');
   });
 
-  it('attributes a rename of a path with a space to the right old and new names', async () => {
+  it('parses the three-record rename grammar correctly', async () => {
     const dir = await repoWithFile();
     writeFileSync(join(dir, 'old name.txt'), 'a\nb\nc\nd\ne\n');
     await commitAll(dir, 'feat(r): add a spaced path');
@@ -120,6 +120,13 @@ describe('parseNameStatusZ', () => {
   it('treats a copy as a rename, because both carry an old and a new path', () => {
     expect(parseNameStatusZ('C90\0src/a.ts\0src/b.ts\0')).toEqual([
       { status: 'R', path: 'src/b.ts', previousPath: 'src/a.ts' },
+    ]);
+  });
+
+  it('parses two renames in a row without off-by-one errors', () => {
+    expect(parseNameStatusZ('R100\0a-old\0a-new\0R100\0b-old\0b-new\0')).toEqual([
+      { status: 'R', path: 'a-new', previousPath: 'a-old' },
+      { status: 'R', path: 'b-new', previousPath: 'b-old' },
     ]);
   });
 

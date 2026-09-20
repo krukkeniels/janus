@@ -60,9 +60,10 @@ export async function workingTreeDiff(cwd: string): Promise<WorkingTreeDiff> {
  * A copy is recorded as `R`: `ChangeStatus` has no `C` member, `-M` alone never enables copy detection (that is
  * `-C`), and for every policy check "this path came from that path" is the only thing that matters.
  *
- * An unmerged path (`U`) throws. Policy checks run on a diff a code-writing agent produced, never mid-merge — the
- * sync-conflict role leaves conflicts for the orchestrator to finish (§18.2, §19) — so a `U` here means the caller
- * is looking at a tree it has no business committing, and guessing would hide that.
+ * An unmerged path (`U`) throws defensively. `git diff HEAD --name-status -z` does not emit `U` even during a merge
+ * (only a ref-less `git diff --name-status` does), so the guard is not a production safeguard for this module —
+ * real conflict detection lives in `merge()`'s `conflictedFiles` (§17.4). But `parseNameStatusZ` may be called by
+ * other callers that diff without a ref, so the check protects against that.
  */
 export function parseNameStatusZ(output: string): ChangedFile[] {
   const records = output.split('\0').filter((record) => record !== '');
