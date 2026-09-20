@@ -54,6 +54,23 @@ export function truncateUtf8(text: string, maxBytes: number): { text: string; om
   return { text: kept, omittedBytes: totalBytes - Buffer.byteLength(kept, 'utf8'), totalBytes };
 }
 
+/**
+ * Keeps the *last* `maxBytes` bytes rather than the first — for LATEST VERIFICATION EVIDENCE, where the useful
+ * content (the compiler error, the failing assertion, the stack) sits at the end of a CI log, not the start.
+ * Advances forward from the raw byte cut to the next UTF-8 character boundary so a multi-byte code point at the
+ * front of the kept slice is never split; a continuation byte (top two bits `10`) is never a valid start.
+ */
+export function truncateUtf8Tail(text: string, maxBytes: number): { text: string; omittedBytes: number; totalBytes: number } {
+  const buffer = Buffer.from(text, 'utf8');
+  const totalBytes = buffer.byteLength;
+  if (totalBytes <= maxBytes) return { text, omittedBytes: 0, totalBytes };
+  const start = totalBytes - Math.max(maxBytes, 0);
+  let boundary = start;
+  while (boundary < totalBytes && ((buffer.at(boundary) ?? 0) >> 6) === 0b10) boundary++;
+  const kept = buffer.subarray(boundary).toString('utf8');
+  return { text: kept, omittedBytes: totalBytes - Buffer.byteLength(kept, 'utf8'), totalBytes };
+}
+
 function section(name: string, body: string): string {
   return `## ${name}\n\n${body.trim() === '' ? '(none)' : body}`;
 }
@@ -126,7 +143,7 @@ function assemble(pkg: ContextPackage, reduction: Reduction): { text: string; tr
     }
   }
 
-  const evidence = truncateUtf8(pkg.verificationEvidence ?? '', reduction.evidenceBytes);
+  const evidence = truncateUtf8Tail(pkg.verificationEvidence ?? '', reduction.evidenceBytes);
   if (evidence.omittedBytes === 0) {
     bodies.set('LATEST VERIFICATION EVIDENCE', evidence.text);
   } else {
@@ -136,7 +153,8 @@ function assemble(pkg: ContextPackage, reduction: Reduction): { text: string; tr
       evidence.totalBytes,
       'agents.max_context_bytes',
     );
-    bodies.set('LATEST VERIFICATION EVIDENCE', `${evidence.text}\n${marker}`);
+    // Tail-truncated: the omitted bytes are the head, so the marker leads the kept text rather than trailing it.
+    bodies.set('LATEST VERIFICATION EVIDENCE', `${marker}\n${evidence.text}`);
     truncations.push(marker);
   }
 
@@ -171,9 +189,11 @@ function assemble(pkg: ContextPackage, reduction: Reduction): { text: string; tr
  *
  * When the assembled prompt exceeds `agents.max_context_bytes`, reductions are applied in this fixed order,
  * re-measuring after each and stopping as soon as it fits: inline diff to zero, previous attempts to the most
- * recent three, then to one, verification evidence to its last 4096 bytes, change summary to its first 200 files.
- * GOAL, REPOSITORY, APPROVED PLAN SLICE, GUARDRAILS AND FORBIDDEN ACTIONS, ANGULAR GUIDANCE, BUDGET and OUTPUT
- * CONTRACT are never reduced: a prompt missing its guardrails is worse than a run that fails loudly.
+ * recent three, then to one, verification evidence to its last 4096 bytes (a byte-safe tail cut via
+ * `truncateUtf8Tail`, since the useful part of a CI log — the error, the assertion, the stack — sits at the end),
+ * change summary to its first 200 files. GOAL, REPOSITORY, APPROVED PLAN SLICE, GUARDRAILS AND FORBIDDEN ACTIONS,
+ * ANGULAR GUIDANCE, BUDGET and OUTPUT CONTRACT are never reduced: a prompt missing its guardrails is worse than a
+ * run that fails loudly.
  */
 export function renderContextPackage(pkg: ContextPackage, limits: RenderLimits): RenderedPrompt {
   const stages: Reduction[] = [

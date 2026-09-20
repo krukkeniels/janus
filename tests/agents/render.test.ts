@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { isGeneratedPath, SECTION_ORDER } from '../../src/agents/context.js';
-import { ContextPackageError, ContextTooLargeError, renderContextPackage, truncateUtf8 } from '../../src/agents/render.js';
+import {
+  ContextPackageError,
+  ContextTooLargeError,
+  renderContextPackage,
+  truncateUtf8,
+  truncateUtf8Tail,
+} from '../../src/agents/render.js';
 import { contextPackageFixture } from '../helpers/agent-fixtures.js';
 
 const LIMITS = { maxContextBytes: 200_000, maxInlineDiffBytes: 60_000 };
@@ -86,6 +92,35 @@ describe('renderContextPackage', () => {
     expect(rendered.text).toContain('## OUTPUT CONTRACT');
   });
 
+  it('truncates LATEST VERIFICATION EVIDENCE from the tail, keeping the end where the real failure lives', () => {
+    // The head marker sits once, at byte 0, far outside any last-4096-bytes window; the tail marker sits at the
+    // very end, inside it. A head-truncating implementation keeps the former and drops the latter; a correct
+    // tail-truncating one does the opposite.
+    const headMarker = 'UNIQUE_HEAD_START_MARKER';
+    const filler = 'x'.repeat(9000);
+    const tailMarker = 'TAIL_IMPORTANT_MARKER_AT_END';
+    const evidence = `${headMarker}${filler}${tailMarker}`;
+
+    // The overhead of everything but the evidence, so the budget below is tight enough to force evidence
+    // truncation (stage 4) without depending on inline-diff or previous-attempts reduction to do any work.
+    const overhead = renderContextPackage(
+      contextPackageFixture('implementation', { verificationEvidence: '', previousAttempts: [], inlineDiff: null }),
+      LIMITS,
+    ).bytes;
+
+    const pkg = contextPackageFixture('implementation', {
+      verificationEvidence: evidence,
+      previousAttempts: [],
+      inlineDiff: null,
+    });
+    const rendered = renderContextPackage(pkg, { maxContextBytes: overhead + 4096 + 300, maxInlineDiffBytes: 60_000 });
+
+    expect(Buffer.byteLength(rendered.text, 'utf8')).toBeLessThanOrEqual(overhead + 4096 + 300);
+    expect(rendered.text).toContain(tailMarker);
+    expect(rendered.text).not.toContain(headMarker);
+    expect(rendered.truncations.some((line) => line.includes('verification evidence'))).toBe(true);
+  });
+
   it('throws rather than ship a prompt without its guardrails when nothing can be dropped', () => {
     const pkg = contextPackageFixture('implementation', { goal: 'g'.repeat(50_000) });
     expect(() => renderContextPackage(pkg, { maxContextBytes: 4_000, maxInlineDiffBytes: 1_000 })).toThrow(
@@ -109,6 +144,26 @@ describe('truncateUtf8', () => {
   it('never splits a multi-byte character', () => {
     const text = 'éééé';
     const cut = truncateUtf8(text, 5);
+    expect(Buffer.byteLength(cut.text, 'utf8')).toBeLessThanOrEqual(5);
+    expect(cut.text).not.toContain('�');
+    expect(cut.omittedBytes).toBeGreaterThan(0);
+  });
+});
+
+describe('truncateUtf8Tail', () => {
+  it('returns the text untouched when it fits', () => {
+    expect(truncateUtf8Tail('hello', 10)).toEqual({ text: 'hello', omittedBytes: 0, totalBytes: 5 });
+  });
+
+  it('keeps the last bytes, dropping the head rather than the tail', () => {
+    const cut = truncateUtf8Tail('aaa\nbbb\nccc\n', 4);
+    expect(cut.text).toBe('ccc\n');
+    expect(cut.omittedBytes).toBe(8);
+  });
+
+  it('never splits a multi-byte character straddling the cut', () => {
+    const text = 'éééé';
+    const cut = truncateUtf8Tail(text, 5);
     expect(Buffer.byteLength(cut.text, 'utf8')).toBeLessThanOrEqual(5);
     expect(cut.text).not.toContain('�');
     expect(cut.omittedBytes).toBeGreaterThan(0);
