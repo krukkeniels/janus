@@ -39,11 +39,13 @@ describe('agent output schemas', () => {
     }
   });
 
-  it('rejects an unknown property, because Codex strict schemas forbid extras', () => {
-    const outcome = validateAgentResult('implementation', { ...MINIMUM, mood: 'confident' });
-    expect(outcome.ok).toBe(false);
-    if (outcome.ok) throw new Error('expected a rejection');
-    expect(outcome.errors.join('\n')).toContain('mood');
+  it('rejects an unknown property, because Codex strict schemas forbid extras, for every role', () => {
+    for (const role of AGENT_ROLES) {
+      const outcome = validateAgentResult(role, { ...MINIMUM, ...extrasFor(role), mood: 'confident' });
+      expect(outcome.ok, role).toBe(false);
+      if (outcome.ok) throw new Error(`${role}: expected a rejection`);
+      expect(outcome.errors.join('\n'), role).toContain('mood');
+    }
   });
 
   it('generates a JSON Schema whose required list is exactly the zod shape, for every role', () => {

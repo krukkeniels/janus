@@ -36,7 +36,11 @@ export const baseResultSchema = z
 
 export type AgentResult = z.infer<typeof baseResultSchema>;
 
-/** Spec §22: "Findings are structured (repo, file, severity, category, description, suggested action)." */
+/**
+ * Spec §22: "Findings are structured (repo, file, severity, category, description, suggested action)."
+ * §22 names `severity` but not its vocabulary; the four values below are this task's placeholder, not a spec
+ * quote. T13 owns the review-findings loop and will confirm (or replace) them when it lands.
+ */
 const reviewFindingSchema = z
   .object({
     repo: z.string(),

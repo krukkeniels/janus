@@ -54,4 +54,31 @@ describe('toCodexJsonSchema', () => {
     const schema = z.object({ a: z.object({ b: z.record(z.string(), z.string()) }).strict() }).strict();
     expect(() => toCodexJsonSchema(schema, 't')).toThrow('a.b: ZodRecord');
   });
+
+  it('widens a nullable enum so the schema does not reject null (JSON Schema applies enum regardless of type)', () => {
+    const schema = z.object({ suspect_repo: z.enum(['ui-kit', 'shell']).nullable() }).strict();
+    const json = toCodexJsonSchema(schema, 't');
+    const properties = json['properties'] as Record<string, Record<string, unknown>>;
+    expect(properties['suspect_repo']).toEqual({
+      type: ['string', 'null'],
+      enum: ['ui-kit', 'shell', null],
+    });
+  });
+
+  it('names the real path, not a placeholder, when a nullable node has no simple type', () => {
+    // Double-nullable: the inner convert() already returns a widened (array) `type`, so the outer nullable()
+    // hits its "not a simple type" guard. The path in the error must be the field's real path, not '<nullable>'.
+    const schema = z.object({ a: z.string().nullable().nullable() }).strict();
+    expect(() => toCodexJsonSchema(schema, 't')).toThrow('a: ZodNullable of a node without a simple type');
+  });
+
+  it('refuses a passthrough object, because it would accept extras the model is told are forbidden', () => {
+    const schema = z.object({ a: z.object({ b: z.string() }).passthrough() }).strict();
+    expect(() => toCodexJsonSchema(schema, 't')).toThrow('a: ZodObject (passthrough)');
+  });
+
+  it('refuses a strip-mode (plain) object, for the same reason', () => {
+    const schema = z.object({ a: z.object({ b: z.string() }) }).strict();
+    expect(() => toCodexJsonSchema(schema, 't')).toThrow('a: ZodObject (strip)');
+  });
 });

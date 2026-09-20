@@ -25,6 +25,7 @@ interface ZodDefLike {
   innerType?: z.ZodTypeAny;
   type?: z.ZodTypeAny;
   values?: readonly string[];
+  unknownKeys?: 'strict' | 'strip' | 'passthrough';
 }
 
 function defOf(schema: z.ZodTypeAny): ZodDefLike {
@@ -39,13 +40,20 @@ function child(path: string, key: string): string {
   return path === '' ? key : `${path}.${key}`;
 }
 
-/** Makes the node accept `null` as well, by widening its `type` to a two-entry array. */
-function nullable(node: JsonSchema): JsonSchema {
+/**
+ * Makes the node accept `null` as well, by widening its `type` to a two-entry array. An `enum` sibling is widened
+ * too: JSON Schema applies `enum` regardless of `type`, so a nullable enum that only widened `type` would still
+ * reject `null` — exactly the value §14 says a "not applicable" field must accept.
+ */
+function nullable(node: JsonSchema, path: string): JsonSchema {
   const current = node['type'];
   if (typeof current !== 'string') {
-    throw new UnsupportedSchemaNodeError('<nullable>', 'ZodNullable of a node without a simple type');
+    throw new UnsupportedSchemaNodeError(path, 'ZodNullable of a node without a simple type');
   }
-  return { ...node, type: [current, 'null'] };
+  const widened: JsonSchema = { ...node, type: [current, 'null'] };
+  const values = node['enum'];
+  if (Array.isArray(values)) widened['enum'] = [...values, null];
+  return widened;
 }
 
 function convert(schema: z.ZodTypeAny, path: string): JsonSchema {
@@ -70,9 +78,12 @@ function convert(schema: z.ZodTypeAny, path: string): JsonSchema {
     case 'ZodNullable': {
       const inner = def.innerType;
       if (inner === undefined) throw new UnsupportedSchemaNodeError(path, 'ZodNullable without an inner type');
-      return nullable(convert(inner, path));
+      return nullable(convert(inner, path), path);
     }
     case 'ZodObject': {
+      if (def.unknownKeys !== 'strict') {
+        throw new UnsupportedSchemaNodeError(path, `ZodObject (${def.unknownKeys ?? 'unknown'})`);
+      }
       const shape = shapeOf(schema);
       const properties: Record<string, JsonSchema> = {};
       const required: string[] = [];
