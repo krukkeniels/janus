@@ -7,6 +7,8 @@ import { startStep } from '../../src/engine/steps.js';
 import type { Step, StepRegistry } from '../../src/engine/steps.js';
 import { checkoutBranch, commitAll, push } from '../../src/git/ops.js';
 import { createFakeAgentRunner } from '../../src/providers/fake/agent-runner.js';
+import { createFakeCiProvider } from '../../src/providers/fake/ci.js';
+import { createFakeScmProvider } from '../../src/providers/fake/scm.js';
 import type { Providers } from '../../src/providers/types.js';
 import { checkpoint } from '../../src/state/checkpoint.js';
 import { GOAL_FILE } from '../../src/state/files.js';
@@ -109,7 +111,7 @@ export function scriptedSteps(overrides: StepRegistry = {}): StepRegistry {
 export function testProviders(fakeDir: string, now: () => Date = () => new Date()): Providers {
   return {
     agent: createFakeAgentRunner({ fakeDir, now }),
-    ci: { name: 'fake', findBuild: async () => null },
-    scm: { name: 'fake', currentUser: async () => 'janus-fake', ensureBranch: async () => undefined },
+    ci: createFakeCiProvider({ fakeDir, now }),
+    scm: createFakeScmProvider({ fakeDir, now }),
   };
 }
