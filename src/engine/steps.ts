@@ -1,3 +1,4 @@
+import type { Providers } from '../providers/types.js';
 import type { GateType, GoalStatus } from '../state/state-schema.js';
 import type { GuardrailHit } from './budgets.js';
 import type { Engine } from './engine.js';
@@ -8,6 +9,8 @@ export interface StepContext {
   maxWaitMs: number;
   /** The model profile name for this invocation (`--model-profile` or `workflow_models.profile`). */
   modelProfile: string;
+  /** The agent runner, CI, and SCM providers for this run, injected by the CLI or the integration harness. */
+  providers: Providers;
 }
 
 export type StepOutcome =

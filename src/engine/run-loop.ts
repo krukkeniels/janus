@@ -1,7 +1,7 @@
 import { revParse } from '../git/ops.js';
+import type { Providers } from '../providers/types.js';
 import { emptyInFlight } from '../state/state-schema.js';
 import type { GoalStatus } from '../state/state-schema.js';
-import { writeState } from '../state/state-store.js';
 import type { Workspace } from '../workspace/open-workspace.js';
 import { checkGoalRuntime } from './budgets.js';
 import { enterStage } from './engine.js';
@@ -21,6 +21,7 @@ export interface RunEngineInput {
   until: GoalStatus | null;
   maxWaitMs: number;
   modelProfile: string;
+  providers: Providers;
   /** Safety net against a step that answers `stay` forever (default 1000). */
   maxSteps?: number;
 }
@@ -79,7 +80,7 @@ export async function runEngine(input: RunEngineInput): Promise<RunResult> {
     if (reconciled.changed) await engine.checkpoint('chore(janus): adopt fast-forwarded goal branch heads');
   }
 
-  const ctx: StepContext = { engine, maxWaitMs: input.maxWaitMs, modelProfile: input.modelProfile };
+  const ctx: StepContext = { engine, maxWaitMs: input.maxWaitMs, modelProfile: input.modelProfile, providers: input.providers };
   for (;;) {
     const status = state.goal.status;
     if (status === 'completed') return stop('completed', `goal ${state.goal.id} is completed`);
@@ -98,8 +99,7 @@ export async function runEngine(input: RunEngineInput): Promise<RunResult> {
     const step = steps[status];
     if (step === undefined) throw new Error(`no step registered for stage ${status}`);
 
-    state.execution.in_flight = { ...emptyInFlight(), step: step.name, started_at: engine.now().toISOString() };
-    writeState(paths.janusDir, state);
+    engine.markInFlight({ ...emptyInFlight(), step: step.name, started_at: engine.now().toISOString() });
     const outcome = await step.run(ctx);
     executed += 1;
     state.execution.in_flight = emptyInFlight();
@@ -133,7 +133,7 @@ export async function runEngine(input: RunEngineInput): Promise<RunResult> {
         await escalate(engine, { reason: outcome.reason, repo: outcome.repo, guardrail: outcome.guardrail });
         return stop('escalated', ESCALATED_MESSAGE);
       case 'not_implemented':
-        writeState(paths.janusDir, state);
+        engine.markInFlight(emptyInFlight());
         return stop('not_implemented', `${step.name} is not implemented yet (planned in ${outcome.task})`, outcome.task);
     }
   }

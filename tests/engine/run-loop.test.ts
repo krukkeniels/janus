@@ -10,6 +10,7 @@ import { defaultSteps } from '../../src/engine/steps.js';
 import type { Step, StepRegistry } from '../../src/engine/steps.js';
 import { commitAll, remoteHead, revParse } from '../../src/git/ops.js';
 import { runGit } from '../../src/git/run.js';
+import type { Providers } from '../../src/providers/types.js';
 import { CONFIG_FILE } from '../../src/state/files.js';
 import { emptyInFlight } from '../../src/state/state-schema.js';
 import { readState, writeState } from '../../src/state/state-store.js';
@@ -19,6 +20,13 @@ import { createGoalBranch, initWorkspace, markInFlight, scriptedSteps, testEngin
 import type { WorkspaceFixture } from '../helpers/engine-fixtures.js';
 
 const approver = { name: 'Janus Test', email: 'janus@test.invalid' };
+
+// testProviders (Task 3) replaces this literal bag with one rooted at the workspace fake/ directory.
+const providers: Providers = {
+  agent: { name: 'fake', run: async (request) => ({ runId: request.runId, status: 'completed', summary: 'unused' }) },
+  ci: { name: 'fake', findBuild: async () => null },
+  scm: { name: 'fake', currentUser: async () => 'janus-fake', ensureBranch: async () => undefined },
+};
 
 type RunOptions = Partial<Pick<RunEngineInput, 'until' | 'maxWaitMs' | 'maxSteps'>>;
 
@@ -32,6 +40,7 @@ async function run(ws: WorkspaceFixture, steps: StepRegistry, options: RunOption
       until: options.until ?? null,
       maxWaitMs: options.maxWaitMs ?? 60_000,
       modelProfile: 'default',
+      providers,
       ...(options.maxSteps === undefined ? {} : { maxSteps: options.maxSteps }),
     });
     return { result, warnings, state: workspace.state };
@@ -114,7 +123,7 @@ describe('runEngine', () => {
       },
     };
     await expect(
-      runEngine({ engine: crashingEngine, steps: scriptedSteps(), until: null, maxWaitMs: 60_000, modelProfile: 'default' }),
+      runEngine({ engine: crashingEngine, steps: scriptedSteps(), until: null, maxWaitMs: 60_000, modelProfile: 'default', providers }),
     ).rejects.toThrow('simulated crash between C0 and gate entry');
     workspace.release();
 
@@ -273,7 +282,7 @@ describe('runEngine', () => {
     const workspace = await openWorkspace(ws.root);
     try {
       const { engine, warnings } = testEngine(workspace, () => new Date('2026-09-19T10:00:00.000Z'));
-      const result = await runEngine({ engine, steps: scriptedSteps(), until: null, maxWaitMs: 60_000, modelProfile: 'default' });
+      const result = await runEngine({ engine, steps: scriptedSteps(), until: null, maxWaitMs: 60_000, modelProfile: 'default', providers });
       expect(result.reason).toBe('escalated');
       expect(result.steps).toBe(0);
       expect(warnings[0]).toContain('goal runtime exceeded');

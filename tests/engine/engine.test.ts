@@ -41,6 +41,30 @@ describe('createEngine', () => {
       workspace.release();
     }
   });
+
+  it('markInFlight merges the patch and writes state.yaml before the next checkpoint', async () => {
+    const ws = await initWorkspace();
+    const workspace = await openWorkspace(ws.root);
+    try {
+      const { engine } = testEngine(workspace, () => new Date('2026-09-20T09:00:00.000Z'));
+      const first = engine.markInFlight({ step: 'execute-work-packages', started_at: '2026-09-20T09:00:00.000Z' });
+      expect(first.step).toBe('execute-work-packages');
+      expect(readState(ws.janusDir).execution.in_flight.step).toBe('execute-work-packages');
+
+      const second = engine.markInFlight({ agent_run_id: 'run-0001', repo: 'ui-kit', budget: 'ci_fix_attempts' });
+      expect(second).toEqual({
+        step: 'execute-work-packages',
+        started_at: '2026-09-20T09:00:00.000Z',
+        agent_run_id: 'run-0001',
+        repo: 'ui-kit',
+        budget: 'ci_fix_attempts',
+      });
+      expect(readState(ws.janusDir).execution.in_flight).toEqual(second);
+      expect(workspace.state.execution.in_flight).toEqual(second);
+    } finally {
+      workspace.release();
+    }
+  });
 });
 
 describe('enterStage', () => {

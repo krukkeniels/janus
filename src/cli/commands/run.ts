@@ -4,6 +4,7 @@ import { createEngine } from '../../engine/engine.js';
 import { describeNextStep, runEngine } from '../../engine/run-loop.js';
 import type { RunResult } from '../../engine/run-loop.js';
 import { defaultSteps } from '../../engine/steps.js';
+import type { Providers } from '../../providers/types.js';
 import { GOAL_STATUSES } from '../../state/state-schema.js';
 import type { GoalStatus } from '../../state/state-schema.js';
 import { findWorkspaceRoot, openWorkspace } from '../../workspace/open-workspace.js';
@@ -78,7 +79,14 @@ async function runCommand(ctx: CliContext, options: RunCommandOptions): Promise<
       log: (line) => ctx.io.stdout(`${line}\n`),
       warn: (line) => ctx.io.stderr(`janus: warning: ${line}\n`),
     });
-    const result = await runEngine({ engine, steps, until, maxWaitMs, modelProfile });
+    // T05 replaces this literal with `createProviders(...)`, gated by `workflow.*` in config.yaml; until then
+    // `ctx.providers` (the test seam) is the only way to supply anything other than the fakes.
+    const providers: Providers = ctx.providers ?? {
+      agent: { name: 'fake', run: async (request) => ({ runId: request.runId, status: 'completed', summary: 'unused' }) },
+      ci: { name: 'fake', findBuild: async () => null },
+      scm: { name: 'fake', currentUser: async () => 'janus-fake', ensureBranch: async () => undefined },
+    };
+    const result = await runEngine({ engine, steps, until, maxWaitMs, modelProfile, providers });
     ctx.io.stdout(`goal ${workspace.state.goal.id}: ${result.status} (state branch at ${result.stateCommit.slice(0, 7)}, ${result.steps} steps run)\n`);
     if (result.reason === 'not_implemented') {
       ctx.io.stderr(`janus: ${result.message}\n`);

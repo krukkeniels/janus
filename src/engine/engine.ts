@@ -1,7 +1,8 @@
 import { checkpoint } from '../state/checkpoint.js';
 import type { CheckpointResult } from '../state/checkpoint.js';
 import type { DecisionEntry } from '../state/decisions.js';
-import type { GoalStatus } from '../state/state-schema.js';
+import type { GoalStatus, InFlight } from '../state/state-schema.js';
+import { writeState } from '../state/state-store.js';
 import { appendEvent } from '../telemetry/events.js';
 import type { RecordedEvent, TelemetryEvent } from '../telemetry/events.js';
 import type { Workspace } from '../workspace/open-workspace.js';
@@ -16,6 +17,12 @@ export interface Engine {
   emit(event: TelemetryEvent): RecordedEvent;
   /** Spec §7: commits state.yaml, handover.md, evidence, and any decision on the state branch and pushes fast-forward. */
   checkpoint(message: string, decision?: DecisionEntry): Promise<CheckpointResult>;
+  /**
+   * Spec §7 rule 3: records what the current step has in flight (`agent_run_id`, `repo`, `budget`) and writes
+   * `state.yaml` immediately, so a crash before the next checkpoint is recoverable. Steps call this instead of
+   * importing `writeState`; the value is merged into the existing `in_flight`.
+   */
+  markInFlight(patch: Partial<InFlight>): InFlight;
 }
 
 export interface CreateEngineInput {
@@ -47,6 +54,12 @@ export function createEngine(input: CreateEngineInput): Engine {
         now: now(),
         ...(decision === undefined ? {} : { decision }),
       }),
+    markInFlight: (patch) => {
+      const { state } = input.workspace;
+      state.execution.in_flight = { ...state.execution.in_flight, ...patch };
+      writeState(janusDir, state);
+      return state.execution.in_flight;
+    },
   };
 }
 

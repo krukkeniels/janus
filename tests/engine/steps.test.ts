@@ -2,10 +2,16 @@ import { describe, expect, it } from 'vitest';
 import type { Engine } from '../../src/engine/engine.js';
 import { STEPLESS_STAGES, defaultSteps, placeholderStep, startStep } from '../../src/engine/steps.js';
 import type { StepContext } from '../../src/engine/steps.js';
+import type { Providers } from '../../src/providers/types.js';
 import { GOAL_STATUSES } from '../../src/state/state-schema.js';
 
 // Placeholders never touch the engine, so an empty object is enough here.
-const ctx: StepContext = { engine: {} as Engine, maxWaitMs: 0, modelProfile: 'default' };
+const providers: Providers = {
+  agent: { name: 'fake', run: async (request) => ({ runId: request.runId, status: 'completed', summary: 'unused' }) },
+  ci: { name: 'fake', findBuild: async () => null },
+  scm: { name: 'fake', currentUser: async () => 'janus-fake', ensureBranch: async () => undefined },
+};
+const ctx: StepContext = { engine: {} as Engine, maxWaitMs: 0, modelProfile: 'default', providers };
 
 describe('defaultSteps', () => {
   it('registers a step for every stage except the stepless ones', () => {
