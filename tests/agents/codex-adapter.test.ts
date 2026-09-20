@@ -1,5 +1,5 @@
-import { copyFileSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { chmodSync, copyFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { buildCodexArgs, createCodexAgentRunner } from '../../src/agents/codex/adapter.js';
 import type { CodexSpawn, CodexSpawnRequest } from '../../src/agents/codex/spawn.js';
@@ -178,6 +178,42 @@ describe('createCodexAgentRunner', () => {
     expect(schema['title']).toBe('janus-implementation-result');
     expect(schema['additionalProperties']).toBe(false);
     expect(schema['required']).toContain('handover');
+  });
+
+  // `rmSync`'s `{ force: true }` suppresses only `ENOENT`; a real removal failure still throws, and a throw in the
+  // adapter's `finally` would replace the completed `AgentOutcome` — losing the run's tokens, validated answer and
+  // evidence, and breaking `spawnCodex`'s documented "never rejects" contract. A directory inside the scratch dir
+  // that cannot be read reproduces that exactly (`EACCES`), without a real `codex` anywhere. Skipped as root,
+  // where the kernel ignores the permission bits and nothing would throw.
+  const notRoot = process.getuid?.() !== 0;
+  it.skipIf(!notRoot)('returns the outcome even when the scratch-directory cleanup itself fails', async () => {
+    let locked: string | undefined;
+    const base = replay({});
+    const spawn: CodexSpawn = async (request) => {
+      const result = await base(request);
+      if (request.args[0] === 'exec') {
+        const outPath = request.args[request.args.indexOf('-o') + 1];
+        if (outPath === undefined) throw new Error('expected a last-message path');
+        locked = join(dirname(outPath), 'unremovable');
+        mkdirSync(locked);
+        writeFileSync(join(locked, 'held-open'), 'x');
+        chmodSync(locked, 0o000);
+      }
+      return result;
+    };
+    const { runner } = runnerFor(spawn);
+    try {
+      const outcome = await run(runner, task());
+      expect(outcome.status).toBe('completed');
+      expect(outcome.failure).toBeNull();
+      expect(outcome.result).not.toBeNull();
+      expect(outcome.tokens?.total).toBe(193_504);
+    } finally {
+      if (locked !== undefined) {
+        chmodSync(locked, 0o700);
+        rmSync(dirname(locked), { recursive: true, force: true });
+      }
+    }
   });
 
   it('sends the rendered §18.2 prompt on stdin and the sandbox env to the child', async () => {

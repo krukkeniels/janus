@@ -196,7 +196,19 @@ export function createCodexAgentRunner(input: CodexAdapterInput): AgentRunner {
           stderrTruncated: result.stderrTruncated,
         };
       } finally {
-        if (process.env['JANUS_KEEP_TMP'] !== '1') rmSync(scratch, { recursive: true, force: true });
+        // `{ force: true }` suppresses only "the path is already gone" (`ENOENT`); a real removal failure
+        // (`EBUSY`, `EPERM`, `EACCES`, a lingering handle on a Windows-style or network-mounted tmpdir) still
+        // throws. A throw here would *replace* the completed `AgentOutcome` this `try` just returned — discarding
+        // the run's tokens, validated answer and evidence — and would break `spawnCodex`'s documented "never
+        // rejects" contract for a reason that has nothing to do with the run. Cleanup is best-effort, exactly as
+        // `nodeFs.probeWritable` in `src/doctor/fs.ts` treats its own probe delete.
+        if (process.env['JANUS_KEEP_TMP'] !== '1') {
+          try {
+            rmSync(scratch, { recursive: true, force: true });
+          } catch {
+            // best-effort: a leaked temp directory is a far smaller problem than a lost outcome
+          }
+        }
       }
     },
   };
