@@ -60,6 +60,11 @@ export function planSandbox(input: PlanSandboxInput): SandboxPlan {
   const cls = sandboxClassFor(input.role);
 
   if (cls === 'read-only') {
+    // Spec-literal, and knowingly in tension: §3.3 puts a read-only agent's cwd at the workspace root, §18.4
+    // forbids `--skip-git-repo-check`, and the workspace root is never `git init`-ed — so `codex exec -C <root>`
+    // may refuse to start. Janus follows the spec here rather than inventing a cwd or a flag; T06's manual spike
+    // (§29.4) and T07's `janus doctor` probe verify it against the real binary and, if it does refuse, that is
+    // where the ruling gets revisited.
     return {
       sandbox: unsandboxed ? 'danger-full-access' : 'read-only',
       network: false,

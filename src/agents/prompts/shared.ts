@@ -7,8 +7,9 @@ import { outputSchemaFor } from '../output-schema.js';
  * AND FORBIDDEN ACTIONS (§18.2) for every role, in every class.
  *
  * Order: the §19 additions first (git writes, writable-root and forbidden-path boundaries, no direct publish, the
- * sync-conflict scope restriction), then v1's unchanged "may not" list, verbatim from
- * `angular-ai-development-workflow-v1.md` §19.
+ * sync-conflict scope restriction), then v1's unchanged "may not" list, paraphrased from
+ * `angular-ai-development-workflow-v1.md` §19 — same substance, imperative mood ("Never change product behavior."
+ * for v1's "change product behavior").
  */
 export const FORBIDDEN_ACTIONS: string[] = [
   // §19 (v2 additions to v1's "may not" list)
