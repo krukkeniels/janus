@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { AGENT_ROLES } from '../../src/config/config-schema.js';
-import { outputSchemaFor, resultSchemaFor, validateAgentResult } from '../../src/agents/output-schema.js';
+import { asFixResult, outputSchemaFor, resultSchemaFor, validateAgentResult } from '../../src/agents/output-schema.js';
 
 const MINIMUM = {
   status: 'completed',
@@ -75,6 +75,24 @@ describe('agent output schemas', () => {
     const reviewFindings = (outputSchemaFor('review')['properties'] as Record<string, Record<string, unknown>>)['findings'];
     const item = reviewFindings?.['items'] as Record<string, unknown>;
     expect(item['required']).toEqual(['repo', 'file', 'severity', 'category', 'description', 'suggested_action']);
+  });
+});
+
+describe('asFixResult', () => {
+  it('narrows a validated fix result to its no_change_needed field', () => {
+    const validated = validateAgentResult('fix', { ...MINIMUM, ...extrasFor('fix'), no_change_needed: true });
+    if (!validated.ok) throw new Error(validated.errors.join('; '));
+    expect(asFixResult(validated.result)?.no_change_needed).toBe(true);
+  });
+
+  it('returns null for a base result that is not a fix result', () => {
+    const validated = validateAgentResult('implementation', MINIMUM);
+    if (!validated.ok) throw new Error(validated.errors.join('; '));
+    expect(asFixResult(validated.result)).toBeNull();
+  });
+
+  it('returns null for no result at all', () => {
+    expect(asFixResult(null)).toBeNull();
   });
 });
 

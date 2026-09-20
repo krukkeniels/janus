@@ -1,5 +1,5 @@
 import type { Engine } from '../engine/engine.js';
-import { commitAll, push as gitPush } from '../git/ops.js';
+import { commitAll, push as gitPush, PushRejectedError } from '../git/ops.js';
 
 export interface CommitMessageInput {
   /** The conventional-commit type: `feat` for an implementation commit, `fix` for a debug or review-fix commit. */
@@ -68,6 +68,16 @@ export interface CommitAndPushResult {
   pushed: boolean;
 }
 
+/** A push that git refused, carrying the commit that was already made so the caller does not lose it (§16.6). */
+export class PushRejectedCommitError extends Error {
+  readonly commit: string;
+  constructor(commit: string, cause: PushRejectedError) {
+    super(`push rejected after commit ${commit}: ${cause.message}`);
+    this.name = 'PushRejectedCommitError';
+    this.commit = commit;
+  }
+}
+
 /**
  * Spec §14 step 3 and §32 rule 11: the orchestrator — never an agent — stages every change, commits, and pushes.
  *
@@ -78,8 +88,10 @@ export interface CommitAndPushResult {
  * re-verify it — a check that aborts after the commit is already made is worse than the gap it would close.)
  *
  * The push is `git push` with no `--force` (see `src/git/ops.ts`), so git itself refuses a non-fast-forward and
- * `PushRejectedError` propagates to the caller. That is §16.6's base-branch-sync situation and is deliberately
- * **not** handled here: the commit exists and must not be thrown away, so the decision belongs to the stage step.
+ * `PushRejectedError` is thrown. That error carries no commit sha, so it is re-thrown here as `PushRejectedCommitError`
+ * with the sha `commitAll` already returned — otherwise the caller would have no way back to the commit it must
+ * not lose. That is §16.6's base-branch-sync situation and is deliberately **not** handled here: the commit exists
+ * and must not be thrown away, so the decision belongs to the stage step.
  */
 export async function commitAndPush(input: CommitAndPushInput): Promise<CommitAndPushResult> {
   const remote = input.remote ?? 'origin';
@@ -95,7 +107,12 @@ export async function commitAndPush(input: CommitAndPushInput): Promise<CommitAn
     changed_files: input.changedFiles,
   });
   if (input.push === false) return { commit, pushed: false };
-  await gitPush(input.repoDir, remote, input.branch, { setUpstream: true });
+  try {
+    await gitPush(input.repoDir, remote, input.branch, { setUpstream: true });
+  } catch (error) {
+    if (error instanceof PushRejectedError) throw new PushRejectedCommitError(commit, error);
+    throw error;
+  }
   input.engine.emit({ type: 'push.completed', repo: input.repo, remote, branch: input.branch, sha: commit });
   return { commit, pushed: true };
 }

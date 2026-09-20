@@ -8,11 +8,10 @@ import {
   initBare,
   initRepo,
   push,
-  PushRejectedError,
   revParse,
 } from '../../src/git/ops.js';
 import { runGit } from '../../src/git/run.js';
-import { buildCommitMessage, commitAndPush } from '../../src/policy/commit.js';
+import { buildCommitMessage, commitAndPush, PushRejectedCommitError } from '../../src/policy/commit.js';
 import { readEvents } from '../../src/telemetry/events.js';
 import { initWorkspace, testEngine } from '../helpers/engine-fixtures.js';
 import { tempDir } from '../helpers/git-fixtures.js';
@@ -177,21 +176,24 @@ describe('commitAndPush', () => {
       // seed's push will now be rejected as non-fast-forward; drive that through commitAndPush itself, not the
       // raw git/ops.js primitives, so the assertions below are about the function under test.
       writeFileSync(join(seed, 'c.txt'), 'c\n');
-      await expect(
-        commitAndPush({
-          engine,
-          repoDir: seed,
-          repo: 'seed',
-          branch: 'main',
-          message: 'feat(seed): local',
-          workPackageId: 'wp-01',
-          changedFiles: 1,
-        }),
-      ).rejects.toBeInstanceOf(PushRejectedError);
+      const attempt = commitAndPush({
+        engine,
+        repoDir: seed,
+        repo: 'seed',
+        branch: 'main',
+        message: 'feat(seed): local',
+        workPackageId: 'wp-01',
+        changedFiles: 1,
+      });
+      await expect(attempt).rejects.toBeInstanceOf(PushRejectedCommitError);
 
       // The commit must not be lost: it is still HEAD in the local repo.
       const localHead = await revParse(seed, 'HEAD');
       expect(await runGit(seed, ['log', '-1', '--format=%s'])).toBe('feat(seed): local');
+
+      // The sha must survive on the error itself: PushRejectedCommitError is the only way the caller (T08's
+      // runPolicyFlow) gets back to the commit it must not lose, because gitPush's own error carries none.
+      await expect(attempt).rejects.toMatchObject({ commit: localHead });
 
       const events = readEvents(workspace.paths.janusDir);
       const created = events.find((event) => event['type'] === 'commit.created');

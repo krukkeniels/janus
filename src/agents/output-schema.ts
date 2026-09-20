@@ -109,6 +109,24 @@ export function validateAgentResult(role: AgentRole, raw: unknown): ValidationOu
   return { ok: true, result: parsed.data as AgentResult };
 }
 
+/** §24: the `fix` role's extra field. Declared as a type so callers of the fix flow do not hand-roll a cast. */
+export interface FixAgentResult extends AgentResult {
+  no_change_needed: boolean;
+}
+
+/**
+ * Narrows a validated result to the `fix` shape, or null when it is not one.
+ *
+ * `runAgent` returns `AgentResult`, which is the base §18.3 shape; the fix role's schema is the one that adds
+ * `no_change_needed`, so the only honest way back to it is to re-validate against that schema. Cheap, and it
+ * means a fake runner that was scripted with the wrong shape is caught here rather than read as `false`.
+ */
+export function asFixResult(result: AgentResult | null): FixAgentResult | null {
+  if (result === null) return null;
+  const parsed = ROLE_RESULT_SCHEMAS.fix.safeParse(result);
+  return parsed.success ? (parsed.data as FixAgentResult) : null;
+}
+
 /** Every role has a schema that converts; called by the tests and by `janus doctor` (T07). */
 export function allOutputSchemas(): Record<AgentRole, JsonSchema> {
   const out = {} as Record<AgentRole, JsonSchema>;
