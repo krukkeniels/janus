@@ -12,6 +12,7 @@ export interface DoctorFs {
   /** File contents, or null when the file is missing or unreadable. Never throws. */
   readText(path: string): string | null;
   exists(path: string): boolean;
+  /** **Can throw** (`EACCES`, `ENOSPC`, ...) — same reasoning as `mkdtemp`/`writeText` below. */
   mkdirp(dir: string): void;
   /** Creates and deletes a probe file in `dir`. Returns null on success, or the error message. Never throws. */
   probeWritable(dir: string): string | null;
@@ -30,9 +31,10 @@ export interface DoctorFs {
    */
   rmrf(path: string): void;
   /**
-   * Writes `content` to `path`, overwriting it. Creates no parent directories — the caller `mkdirp`s first. Like
-   * `mkdirp`, this is used only on paths inside a scratch directory that `mkdtemp` just created, so it is not
-   * specially guarded the way `mkdtemp`/`rmrf` are.
+   * Writes `content` to `path`, overwriting it. Creates no parent directories — the caller `mkdirp`s first.
+   * **Can throw** (`EACCES`, `ENOSPC`, a full disk, ...): the caller is expected to catch it, alongside `mkdirp`,
+   * and turn it into a graceful `fail` finding rather than let it propagate out of `run()` into `runDoctor`'s
+   * generic catch, whose remediation ("this is a bug in janus doctor") is wrong for a broken environment.
    */
   writeText(path: string, content: string): void;
 }

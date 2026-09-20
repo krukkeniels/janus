@@ -39,16 +39,26 @@ export function stubHttp(result: Partial<HttpProbeResult>): HttpProbe {
  * A `DoctorFs` backed by a plain map of path to contents. `writableError` makes `probeWritable` report a failure.
  * `mkdtempError` makes `mkdtemp` throw instead of returning a fake path, and `rmrfError` makes `rmrf` throw, so a
  * check's "the temp filesystem is unwritable" and "cleanup failed" paths can both be exercised without ever
- * touching the real filesystem.
+ * touching the real filesystem. `mkdirpError`/`writeTextError` do the same for the scratch-setup calls a
+ * workspace-write-style probe makes after `mkdtemp` succeeds.
  */
 export function stubFs(
-  options: { files?: Record<string, string>; writableError?: string; mkdtempError?: string; rmrfError?: string } = {},
+  options: {
+    files?: Record<string, string>;
+    writableError?: string;
+    mkdtempError?: string;
+    rmrfError?: string;
+    mkdirpError?: string;
+    writeTextError?: string;
+  } = {},
 ): DoctorFs {
   const files = options.files ?? {};
   return {
     readText: (path) => files[path] ?? null,
     exists: (path) => path in files,
-    mkdirp: () => undefined,
+    mkdirp: () => {
+      if (options.mkdirpError !== undefined) throw new Error(options.mkdirpError);
+    },
     probeWritable: () => options.writableError ?? null,
     mkdtemp: (prefix) => {
       if (options.mkdtempError !== undefined) throw new Error(options.mkdtempError);
@@ -57,7 +67,9 @@ export function stubFs(
     rmrf: () => {
       if (options.rmrfError !== undefined) throw new Error(options.rmrfError);
     },
-    writeText: () => undefined,
+    writeText: () => {
+      if (options.writeTextError !== undefined) throw new Error(options.writeTextError);
+    },
   };
 }
 

@@ -74,14 +74,21 @@ export const userNamespacesCheck: DoctorCheck = {
   },
 };
 
-/** A `ctx.fs.mkdtemp` failure, turned into one graceful `fail` finding instead of an exception out of `run()`. */
-function scratchDirFailure(id: string, title: string, probe: string, error: unknown): DoctorObservation {
+/**
+ * Any `DoctorFs` scratch-directory call (`mkdtemp`, `mkdirp`, `writeText`) failing, turned into one graceful
+ * `fail` finding instead of an exception out of `run()`. Deliberately its own finding rather than letting the
+ * error propagate into `runDoctor`'s generic catch (`src/doctor/report.ts`): that catch's remediation ("this is
+ * a bug in janus doctor ... report it") is written for a bug in the check's own logic, not for the broken
+ * environment this check exists to diagnose — an `EACCES` or `ENOSPC` here is exactly the kind of thing an
+ * operator needs a concrete next step for, not a bug report prompt.
+ */
+function scratchFailure(id: string, title: string, action: string, error: unknown): DoctorObservation {
   const message = error instanceof Error ? error.message : String(error);
   return {
     id,
     title,
     status: 'fail',
-    detail: `could not create a scratch directory for the ${probe} probe: ${message}`,
+    detail: `could not ${action}: ${message}`,
     remediation: SCRATCH_DIR_REMEDIATION,
   };
 }
@@ -100,7 +107,7 @@ export const codexReadOnlyProbe: DoctorCheck = {
     try {
       scratch = ctx.fs.mkdtemp(join(tmpdir(), 'janus-doctor-ro-'));
     } catch (error) {
-      return [scratchDirFailure(codexReadOnlyProbe.id, codexReadOnlyProbe.title, 'read-only', error)];
+      return [scratchFailure(codexReadOnlyProbe.id, codexReadOnlyProbe.title, 'create a scratch directory for the read-only probe', error)];
     }
     try {
       const result = await ctx.run({
@@ -127,8 +134,7 @@ export const codexReadOnlyProbe: DoctorCheck = {
           title: codexReadOnlyProbe.title,
           status: 'fail',
           detail: result.timedOut ? `no answer within ${String(READ_ONLY_TIMEOUT_MS / 1000)}s` : lastLine(result.stderr) || `codex exec exited ${String(result.exitCode)}`,
-          remediation:
-            'check the codex.login and sandbox.user_namespaces findings first; if both pass, the Codex sandbox itself will not start on this machine (§18.4)',
+          remediation: `check the codex.login and sandbox.user_namespaces findings first; if both pass, ${UNSANDBOXED_ESCAPE}`,
         },
       ];
     } finally {
@@ -158,17 +164,25 @@ export const codexWorkspaceWriteProbe: DoctorCheck = {
     try {
       scratch = ctx.fs.mkdtemp(join(tmpdir(), 'janus-doctor-ww-'));
     } catch (error) {
-      return [scratchDirFailure(codexWorkspaceWriteProbe.id, codexWorkspaceWriteProbe.title, 'workspace-write', error)];
+      return [scratchFailure(codexWorkspaceWriteProbe.id, codexWorkspaceWriteProbe.title, 'create a scratch directory for the workspace-write probe', error)];
     }
     try {
       const repo = join(scratch, 'repos', 'scratch');
       const store = join(scratch, '.pnpm-store');
-      ctx.fs.mkdirp(repo);
-      ctx.fs.mkdirp(store);
-      ctx.fs.writeText(
-        join(repo, 'package.json'),
-        `${JSON.stringify({ name: 'janus-doctor-scratch', version: '0.0.0', private: true, dependencies: { 'is-odd': '3.0.1' } }, null, 2)}\n`,
-      );
+      try {
+        ctx.fs.mkdirp(repo);
+        ctx.fs.mkdirp(store);
+        ctx.fs.writeText(
+          join(repo, 'package.json'),
+          `${JSON.stringify(
+            { name: 'janus-doctor-scratch', version: '0.0.0', private: true, dependencies: { 'is-odd': '3.0.1', 'is-even': '1.0.0' } },
+            null,
+            2,
+          )}\n`,
+        );
+      } catch (error) {
+        return [scratchFailure(codexWorkspaceWriteProbe.id, codexWorkspaceWriteProbe.title, 'prepare the scratch workspace for the workspace-write probe', error)];
+      }
       // A git work tree, because the code-writing class always has one (§3.3) and gets no `--skip-git-repo-check`.
       for (const args of [
         ['init', '-q', '-b', 'main'],
@@ -208,7 +222,7 @@ export const codexWorkspaceWriteProbe: DoctorCheck = {
             title: codexWorkspaceWriteProbe.title,
             status: 'fail',
             detail: result.timedOut ? `no answer within ${String(WORKSPACE_WRITE_TIMEOUT_MS / 1000)}s` : lastLine(result.stderr) || `codex exec exited ${String(result.exitCode)}`,
-            remediation: 'check codex.probe.read_only and sandbox.user_namespaces first; a workspace-write sandbox needs the same namespaces plus network access (§18.4)',
+            remediation: `check codex.probe.read_only and sandbox.user_namespaces first; a workspace-write sandbox needs the same namespaces plus network access, so if both pass, ${UNSANDBOXED_ESCAPE}`,
           },
         ];
       }

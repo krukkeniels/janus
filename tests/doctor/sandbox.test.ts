@@ -34,7 +34,8 @@ describe('userNamespacesCheck', () => {
   it('skips when the sysctl is not readable at all, rather than claiming a broken sandbox', async () => {
     const [finding] = await userNamespacesCheck.run(doctorContext({ fs: stubFs() }));
     expect(finding?.status).toBe('skip');
-    expect(finding?.remediation).not.toBeNull();
+    expect(finding?.remediation).toContain('codex.probe');
+    expect(finding?.remediation).toContain('allow_unsandboxed');
   });
 });
 
@@ -71,6 +72,9 @@ describe('codexReadOnlyProbe', () => {
     expect(finding?.status).toBe('fail');
     expect(finding?.detail).toContain('EPERM');
     expect(finding?.remediation).toContain('sandbox.user_namespaces');
+    // The terminal branch ("both siblings pass and it still fails") must end in a concrete step, not a bare
+    // spec citation.
+    expect(finding?.remediation).toContain('allow_unsandboxed');
   });
 
   it('fails gracefully, instead of throwing out of run(), when the scratch directory cannot be created', async () => {
@@ -80,6 +84,8 @@ describe('codexReadOnlyProbe', () => {
     expect(finding?.detail).toContain('EACCES');
     expect(finding?.remediation).not.toBeNull();
     expect(finding?.remediation).toContain('writable');
+    // Must be the tailored scratch-directory remediation, not runDoctor's generic "this is a bug" catch text.
+    expect(finding?.remediation).not.toContain('bug');
   });
 });
 
@@ -123,6 +129,22 @@ describe('codexWorkspaceWriteProbe', () => {
     expect(finding?.remediation).toContain('pnpm.store');
   });
 
+  it('fails with the sandbox-escape remediation when codex exits non-zero', async () => {
+    const ctx = doctorContext({
+      run: stubRunner([
+        { match: (r) => r.bin === 'git', result: { exitCode: 0 } },
+        { match: (r) => r.bin === 'codex', result: { exitCode: 1, stderr: 'sandbox error: failed to create user namespace: EPERM' } },
+      ]),
+    });
+    const [finding] = await codexWorkspaceWriteProbe.run(ctx);
+    expect(finding?.status).toBe('fail');
+    expect(finding?.detail).toContain('EPERM');
+    expect(finding?.remediation).toContain('codex.probe.read_only');
+    expect(finding?.remediation).toContain('sandbox.user_namespaces');
+    // Terminal branch must end in a concrete step, not a bare spec citation.
+    expect(finding?.remediation).toContain('allow_unsandboxed');
+  });
+
   it('fails gracefully, instead of throwing out of run(), when the scratch directory cannot be created', async () => {
     const ctx = doctorContext({ fs: stubFs({ mkdtempError: 'ENOSPC: no space left on device, mkdtemp' }) });
     const [finding] = await codexWorkspaceWriteProbe.run(ctx);
@@ -130,6 +152,28 @@ describe('codexWorkspaceWriteProbe', () => {
     expect(finding?.detail).toContain('ENOSPC');
     expect(finding?.remediation).not.toBeNull();
     expect(finding?.remediation).toContain('writable');
+    // Must be the tailored scratch-directory remediation, not runDoctor's generic "this is a bug" catch text.
+    expect(finding?.remediation).not.toContain('bug');
+  });
+
+  it('fails gracefully, instead of throwing out of run(), when the scratch workspace cannot be prepared (mkdirp)', async () => {
+    const ctx = doctorContext({ fs: stubFs({ mkdirpError: 'EACCES: permission denied, mkdir' }) });
+    const [finding] = await codexWorkspaceWriteProbe.run(ctx);
+    expect(finding?.status).toBe('fail');
+    expect(finding?.detail).toContain('EACCES');
+    expect(finding?.remediation).toContain('writable');
+    // Must be the tailored scratch-directory remediation, not runDoctor's generic "this is a bug" catch text —
+    // an EACCES here is the broken environment this probe exists to diagnose, not a bug in janus doctor.
+    expect(finding?.remediation).not.toContain('bug');
+  });
+
+  it('fails gracefully, instead of throwing out of run(), when the scratch workspace cannot be prepared (writeText)', async () => {
+    const ctx = doctorContext({ fs: stubFs({ writeTextError: 'ENOSPC: no space left on device, write' }) });
+    const [finding] = await codexWorkspaceWriteProbe.run(ctx);
+    expect(finding?.status).toBe('fail');
+    expect(finding?.detail).toContain('ENOSPC');
+    expect(finding?.remediation).toContain('writable');
+    expect(finding?.remediation).not.toContain('bug');
   });
 
   it('still resolves with the real probe finding when cleanup of the scratch directory fails', async () => {
