@@ -5,6 +5,8 @@ import type { ContextPackage, ContextPackageInput } from '../../src/agents/conte
 import { outputSchemaFor } from '../../src/agents/output-schema.js';
 import type { AgentResult } from '../../src/agents/output-schema.js';
 import { promptVersionFor } from '../../src/agents/prompts/templates.js';
+import { renderContextPackage } from '../../src/agents/render.js';
+import type { RenderedPrompt, RenderLimits } from '../../src/agents/render.js';
 import { sandboxClassFor } from '../../src/agents/roles.js';
 import type { AgentOutcome, AgentTask } from '../../src/agents/types.js';
 import { outcomeSummary } from '../../src/agents/types.js';
@@ -82,6 +84,17 @@ export function agentTaskFixture(overrides: Partial<AgentTask> = {}): AgentTask 
   };
 }
 
+/** `config.agents` defaults (`config-schema.ts`), which is what `runAgent` renders with in a default workspace. */
+export const DEFAULT_RENDER_LIMITS: RenderLimits = { maxContextBytes: 200_000, maxInlineDiffBytes: 60_000 };
+
+/**
+ * The §18.2 prompt for a task, rendered the way `runAgent` renders it before calling the runner. Tests that drive
+ * an `AgentRunner` directly (rather than through `runAgent`) need it, because the prompt is now a `run` parameter.
+ */
+export function promptFixture(task: AgentTask, limits: Partial<RenderLimits> = {}): RenderedPrompt {
+  return renderContextPackage(task.context, { ...DEFAULT_RENDER_LIMITS, ...limits });
+}
+
 /** A minimal successful `AgentOutcome`, for tests that need an `AgentRunner` but do not care what it answers. */
 export function stubOutcome(task: AgentTask, overrides: Partial<AgentOutcome> = {}): AgentOutcome {
   const result = overrides.result === undefined ? resultFixture() : overrides.result;
@@ -97,8 +110,6 @@ export function stubOutcome(task: AgentTask, overrides: Partial<AgentOutcome> = 
     signal: null,
     timedOut: false,
     runnerVersion: null,
-    promptBytes: null,
-    truncations: [],
     jsonlTruncated: false,
     stderrTruncated: false,
     ...overrides,

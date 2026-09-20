@@ -80,6 +80,9 @@ export interface AgentTask {
  * Replaces T04's `AgentRunOutcome`. `runId`, `status` and `summary` keep their T04 meanings so existing readers
  * are unaffected; everything else is new. Telemetry and the evidence file are **not** written here — `runAgent`
  * (Task 9) does that for every runner, so the Codex adapter and the fake do not each reimplement it.
+ *
+ * The prompt is not described here either: `runAgent` renders it and hands it to the runner, so
+ * `prompt_bytes` and `truncations` on the evidence file are the same numbers whichever runner ran.
  */
 export interface AgentOutcome {
   runId: string;
@@ -98,10 +101,6 @@ export interface AgentOutcome {
   timedOut: boolean;
   /** `codex --version` for the Codex adapter; null for the fake runner. */
   runnerVersion: string | null;
-  /** Bytes of the rendered prompt, for the evidence file and §18.6 comparisons. Null when no prompt was rendered. */
-  promptBytes: number | null;
-  /** Reductions the §18.2 renderer applied, one line each. Empty when nothing was truncated. */
-  truncations: string[];
   /** `CodexSpawnResult.jsonlTruncated`: true when the `--json` event stream was capped and so is missing its
    * earliest lines. Always false for the fake runner. Recorded on evidence so a capped run never looks complete. */
   jsonlTruncated: boolean;

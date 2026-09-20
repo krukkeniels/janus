@@ -1,16 +1,16 @@
 import { copyFileSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { configSchema } from '../../src/config/config-schema.js';
 import { buildCodexArgs, createCodexAgentRunner } from '../../src/agents/codex/adapter.js';
 import type { CodexSpawn, CodexSpawnRequest } from '../../src/agents/codex/spawn.js';
+import type { AgentTask } from '../../src/agents/types.js';
+import type { AgentRunner } from '../../src/providers/types.js';
 import { workspacePaths } from '../../src/workspace/layout.js';
-import { agentTaskFixture } from '../helpers/agent-fixtures.js';
+import { agentTaskFixture, promptFixture } from '../helpers/agent-fixtures.js';
 import { tempDir } from '../helpers/git-fixtures.js';
 
 const fixtures = join(import.meta.dirname, '..', 'fixtures', 'codex');
 const fixture = (name: string): string => readFileSync(join(fixtures, name), 'utf8');
-const config = configSchema.parse({ workflow: { ci_provider: 'fake', scm_provider: 'fake' } });
 
 /** Replays a recorded run: captures the request, writes the recorded last message to the `-o` path, returns the JSONL. */
 function replay(options: {
@@ -62,7 +62,7 @@ function replay(options: {
 
 function runnerFor(spawn: CodexSpawn) {
   const paths = workspacePaths(tempDir('janus-codex-'));
-  return { paths, runner: createCodexAgentRunner({ paths, config, spawn }) };
+  return { paths, runner: createCodexAgentRunner({ paths, spawn }) };
 }
 
 const task = (overrides = {}) => {
@@ -124,10 +124,13 @@ describe('buildCodexArgs', () => {
   });
 });
 
+/** `runAgent` renders the §18.2 prompt once and hands it to the runner; these tests drive the adapter directly. */
+const run = async (runner: AgentRunner, t: AgentTask) => runner.run(t, promptFixture(t));
+
 describe('createCodexAgentRunner', () => {
   it('replays a recorded run into a validated result with tokens and duration', async () => {
     const { runner } = runnerFor(replay({}));
-    const outcome = await runner.run(task());
+    const outcome = await run(runner, task());
     expect(runner.name).toBe('codex');
     expect(outcome.status).toBe('completed');
     expect(outcome.summary).toBe('Updated ui-kit to Angular 16.2.12; 214 tests pass.');
@@ -137,7 +140,6 @@ describe('createCodexAgentRunner', () => {
     expect(outcome.exitCode).toBe(0);
     expect(outcome.failure).toBeNull();
     expect(outcome.runnerVersion).toBe('codex-cli 0.48.0');
-    expect(outcome.promptBytes).toBeGreaterThan(0);
   });
 
   it('writes the generated output schema to the file it passes to --output-schema, before the scratch dir is cleaned up', async () => {
@@ -154,7 +156,7 @@ describe('createCodexAgentRunner', () => {
       return base(request);
     };
     const { runner } = runnerFor(spawn);
-    await runner.run(task());
+    await run(runner, task());
     if (schema === undefined) throw new Error('expected the exec call to have run');
     expect(schema['title']).toBe('janus-implementation-result');
     expect(schema['additionalProperties']).toBe(false);
@@ -165,7 +167,7 @@ describe('createCodexAgentRunner', () => {
     const seen: CodexSpawnRequest[] = [];
     const t = task();
     const { runner } = runnerFor(replay({ seen }));
-    await runner.run(t);
+    await run(runner, t);
     const exec = seen.find((request) => request.args[0] === 'exec');
     expect(exec?.stdin).toContain('## GUARDRAILS AND FORBIDDEN ACTIONS');
     expect(exec?.stdin).toContain('# TASK: implementation');
@@ -176,7 +178,7 @@ describe('createCodexAgentRunner', () => {
 
   it('turns an invalid answer into one failed attempt whose detail names the missing field (§18.3)', async () => {
     const { runner } = runnerFor(replay({ lastMessage: 'invalid-output.last-message.json' }));
-    const outcome = await runner.run(task());
+    const outcome = await run(runner, task());
     expect(outcome.status).toBe('failed');
     expect(outcome.result).toBeNull();
     expect(outcome.failure?.kind).toBe('invalid_output');
@@ -185,14 +187,14 @@ describe('createCodexAgentRunner', () => {
 
   it('turns a missing -o file into invalid_output rather than a crash', async () => {
     const { runner } = runnerFor(replay({ lastMessage: null }));
-    const outcome = await runner.run(task());
+    const outcome = await run(runner, task());
     expect(outcome.failure?.kind).toBe('invalid_output');
     expect(outcome.failure?.detail).toContain('no final message');
   });
 
   it('reports a timeout kill, keeping whatever usage the partial stream held', async () => {
     const { runner } = runnerFor(replay({ timedOut: true, exitCode: 0, lastMessage: null, jsonl: fixture('timeout-partial.jsonl') }));
-    const outcome = await runner.run(task());
+    const outcome = await run(runner, task());
     expect(outcome.status).toBe('failed');
     expect(outcome.timedOut).toBe(true);
     expect(outcome.failure?.kind).toBe('timeout');
@@ -202,7 +204,7 @@ describe('createCodexAgentRunner', () => {
 
   it('reports a timeout as failed even when the killed process still wrote a validating answer, but keeps the answer for the evidence trail', async () => {
     const { runner } = runnerFor(replay({ timedOut: true, exitCode: 0 }));
-    const outcome = await runner.run(task());
+    const outcome = await run(runner, task());
     expect(outcome.status).toBe('failed');
     expect(outcome.result?.summary).toBe('Updated ui-kit to Angular 16.2.12; 214 tests pass.');
     expect(outcome.failure?.kind).toBe('timeout');
@@ -211,7 +213,7 @@ describe('createCodexAgentRunner', () => {
 
   it('reports a signal kill as a failure even when the killed process still wrote a validating answer, but keeps the answer for the evidence trail', async () => {
     const { runner } = runnerFor(replay({ signal: 'SIGKILL', exitCode: 0 }));
-    const outcome = await runner.run(task());
+    const outcome = await run(runner, task());
     expect(outcome.status).toBe('failed');
     expect(outcome.result?.summary).toBe('Updated ui-kit to Angular 16.2.12; 214 tests pass.');
     expect(outcome.failure?.kind).toBe('nonzero_exit');
@@ -221,14 +223,14 @@ describe('createCodexAgentRunner', () => {
 
   it('reports a non-zero exit with no usable answer as nonzero_exit', async () => {
     const { runner } = runnerFor(replay({ exitCode: 2, lastMessage: null, jsonl: '' }));
-    const outcome = await runner.run(task());
+    const outcome = await run(runner, task());
     expect(outcome.failure?.kind).toBe('nonzero_exit');
     expect(outcome.exitCode).toBe(2);
   });
 
   it('prefers a valid answer over a non-zero exit code', async () => {
     const { runner } = runnerFor(replay({ exitCode: 1 }));
-    const outcome = await runner.run(task());
+    const outcome = await run(runner, task());
     expect(outcome.status).toBe('completed');
     expect(outcome.failure).toBeNull();
     expect(outcome.exitCode).toBe(1);
@@ -236,7 +238,7 @@ describe('createCodexAgentRunner', () => {
 
   it('carries the spawn result truncation flags into the outcome, even on a validated run', async () => {
     const { runner } = runnerFor(replay({ jsonlTruncated: true, stderrTruncated: true }));
-    const outcome = await runner.run(task());
+    const outcome = await run(runner, task());
     expect(outcome.status).toBe('completed');
     expect(outcome.jsonlTruncated).toBe(true);
     expect(outcome.stderrTruncated).toBe(true);
@@ -244,7 +246,7 @@ describe('createCodexAgentRunner', () => {
 
   it('defaults the truncation flags to false when the spawn result was not capped', async () => {
     const { runner } = runnerFor(replay({}));
-    const outcome = await runner.run(task());
+    const outcome = await run(runner, task());
     expect(outcome.jsonlTruncated).toBe(false);
     expect(outcome.stderrTruncated).toBe(false);
   });
@@ -254,7 +256,7 @@ describe('createCodexAgentRunner', () => {
     // branch; spec line 661 and §32 rule 12 say that stream may not land there whole and unredacted.
     const noise = 'CODEX_AUTH_TOKEN=sk-do-not-write-this\n'.repeat(400);
     const { runner } = runnerFor(replay({ exitCode: 2, lastMessage: null, jsonl: '', stderr: `${noise}Error: the operative last line` }));
-    const outcome = await runner.run(task());
+    const outcome = await run(runner, task());
 
     expect(outcome.failure?.kind).toBe('nonzero_exit');
     const detail = outcome.failure?.detail ?? '';
@@ -266,13 +268,13 @@ describe('createCodexAgentRunner', () => {
 
   it('leaves a short stderr intact, with no truncation note', async () => {
     const { runner } = runnerFor(replay({ exitCode: 2, lastMessage: null, jsonl: '', stderr: '  boom: everything broke  ' }));
-    const outcome = await runner.run(task());
+    const outcome = await run(runner, task());
     expect(outcome.failure?.detail).toBe('codex exec exited 2: boom: everything broke');
   });
 
   it('reports a missing codex binary as spawn_failed with a doctor hint', async () => {
     const { runner } = runnerFor(replay({ spawnFailed: true, lastMessage: null, jsonl: '' }));
-    const outcome = await runner.run(task());
+    const outcome = await run(runner, task());
     expect(outcome.failure?.kind).toBe('spawn_failed');
     expect(outcome.failure?.detail).toContain('janus doctor');
   });

@@ -6,6 +6,7 @@ import { configSchema } from '../../src/config/config-schema.js';
 import { buildAgentTask } from '../../src/agents/task.js';
 import { runGit } from '../../src/git/run.js';
 import { workspacePaths } from '../../src/workspace/layout.js';
+import { promptFixture } from '../helpers/agent-fixtures.js';
 import { tempDir } from '../helpers/git-fixtures.js';
 
 const ENABLED = process.env['JANUS_REAL_CODEX'] === '1';
@@ -44,7 +45,7 @@ describe.skipIf(!ENABLED)('real codex smoke test', () => {
     async () => {
       const paths = workspacePaths(tempDir('janus-real-codex-ro-'));
       mkdirSync(paths.root, { recursive: true });
-      const runner = createCodexAgentRunner({ paths, config });
+      const runner = createCodexAgentRunner({ paths });
       const task = buildAgentTask({
         runId: 'smoke-read-only',
         role: 'review',
@@ -63,7 +64,7 @@ describe.skipIf(!ENABLED)('real codex smoke test', () => {
       });
       expect(task.sandbox).toBe('read-only');
 
-      const outcome = await runner.run(task);
+      const outcome = await runner.run(task, promptFixture(task));
       expect(outcome.failure, JSON.stringify(outcome.failure)).toBeNull();
       expect(outcome.status).toBe('completed');
       expect(outcome.result?.summary.length).toBeGreaterThan(0);
@@ -89,7 +90,7 @@ describe.skipIf(!ENABLED)('real codex smoke test', () => {
       await runGit(repo, ['commit', '-q', '-m', 'scratch']);
       const headBefore = await runGit(repo, ['rev-parse', 'HEAD']);
 
-      const runner = createCodexAgentRunner({ paths, config });
+      const runner = createCodexAgentRunner({ paths });
       const task = buildAgentTask({
         runId: 'smoke-workspace-write',
         role: 'implementation',
@@ -109,7 +110,7 @@ describe.skipIf(!ENABLED)('real codex smoke test', () => {
       expect(task.sandbox).toBe('workspace-write');
       expect(task.env['npm_config_store_dir']).toBe(paths.pnpmStoreDir);
 
-      const outcome = await runner.run(task);
+      const outcome = await runner.run(task, promptFixture(task));
       expect(outcome.failure, JSON.stringify(outcome.failure)).toBeNull();
       expect(existsSync(join(repo, 'node_modules'))).toBe(true);
       // §32 rule 11: the agent edited the tree and moved nothing.

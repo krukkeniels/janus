@@ -1,17 +1,20 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { parse } from 'yaml';
 import { describe, expect, it } from 'vitest';
+import { ContextTooLargeError } from '../../src/agents/render.js';
 import { runAgent } from '../../src/agents/run.js';
+import { createFakeAgentRunner, seedFakeAgents } from '../../src/providers/fake/agent-runner.js';
 import { readEvents } from '../../src/telemetry/events.js';
 import type { AgentRunner } from '../../src/providers/types.js';
 import { initWorkspace, testEngine } from '../helpers/engine-fixtures.js';
 import { openWorkspace } from '../../src/workspace/open-workspace.js';
-import { agentTaskFixture, stubOutcome } from '../helpers/agent-fixtures.js';
+import { agentTaskFixture, contextPackageFixture, stubOutcome } from '../helpers/agent-fixtures.js';
 
 const clock = () => new Date('2026-09-20T11:00:00.000Z');
 
 function runner(name: 'fake' | 'codex' = 'fake'): AgentRunner {
-  return { name, run: async (task) => stubOutcome(task, { promptBytes: 4096, durationMs: 1234 }) };
+  return { name, run: async (task) => stubOutcome(task, { durationMs: 1234 }) };
 }
 
 describe('runAgent', () => {
@@ -153,6 +156,92 @@ describe('runAgent', () => {
       await runAgent({ engine, runner: watching, task, previousModel: null });
       expect(existedDuringRun).toBe(true);
       expect(existsSync(reportDir)).toBe(true);
+    } finally {
+      workspace.release();
+    }
+  });
+
+  it('renders the §18.2 prompt itself, so a fake-driven run records real prompt_bytes (not null)', async () => {
+    const ws = await initWorkspace();
+    const workspace = await openWorkspace(ws.root);
+    try {
+      const { engine } = testEngine(workspace, clock);
+      seedFakeAgents(ws.fakeDir, { implementation: [{ status: 'completed', summary: 'bumped @angular/core' }] });
+      const task = agentTaskFixture({ runId: 'run-0106', role: 'implementation', repo: 'ui-kit', cwd: workspace.paths.repoDir('ui-kit') });
+      const record = await runAgent({
+        engine,
+        runner: createFakeAgentRunner({ paths: workspace.paths, now: clock }),
+        task,
+        previousModel: null,
+      });
+
+      const evidence = parse(readFileSync(join(ws.janusDir, record.evidencePath), 'utf8')) as Record<string, unknown>;
+      expect(evidence['runner']).toBe('fake');
+      expect(evidence['prompt_bytes']).toBeGreaterThan(0);
+      expect(evidence['truncations']).toEqual([]);
+    } finally {
+      workspace.release();
+    }
+  });
+
+  it('throws ContextTooLargeError before the runner is reached, on the fake path as on the Codex one', async () => {
+    const ws = await initWorkspace();
+    const workspace = await openWorkspace(ws.root);
+    try {
+      const { engine } = testEngine(workspace, clock);
+      let called = false;
+      const fake = createFakeAgentRunner({ paths: workspace.paths, now: clock });
+      const watched: AgentRunner = {
+        name: 'fake',
+        run: async (task, prompt) => {
+          called = true;
+          return fake.run(task, prompt);
+        },
+      };
+      // GOAL is one of the sections §18.2 refuses to reduce, so no reduction stage can bring this under
+      // `agents.max_context_bytes` (200_000 by default) — the renderer must give up rather than drop guardrails.
+      const task = agentTaskFixture({
+        runId: 'run-0107',
+        role: 'implementation',
+        repo: 'ui-kit',
+        cwd: workspace.paths.repoDir('ui-kit'),
+        context: { ...contextPackageFixture('implementation'), goal: 'x'.repeat(300_000) },
+      });
+      await expect(runAgent({ engine, runner: watched, task, previousModel: null })).rejects.toBeInstanceOf(ContextTooLargeError);
+      expect(called).toBe(false);
+    } finally {
+      workspace.release();
+    }
+  });
+
+  it('writes a scripted failure and the answer it still produced into the same evidence file (§18.4)', async () => {
+    const ws = await initWorkspace();
+    const workspace = await openWorkspace(ws.root);
+    try {
+      const { engine } = testEngine(workspace, clock);
+      seedFakeAgents(ws.fakeDir, {
+        debug: [
+          {
+            status: 'failed',
+            summary: 'timed out mid-fix',
+            failure: { kind: 'timeout', detail: 'killed after 45 minutes' },
+            result: { changes_made: ['src/widget.ts'], recommended_next_action: 'resume the fix on retry' },
+          },
+        ],
+      });
+      const task = agentTaskFixture({ runId: 'run-0108', role: 'debug', repo: 'ui-kit', cwd: workspace.paths.repoDir('ui-kit') });
+      const record = await runAgent({
+        engine,
+        runner: createFakeAgentRunner({ paths: workspace.paths, now: clock }),
+        task,
+        previousModel: null,
+      });
+
+      expect(record.outcome.status).toBe('failed');
+      const evidence = parse(readFileSync(join(ws.janusDir, record.evidencePath), 'utf8')) as Record<string, unknown>;
+      expect(evidence['failure']).toEqual({ kind: 'timeout', detail: 'killed after 45 minutes' });
+      expect((evidence['result'] as Record<string, unknown>)['changes_made']).toEqual(['src/widget.ts']);
+      expect((evidence['result'] as Record<string, unknown>)['recommended_next_action']).toBe('resume the fix on retry');
     } finally {
       workspace.release();
     }

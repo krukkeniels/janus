@@ -1,13 +1,18 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import type { AgentTask } from '../../src/agents/types.js';
 import { createFakeAgentRunner, readFakeAgents, seedFakeAgents } from '../../src/providers/fake/agent-runner.js';
+import type { AgentRunner } from '../../src/providers/types.js';
 import { runGit } from '../../src/git/run.js';
 import { workspacePaths } from '../../src/workspace/layout.js';
-import { agentTaskFixture } from '../helpers/agent-fixtures.js';
+import { agentTaskFixture, promptFixture } from '../helpers/agent-fixtures.js';
 import { tempDir } from '../helpers/git-fixtures.js';
 
 const clock = () => new Date('2026-09-20T10:00:00.000Z');
+
+/** `runAgent` renders the §18.2 prompt and hands it to the runner; these tests drive the runner directly. */
+const run = async (runner: AgentRunner, task: AgentTask) => runner.run(task, promptFixture(task));
 
 /** A workspace with one real git repository holding one committed file, so `git apply` has something to patch. */
 async function workspace() {
@@ -44,11 +49,11 @@ describe('createFakeAgentRunner', () => {
     });
     const runner = createFakeAgentRunner({ paths, now: clock });
 
-    const first = await runner.run(agentTaskFixture({ runId: 'run-0001', role: 'implementation', repo: 'ui-kit', attempt: 1 }));
+    const first = await run(runner, agentTaskFixture({ runId: 'run-0001', role: 'implementation', repo: 'ui-kit', attempt: 1 }));
     expect(first.status).toBe('failed');
     expect(first.summary).toBe('first attempt broke the build');
 
-    const second = await runner.run(agentTaskFixture({ runId: 'run-0002', role: 'implementation', repo: 'ui-kit', attempt: 2 }));
+    const second = await run(runner, agentTaskFixture({ runId: 'run-0002', role: 'implementation', repo: 'ui-kit', attempt: 2 }));
     expect(second.status).toBe('completed');
     expect(second.summary).toBe('second attempt is green');
   });
@@ -58,11 +63,11 @@ describe('createFakeAgentRunner', () => {
     seedFakeAgents(paths.fakeDir, { review: [{ status: 'blocked', summary: 'needs the plan' }] });
     const runner = createFakeAgentRunner({ paths, now: clock });
 
-    expect((await runner.run(agentTaskFixture({ runId: 'r1', role: 'review', repo: null, attempt: 1 }))).status).toBe('blocked');
-    const past = await runner.run(agentTaskFixture({ runId: 'r2', role: 'review', repo: null, attempt: 2 }));
+    expect((await run(runner, agentTaskFixture({ runId: 'r1', role: 'review', repo: null, attempt: 1 }))).status).toBe('blocked');
+    const past = await run(runner, agentTaskFixture({ runId: 'r2', role: 'review', repo: null, attempt: 2 }));
     expect(past.status).toBe('completed');
     expect(past.summary).toBe('fake review agent attempt 2 completed');
-    const other = await runner.run(agentTaskFixture({ runId: 'r3', role: 'planning', repo: null, attempt: 1 }));
+    const other = await run(runner, agentTaskFixture({ runId: 'r3', role: 'planning', repo: null, attempt: 1 }));
     expect(other.summary).toBe('fake planning agent attempt 1 completed');
   });
 
@@ -72,25 +77,54 @@ describe('createFakeAgentRunner', () => {
     seedFakeAgents(paths.fakeDir, { implementation: [{ status: 'completed', summary: 'bumped', patch: PATCH }] });
     const runner = createFakeAgentRunner({ paths, now: clock });
 
-    await runner.run(agentTaskFixture({ runId: 'run-0010', role: 'implementation', repo: 'ui-kit', attempt: 1 }));
+    await run(runner, agentTaskFixture({ runId: 'run-0010', role: 'implementation', repo: 'ui-kit', attempt: 1 }));
     expect(readFileSync(join(repo, 'version.txt'), 'utf8')).toBe('sixteen\n');
     expect(await runGit(repo, ['rev-parse', 'HEAD'])).toBe(before);
     expect(await runGit(repo, ['status', '--porcelain'])).toContain('version.txt');
     expect(readFakeAgents(paths.fakeDir).calls[0]?.applied_patch).toBe(true);
   });
 
-  it('writes prepared reports under .janus/reports/<run-id>/ for a report-writing role', async () => {
+  it('writes prepared reports into the task cwd the sandbox plan chose, creating nested parents', async () => {
     const { paths } = await workspace();
     seedFakeAgents(paths.fakeDir, {
-      discovery: [{ status: 'completed', summary: 'surveyed', reports: { 'deps-and-build.md': '# Deps\n\nAngular 15.2.10\n' } }],
+      discovery: [
+        {
+          status: 'completed',
+          summary: 'surveyed',
+          reports: { 'deps-and-build.md': '# Deps\n\nAngular 15.2.10\n', 'sub/detail.md': 'nested\n' },
+        },
+      ],
     });
     const runner = createFakeAgentRunner({ paths, now: clock });
 
-    await runner.run(agentTaskFixture({ runId: 'run-0011', role: 'discovery', repo: null, attempt: 1 }));
-    const path = join(paths.janusDir, 'reports', 'run-0011', 'deps-and-build.md');
-    expect(existsSync(path)).toBe(true);
-    expect(readFileSync(path, 'utf8')).toContain('Angular 15.2.10');
-    expect(readFakeAgents(paths.fakeDir).calls[0]?.wrote_reports).toEqual(['deps-and-build.md']);
+    // What `planSandbox` gives the report-writing class; the fake must not re-derive it (`sandbox.ts:76`).
+    const cwd = join(paths.janusDir, 'reports', 'run-0011');
+    await run(runner, agentTaskFixture({ runId: 'run-0011', role: 'discovery', repo: null, attempt: 1, cwd, writableRoots: [cwd] }));
+    expect(readFileSync(join(cwd, 'deps-and-build.md'), 'utf8')).toContain('Angular 15.2.10');
+    expect(existsSync(join(cwd, 'sub', 'detail.md'))).toBe(true);
+    expect(readFakeAgents(paths.fakeDir).calls[0]?.wrote_reports).toEqual(['deps-and-build.md', 'sub/detail.md']);
+  });
+
+  it('refuses a patch scripted for a role the real sandbox gives no writable repo (§3.3)', async () => {
+    const { paths } = await workspace();
+    seedFakeAgents(paths.fakeDir, { review: [{ status: 'completed', summary: 'reviewed and, impossibly, edited', patch: PATCH }] });
+    const runner = createFakeAgentRunner({ paths, now: clock });
+    await expect(run(runner, agentTaskFixture({ runId: 'run-0017', role: 'review', repo: 'ui-kit', attempt: 1 }))).rejects.toThrow(
+      'review is a read-only role',
+    );
+    expect(readFileSync(join(paths.repoDir('ui-kit'), 'version.txt'), 'utf8')).toBe('fifteen\n');
+  });
+
+  it('treats an explicit "result": null beside a failure as no answer at all', async () => {
+    const { paths } = await workspace();
+    // Hand-written `fake/agents.json` shape: `null` is not `undefined`, and must not synthesize a full result.
+    seedFakeAgents(paths.fakeDir, {
+      debug: [{ status: 'failed', summary: 'died', failure: { kind: 'nonzero_exit', detail: 'exited 2' }, result: null }],
+    });
+    const runner = createFakeAgentRunner({ paths, now: clock });
+    const outcome = await run(runner, agentTaskFixture({ runId: 'run-0018', role: 'debug', repo: 'ui-kit', attempt: 1 }));
+    expect(outcome.result).toBeNull();
+    expect(outcome.failure?.kind).toBe('nonzero_exit');
   });
 
   it('returns a prepared §18.3 result, merged over the generated base', async () => {
@@ -108,7 +142,7 @@ describe('createFakeAgentRunner', () => {
     });
     const runner = createFakeAgentRunner({ paths, now: clock });
 
-    const outcome = await runner.run(agentTaskFixture({ runId: 'run-0012', role: 'implementation', repo: 'ui-kit', attempt: 1 }));
+    const outcome = await run(runner, agentTaskFixture({ runId: 'run-0012', role: 'implementation', repo: 'ui-kit', attempt: 1 }));
     expect(outcome.result?.expected_temporary_failure).toBe(true);
     expect(outcome.result?.predicted_failures).toEqual(['ButtonComponent > renders']);
     expect(outcome.result?.summary).toBe('coupled red expected');
@@ -122,7 +156,7 @@ describe('createFakeAgentRunner', () => {
       debug: [{ status: 'failed', summary: 'killed', failure: { kind: 'timeout', detail: 'killed after 45 minutes' } }],
     });
     const runner = createFakeAgentRunner({ paths, now: clock });
-    const outcome = await runner.run(agentTaskFixture({ runId: 'run-0013', role: 'debug', repo: 'ui-kit', attempt: 1 }));
+    const outcome = await run(runner, agentTaskFixture({ runId: 'run-0013', role: 'debug', repo: 'ui-kit', attempt: 1 }));
     expect(outcome.status).toBe('failed');
     expect(outcome.result).toBeNull();
     expect(outcome.failure).toEqual({ kind: 'timeout', detail: 'killed after 45 minutes' });
@@ -142,7 +176,7 @@ describe('createFakeAgentRunner', () => {
       ],
     });
     const runner = createFakeAgentRunner({ paths, now: clock });
-    const outcome = await runner.run(agentTaskFixture({ runId: 'run-0016', role: 'debug', repo: 'ui-kit', attempt: 1 }));
+    const outcome = await run(runner, agentTaskFixture({ runId: 'run-0016', role: 'debug', repo: 'ui-kit', attempt: 1 }));
     expect(outcome.status).toBe('failed');
     expect(outcome.failure).toEqual({ kind: 'timeout', detail: 'killed after 45 minutes' });
     expect(outcome.result?.changes_made).toEqual(['src/widget.ts']);
@@ -156,7 +190,7 @@ describe('createFakeAgentRunner', () => {
     });
     const runner = createFakeAgentRunner({ paths, now: clock });
     await expect(
-      runner.run(agentTaskFixture({ runId: 'run-0014', role: 'implementation', repo: 'ui-kit', attempt: 1 })),
+      run(runner, agentTaskFixture({ runId: 'run-0014', role: 'implementation', repo: 'ui-kit', attempt: 1 })),
     ).rejects.toThrow('fake agent script for role implementation attempt 1 is not a valid implementation result');
   });
 
@@ -168,9 +202,9 @@ describe('createFakeAgentRunner', () => {
         { status: 'completed', summary: 'fixed' },
       ],
     });
-    await createFakeAgentRunner({ paths, now: clock }).run(agentTaskFixture({ runId: 'a', role: 'debug', repo: 'ui-kit', attempt: 1 }));
+    await run(createFakeAgentRunner({ paths, now: clock }), agentTaskFixture({ runId: 'a', role: 'debug', repo: 'ui-kit', attempt: 1 }));
     const laterProcess = createFakeAgentRunner({ paths, now: clock });
-    const second = await laterProcess.run(agentTaskFixture({ runId: 'b', role: 'debug', repo: 'ui-kit', attempt: 2 }));
+    const second = await run(laterProcess, agentTaskFixture({ runId: 'b', role: 'debug', repo: 'ui-kit', attempt: 2 }));
     expect(second.summary).toBe('fixed');
     expect(readFakeAgents(paths.fakeDir).calls.map((call) => call.run_id)).toEqual(['a', 'b']);
     expect(readFakeAgents(paths.fakeDir).calls.map((call) => call.attempt)).toEqual([1, 2]);

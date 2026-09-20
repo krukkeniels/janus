@@ -1,11 +1,11 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { JanusConfig } from '../../config/config-schema.js';
 import type { AgentRunner } from '../../providers/types.js';
 import type { WorkspacePaths } from '../../workspace/layout.js';
 import { validateAgentResult } from '../output-schema.js';
-import { renderContextPackage, truncateUtf8Tail } from '../render.js';
+import { truncateUtf8Tail } from '../render.js';
+import type { RenderedPrompt } from '../render.js';
 import type { AgentOutcome, AgentRunFailure, AgentTask } from '../types.js';
 import { outcomeSummary } from '../types.js';
 import { parseCodexUsage } from './jsonl.js';
@@ -14,7 +14,6 @@ import type { CodexSpawn } from './spawn.js';
 
 export interface CodexAdapterInput {
   paths: WorkspacePaths;
-  config: JanusConfig;
   /** The process seam. Tests replace it with a replay of a recorded run; production uses `spawnCodex`. */
   spawn?: CodexSpawn;
   /** The binary name; overridable for the opt-in real-Codex smoke test. */
@@ -112,11 +111,9 @@ export function createCodexAgentRunner(input: CodexAdapterInput): AgentRunner {
 
   return {
     name: 'codex',
-    run: async (task: AgentTask): Promise<AgentOutcome> => {
-      const rendered = renderContextPackage(task.context, {
-        maxContextBytes: input.config.agents.max_context_bytes,
-        maxInlineDiffBytes: input.config.agents.max_inline_diff_bytes,
-      });
+    // `prompt` is rendered once by `runAgent`, for every runner (§18.2); the adapter never renders its own, so a
+    // fake-driven scenario and a Codex-driven one hit the same size limit and record the same `prompt_bytes`.
+    run: async (task: AgentTask, prompt: RenderedPrompt): Promise<AgentOutcome> => {
       const scratch = mkdtempSync(join(tmpdir(), `janus-codex-${task.runId}-`));
       try {
         const schemaPath = join(scratch, 'schema.json');
@@ -129,7 +126,7 @@ export function createCodexAgentRunner(input: CodexAdapterInput): AgentRunner {
           args: buildCodexArgs(task, { schemaPath, lastMessagePath }),
           cwd: task.cwd,
           env: { ...currentEnv(), ...task.env },
-          stdin: rendered.text,
+          stdin: prompt.text,
           timeoutMs: task.timeoutMinutes * 60_000,
         });
 
@@ -192,8 +189,6 @@ export function createCodexAgentRunner(input: CodexAdapterInput): AgentRunner {
           signal: result.signal,
           timedOut: result.timedOut,
           runnerVersion,
-          promptBytes: rendered.bytes,
-          truncations: rendered.truncations,
           jsonlTruncated: result.jsonlTruncated,
           stderrTruncated: result.stderrTruncated,
         };

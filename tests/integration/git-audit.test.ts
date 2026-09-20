@@ -4,10 +4,13 @@ import { describe, expect, it } from 'vitest';
 import { commitAll, initRepo } from '../../src/git/ops.js';
 import { runGit } from '../../src/git/run.js';
 import type { AgentRunner } from '../../src/providers/types.js';
-import { agentTaskFixture, stubOutcome } from '../helpers/agent-fixtures.js';
+import { agentTaskFixture, promptFixture, stubOutcome } from '../helpers/agent-fixtures.js';
 import { tempDir } from '../helpers/git-fixtures.js';
 import { auditAgentRunner, captureRefLogs, diffRefLogs, formatGitWrites } from './harness/git-audit.js';
 import type { AgentGitWrite } from './harness/git-audit.js';
+
+/** `runAgent` renders the prompt and hands it to the runner; these tests drive the audited runner directly. */
+const runWith = async (runner: AgentRunner, task: ReturnType<typeof agentTaskFixture>) => runner.run(task, promptFixture(task));
 
 async function repo(name: string): Promise<string> {
   const dir = join(tempDir(`janus-audit-${name}-`), name);
@@ -83,7 +86,7 @@ describe('auditAgentRunner', () => {
     const dir = await repo('clean');
     const sink: AgentGitWrite[] = [];
     const runner = auditAgentRunner(quiet, [{ label: 'repos/clean', dir }], sink);
-    const outcome = await runner.run(agentTaskFixture({ runId: 'run-0001', role: 'implementation', repo: 'clean' }));
+    const outcome = await runWith(runner, agentTaskFixture({ runId: 'run-0001', role: 'implementation', repo: 'clean' }));
     expect(outcome.status).toBe('completed');
     expect(sink).toEqual([]);
   });
@@ -99,7 +102,7 @@ describe('auditAgentRunner', () => {
       },
     };
     const runner = auditAgentRunner(committing, [{ label: 'repos/naughty', dir }], sink);
-    await runner.run(agentTaskFixture({ runId: 'run-0007', role: 'implementation', repo: 'naughty' }));
+    await runWith(runner, agentTaskFixture({ runId: 'run-0007', role: 'implementation', repo: 'naughty' }));
 
     expect(sink.length).toBeGreaterThan(0);
     expect(sink.every((write) => write.runId === 'run-0007' && write.role === 'implementation')).toBe(true);
@@ -129,7 +132,7 @@ describe('auditAgentRunner', () => {
     const sink: AgentGitWrite[] = [];
     const runner = auditAgentRunner(gitAgent(dir, ['tag', '-a', 'v1', '-m', 'v1']), [{ label: 'repos/tag', dir }], sink);
 
-    await runner.run(agentTaskFixture({ runId: 'run-0010', role: 'implementation', repo: 'tag-create' }));
+    await runWith(runner, agentTaskFixture({ runId: 'run-0010', role: 'implementation', repo: 'tag-create' }));
 
     expect(sink.map((write) => `${write.label} ${write.ref}`)).toContain('repos/tag refs/tags/v1');
     expect(sink.every((write) => write.runId === 'run-0010')).toBe(true);
@@ -142,7 +145,7 @@ describe('auditAgentRunner', () => {
     const sink: AgentGitWrite[] = [];
     const runner = auditAgentRunner(gitAgent(dir, ['tag', '-f', 'v1', 'HEAD']), [{ label: 'repos/tag', dir }], sink);
 
-    await runner.run(agentTaskFixture({ runId: 'run-0011', role: 'implementation', repo: 'tag-move' }));
+    await runWith(runner, agentTaskFixture({ runId: 'run-0011', role: 'implementation', repo: 'tag-move' }));
 
     expect(sink.map((write) => `${write.label} ${write.ref} ${write.sha}`)).toEqual([`repos/tag refs/tags/v1 ${moved}`]);
   });
@@ -153,7 +156,7 @@ describe('auditAgentRunner', () => {
     const sink: AgentGitWrite[] = [];
     const runner = auditAgentRunner(gitAgent(dir, ['tag', '-d', 'v1']), [{ label: 'repos/tag', dir }], sink);
 
-    await runner.run(agentTaskFixture({ runId: 'run-0012', role: 'implementation', repo: 'tag-delete' }));
+    await runWith(runner, agentTaskFixture({ runId: 'run-0012', role: 'implementation', repo: 'tag-delete' }));
 
     expect(sink).toEqual([
       { label: 'repos/tag', ref: 'refs/tags/v1', sha: '', subject: 'ref deleted', runId: 'run-0012', role: 'implementation' },
@@ -174,7 +177,7 @@ describe('auditAgentRunner', () => {
       [{ label: 'repos/throwing', dir }],
       sink,
     );
-    await expect(runner.run(agentTaskFixture({ runId: 'run-0008', role: 'debug', repo: 'throwing' }))).rejects.toThrow('agent crashed');
+    await expect(runWith(runner, agentTaskFixture({ runId: 'run-0008', role: 'debug', repo: 'throwing' }))).rejects.toThrow('agent crashed');
     expect(sink.length).toBeGreaterThan(0);
   });
 });

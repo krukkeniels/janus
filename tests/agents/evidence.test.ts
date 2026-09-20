@@ -4,7 +4,7 @@ import { parse } from 'yaml';
 import { describe, expect, it } from 'vitest';
 import { agentEvidencePath, buildAgentEvidence, writeAgentEvidence } from '../../src/agents/evidence.js';
 import { workspacePaths } from '../../src/workspace/layout.js';
-import { agentTaskFixture, resultFixture } from '../helpers/agent-fixtures.js';
+import { agentTaskFixture, promptFixture, resultFixture } from '../helpers/agent-fixtures.js';
 import { tempDir } from '../helpers/git-fixtures.js';
 
 const TOKEN = 'bbt-super-secret-token-value';
@@ -39,10 +39,14 @@ function evidenceFor(paths = workspacePaths(tempDir('janus-evidence-'))) {
       signal: null,
       timedOut: false,
       runnerVersion: 'codex-cli 0.48.0',
-      promptBytes: 91_204,
-      truncations: ['... [janus truncated the inline diff: 12 of 72012 bytes omitted at agents.max_inline_diff_bytes] ...'],
       jsonlTruncated: true,
       stderrTruncated: false,
+    },
+    // `runAgent` renders once and passes it, so `prompt_bytes`/`truncations` come from the prompt, not the runner.
+    prompt: {
+      ...promptFixture(task),
+      bytes: 91_204,
+      truncations: ['... [janus truncated the inline diff: 12 of 72012 bytes omitted at agents.max_inline_diff_bytes] ...'],
     },
   });
   return { paths, task, evidence };
@@ -72,6 +76,8 @@ describe('agent evidence', () => {
     expect(written['timed_out']).toBe(false);
     expect(written['tokens']).toEqual({ input: 184_320, cached_input: 172_032, output: 9_184, reasoning: 7_040, total: 193_504 });
     expect((written['result'] as Record<string, unknown>)['summary']).toBe('raised @angular/core to 16.2.12');
+    expect(written['prompt_bytes']).toBe(91_204);
+    expect(written['truncations']).toHaveLength(1);
     expect(written['jsonl_truncated']).toBe(true);
     expect(written['stderr_truncated']).toBe(false);
   });

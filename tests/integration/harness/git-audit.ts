@@ -2,7 +2,7 @@ import type { AgentOutcome, AgentTask } from '../../../src/agents/types.js';
 import { tryRevParse } from '../../../src/git/ops.js';
 import { listRefShas, reflog, reflogExists } from '../../../src/git/tree.js';
 import type { RefSha } from '../../../src/git/tree.js';
-import type { AgentRunner } from '../../../src/providers/types.js';
+import type { AgentRunner, RenderedPrompt } from '../../../src/providers/types.js';
 
 /** One audited git repository: a label used in failure messages and the directory git runs in. */
 export interface AuditTarget {
@@ -144,10 +144,10 @@ export function auditAgentRunner(
 ): AgentRunner {
   return {
     name: inner.name,
-    run: async (task: AgentTask): Promise<AgentOutcome> => {
+    run: async (task: AgentTask, prompt: RenderedPrompt): Promise<AgentOutcome> => {
       const before = await captureRefLogs(targets);
       try {
-        return await inner.run(task);
+        return await inner.run(task, prompt);
       } finally {
         for (const write of diffRefLogs(before, await captureRefLogs(targets))) {
           sink.push({ ...write, runId: task.runId, role: task.role });

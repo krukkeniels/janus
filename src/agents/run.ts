@@ -3,6 +3,7 @@ import type { Engine } from '../engine/engine.js';
 import type { AgentRunner } from '../providers/types.js';
 import { buildAgentEvidence, writeAgentEvidence } from './evidence.js';
 import { isModelSwitch } from './models.js';
+import { renderContextPackage } from './render.js';
 import type { AgentOutcome, AgentTask, ResolvedModel } from './types.js';
 
 export interface RunAgentInput {
@@ -24,7 +25,9 @@ export interface AgentRunRecord {
  * `evidence/agents/<run-id>.yaml`, then `agent.finished` (spec §18.4, §18.6, §27).
  *
  * Every runner goes through here, so the fake and the Codex adapter leave identical evidence and identical events —
- * which is what makes a harness scenario on the fake evidence for the real one.
+ * which is what makes a harness scenario on the fake evidence for the real one. That is why the §18.2 prompt is
+ * rendered *here* rather than inside the Codex adapter: `ContextTooLargeError` and the generated-file guard fire on
+ * the fake path too, and `prompt_bytes`/`truncations` are this function's numbers, not a runner's.
  *
  * §7 rule 3: `execution.in_flight.agent_run_id` and `.repo` are set before the run and cleared after it. If the
  * runner throws they stay set on purpose, so the next `janus run` recovers the interrupted agent. The caller sets
@@ -82,12 +85,21 @@ export async function runAgent(input: RunAgentInput): Promise<AgentRunRecord> {
     mkdirSync(task.cwd, { recursive: true });
   }
 
-  const outcome = await input.runner.run(task);
+  // Rendered once, for whichever runner. `ContextTooLargeError` and the §18.2 generated-file guard therefore
+  // reach every scenario, including the scripted ones, and the evidence file records the same prompt size the
+  // real adapter would have sent. The Codex adapter pipes `prompt.text` to the child's stdin; the fake ignores it.
+  const { config } = engine.workspace;
+  const prompt = renderContextPackage(task.context, {
+    maxContextBytes: config.agents.max_context_bytes,
+    maxInlineDiffBytes: config.agents.max_inline_diff_bytes,
+  });
+
+  const outcome = await input.runner.run(task, prompt);
   const finishedAt = engine.now().toISOString();
 
   const evidencePath = writeAgentEvidence(
     engine.workspace.paths,
-    buildAgentEvidence({ task, paths: engine.workspace.paths, runner: input.runner.name, startedAt, finishedAt, outcome }),
+    buildAgentEvidence({ task, paths: engine.workspace.paths, runner: input.runner.name, startedAt, finishedAt, outcome, prompt }),
   );
 
   engine.emit({

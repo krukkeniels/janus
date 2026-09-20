@@ -39,7 +39,7 @@ export function createProviders(input: CreateProvidersInput): Providers {
   }
   const agent =
     workflow.agent_runner === 'codex'
-      ? createCodexAgentRunner({ paths: input.paths, config: input.config })
+      ? createCodexAgentRunner({ paths: input.paths })
       : createFakeAgentRunner({ paths: input.paths, now: input.now });
   return {
     agent,

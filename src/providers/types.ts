@@ -1,16 +1,21 @@
+import type { RenderedPrompt } from '../agents/render.js';
 import type { AgentOutcome, AgentTask } from '../agents/types.js';
 
 /**
  * §3.2 `AgentRunner`: `run(task: AgentTask): Promise<AgentResult>`. Implementations: the Codex adapter (§18.4)
  * and the scripted fake (§18.5). A runner executes one task and reports what happened; it writes no telemetry and
  * no evidence — `runAgent` in `src/agents/run.ts` does that around every runner.
+ *
+ * The §18.2 prompt is rendered by `runAgent` and passed in, not rendered by the runner: that is what makes the
+ * context-size limit, the generated-file guard and the recorded `prompt_bytes`/`truncations` identical on the
+ * fake path and the Codex path. A runner that does not need the text (the fake) may simply ignore the parameter.
  */
 export interface AgentRunner {
   readonly name: 'codex' | 'fake';
-  run(task: AgentTask): Promise<AgentOutcome>;
+  run(task: AgentTask, prompt: RenderedPrompt): Promise<AgentOutcome>;
 }
 
-export type { AgentOutcome, AgentTask };
+export type { AgentOutcome, AgentTask, RenderedPrompt };
 
 /**
  * §3.2 `CiProvider`.

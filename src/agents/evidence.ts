@@ -6,6 +6,7 @@ import { AGENTS_EVIDENCE_DIR } from '../state/files.js';
 import type { AgentTokenUsage } from '../telemetry/events.js';
 import type { WorkspacePaths } from '../workspace/layout.js';
 import type { AgentResult } from './output-schema.js';
+import type { RenderedPrompt } from './render.js';
 import type { SandboxClass } from './roles.js';
 import type { AgentOutcome, AgentRunFailure, AgentTask } from './types.js';
 
@@ -39,7 +40,9 @@ export interface AgentEvidence {
   profile: string;
   experiment_id: string | null;
   prompt_version: string;
-  prompt_bytes: number | null;
+  /** Bytes of the §18.2 prompt `runAgent` rendered. Runner-independent: the fake records the same number. */
+  prompt_bytes: number;
+  /** Reductions the §18.2 renderer applied, one line each. Empty when nothing was truncated. */
   truncations: string[];
   /** True when the `--json` event stream or stderr was capped mid-run, so this evidence may be missing data even
    * though the run otherwise looks complete. */
@@ -66,6 +69,8 @@ export interface BuildAgentEvidenceInput {
   startedAt: string;
   finishedAt: string;
   outcome: AgentOutcome;
+  /** The prompt `runAgent` rendered and handed to the runner. */
+  prompt: RenderedPrompt;
 }
 
 export function buildAgentEvidence(input: BuildAgentEvidenceInput): AgentEvidence {
@@ -93,8 +98,8 @@ export function buildAgentEvidence(input: BuildAgentEvidenceInput): AgentEvidenc
     profile: task.profile,
     experiment_id: task.experimentId,
     prompt_version: task.promptVersion,
-    prompt_bytes: outcome.promptBytes,
-    truncations: outcome.truncations,
+    prompt_bytes: input.prompt.bytes,
+    truncations: input.prompt.truncations,
     jsonl_truncated: outcome.jsonlTruncated,
     stderr_truncated: outcome.stderrTruncated,
     sandbox: task.sandbox,

@@ -5,7 +5,7 @@ import { ExitCode } from '../../src/cli/exit-codes.js';
 import { commitAll, revParse } from '../../src/git/ops.js';
 import { runGit } from '../../src/git/run.js';
 import { readFakeAgents } from '../../src/providers/fake/agent-runner.js';
-import { agentTaskFixture } from '../helpers/agent-fixtures.js';
+import { agentTaskFixture, promptFixture } from '../helpers/agent-fixtures.js';
 import { createHarness, expectNoAgentGitWrites, expectStatePushed } from './harness/harness.js';
 
 const SPECS = [
@@ -26,7 +26,8 @@ describe('createHarness', () => {
       ['.janus', 'remote:shell', 'remote:ui-kit', 'repos/shell', 'repos/ui-kit', 'state-remote'].sort(),
     );
 
-    const outcome = await harness.providers.agent.run(agentTaskFixture({ runId: 'run-0001', role: 'discovery', repo: 'ui-kit' }));
+    const discovery = agentTaskFixture({ runId: 'run-0001', role: 'discovery', repo: 'ui-kit' });
+    const outcome = await harness.providers.agent.run(discovery, promptFixture(discovery));
     expect(outcome.summary).toBe('scripted discovery');
     expect(readFakeAgents(harness.fakeDir).calls).toHaveLength(1);
     expectNoAgentGitWrites(harness);
