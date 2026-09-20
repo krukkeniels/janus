@@ -14,7 +14,12 @@ export interface DoctorFs {
   exists(path: string): boolean;
   /** **Can throw** (`EACCES`, `ENOSPC`, ...) — same reasoning as `mkdtemp`/`writeText` below. */
   mkdirp(dir: string): void;
-  /** Creates and deletes a probe file in `dir`. Returns null on success, or the error message. Never throws. */
+  /**
+   * Creates and deletes a probe file in `dir`. Returns null on success, or the error message. Never throws —
+   * including when the cleanup delete itself fails (`EPERM`, `EBUSY`, a lingering handle): the write already
+   * succeeded by that point, so a failed cleanup is not evidence the directory is unwritable and is deliberately
+   * swallowed rather than reported as one.
+   */
   probeWritable(dir: string): string | null;
   /**
    * Creates a fresh, uniquely-named directory under `prefix` and returns its path. Unlike the rest of this
@@ -60,7 +65,11 @@ export const nodeFs: DoctorFs = {
     } catch (error) {
       return error instanceof Error ? error.message : String(error);
     } finally {
-      rmSync(probe, { force: true });
+      try {
+        rmSync(probe, { force: true });
+      } catch {
+        // best-effort cleanup only; a failed delete after a successful write is not evidence of unwritability
+      }
     }
   },
   mkdtemp: (prefix) => mkdtempSync(prefix),

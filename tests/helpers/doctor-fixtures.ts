@@ -40,12 +40,15 @@ export function stubHttp(result: Partial<HttpProbeResult>): HttpProbe {
  * `mkdtempError` makes `mkdtemp` throw instead of returning a fake path, and `rmrfError` makes `rmrf` throw, so a
  * check's "the temp filesystem is unwritable" and "cleanup failed" paths can both be exercised without ever
  * touching the real filesystem. `mkdirpError`/`writeTextError` do the same for the scratch-setup calls a
- * workspace-write-style probe makes after `mkdtemp` succeeds.
+ * workspace-write-style probe makes after `mkdtemp` succeeds. `probeWritableThrows` makes `probeWritable` throw
+ * instead of returning an error string — `probeWritable` is documented never to throw, but a check that calls it
+ * must not simply trust that; this option is how a test pins that the check guards the call anyway.
  */
 export function stubFs(
   options: {
     files?: Record<string, string>;
     writableError?: string;
+    probeWritableThrows?: string;
     mkdtempError?: string;
     rmrfError?: string;
     mkdirpError?: string;
@@ -59,7 +62,10 @@ export function stubFs(
     mkdirp: () => {
       if (options.mkdirpError !== undefined) throw new Error(options.mkdirpError);
     },
-    probeWritable: () => options.writableError ?? null,
+    probeWritable: () => {
+      if (options.probeWritableThrows !== undefined) throw new Error(options.probeWritableThrows);
+      return options.writableError ?? null;
+    },
     mkdtemp: (prefix) => {
       if (options.mkdtempError !== undefined) throw new Error(options.mkdtempError);
       return `${prefix}stub`;

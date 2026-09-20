@@ -55,7 +55,61 @@ describe('pnpmStoreCheck', () => {
     });
     const [finding] = await pnpmStoreCheck.run(ctx);
     expect(finding?.status).toBe('fail');
-    expect(finding?.remediation).toContain('pnpm');
+    expect(finding?.detail).toBe('pnpm is not on PATH');
+    expect(finding?.remediation).toContain('agents.pnpm_store: workspace');
+    expect(finding?.remediation).toContain('deduplicated');
+  });
+
+  it('fails with the command\'s stderr when `pnpm store path` exits non-zero', async () => {
+    const ctx = doctorContext({
+      config: globalStore,
+      paths,
+      run: stubRunner([
+        { match: (r) => r.bin === 'pnpm', result: { exitCode: 1, stderr: 'ERR_PNPM_NO_STORE\nno store configured\n' } },
+      ]),
+    });
+    const [finding] = await pnpmStoreCheck.run(ctx);
+    expect(finding?.status).toBe('fail');
+    expect(finding?.detail).toBe('no store configured');
+    expect(finding?.remediation).toContain('agents.pnpm_store: workspace');
+  });
+
+  it('fails when `pnpm store path` exits cleanly but prints no path', async () => {
+    const ctx = doctorContext({
+      config: globalStore,
+      paths,
+      run: stubRunner([{ match: (r) => r.bin === 'pnpm', result: { exitCode: 0, stdout: '   \n' } }]),
+    });
+    const [finding] = await pnpmStoreCheck.run(ctx);
+    expect(finding?.status).toBe('fail');
+    expect(finding?.detail).toBe('pnpm store path exited 0 with no path');
+    expect(finding?.remediation).toContain('agents.pnpm_store: workspace');
+  });
+
+  it('fails gracefully, with a concrete remediation, when probeWritable itself throws', async () => {
+    const ctx = doctorContext({
+      config: workspaceStore,
+      paths,
+      fs: stubFs({ probeWritableThrows: 'EBUSY: resource busy or locked' }),
+    });
+    const [finding] = await pnpmStoreCheck.run(ctx);
+    expect(finding?.status).toBe('fail');
+    expect(finding?.detail).toContain('EBUSY');
+    expect(finding?.remediation).toContain('npm_config_store_dir');
+  });
+
+  it('states the dedup/disk tradeoff when the global store is resolved but not writable', async () => {
+    const ctx = doctorContext({
+      config: globalStore,
+      paths,
+      run: stubRunner([{ match: (r) => r.bin === 'pnpm', result: { stdout: '/home/dev/.local/share/pnpm/store/v10\n' } }]),
+      fs: stubFs({ writableError: 'EACCES: permission denied' }),
+    });
+    const [finding] = await pnpmStoreCheck.run(ctx);
+    expect(finding?.status).toBe('fail');
+    expect(finding?.detail).toContain('EACCES');
+    expect(finding?.remediation).toContain('agents.pnpm_store: workspace');
+    expect(finding?.remediation).toContain('deduplicated');
   });
 
   it('skips outside a workspace, where there is no store to check', async () => {
