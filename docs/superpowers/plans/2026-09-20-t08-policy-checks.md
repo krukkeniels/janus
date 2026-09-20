@@ -50,7 +50,7 @@ Checked on this machine while the plan was written. A step that depends on one s
 | non-ASCII path, **without** `-z` | C-quoted and escaped: `A\t"\303\246\303\270\303\245.txt"` |
 | non-ASCII path, **with** `-z` | raw UTF-8 bytes, unquoted: `A\0æøå.txt\0` |
 | path with a space, without `-z` | **not** quoted (`R100\told name.txt\tnew name.txt`), so the current tab split survives this one case — the non-ASCII case and an embedded newline are what break it |
-| patch section order vs `--name-status` order | identical; both come from the same diff queue. Verified with a four-file diff mixing a delete, a rename of a spaced path, an add and a non-ASCII add. |
+| patch section order vs `--name-status` order | one-to-one for all statuses except `T` (typechange: symlink↔file, or submodule→file), which emits two sections per record. Verified with a four-file diff including a delete, rename of spaced path, add, non-ASCII add, and typechanges. |
 | a newly added **empty** file | still emits a full `diff --git a/x b/x` section (header, no hunks) — so sections and name-status records stay one-to-one |
 | a mode-only change | reported as `M` and emits a section with mode lines and no hunks — again one-to-one |
 | `git diff HEAD -M` header for a quoted path | `diff --git "a/\303\246\303\270\303\245.txt" "b/\303\246\303\270\303\245.txt"` — the header paths are quoted even under no `-z`, which is why Task 3 associates sections to files **by order**, never by parsing the header |
