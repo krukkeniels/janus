@@ -15,36 +15,37 @@ interface ReachabilityInput {
 }
 
 /**
- * Strips a URL's userinfo (`user:pass@`) before the URL is allowed anywhere near a finding. §32 rule 12: a
- * configured provider URL can legitimately embed credentials, and a reachability check's natural instinct is to
- * quote the URL it probed in the detail line — which would leak that credential into a report an operator pastes
- * into chat. The raw, possibly-credentialed URL is still what gets sent to `ctx.http`; only the display copy is
- * redacted. If the URL cannot even be parsed, no fragment of it is used — a fixed placeholder stands in instead,
- * because guessing at redaction on unparseable input is how a credential slips through.
+ * Strips a `scheme://user:pass@` credential out of an arbitrary string, the same shape `GitError` in
+ * `src/git/run.ts` already uses to redact arbitrary git args. §32 rule 12: a configured provider URL can
+ * legitimately embed credentials, and it is not only the URL the check builds itself that can carry one into a
+ * finding — `fetchProbe`'s real `fetch()` call rejects a credentialed URL at Request-construction time, before
+ * any network I/O, with an error message that embeds the whole raw URL verbatim
+ * (`TypeError: Request cannot be constructed from a URL that includes credentials: https://user:pass@host/...`).
+ * That message comes back as `result.error` — a *returned* value, not a thrown one — so a `try/catch` around the
+ * probe call never sees it, and it is the *only* branch a credentialed URL can ever reach (`pass`, `401`, `403`
+ * and the generic non-2xx branches all require a response, which `fetch()` never attempts to get). So this is
+ * applied to every externally-derived string that can reach a finding field: the probed URL itself, `result.error`,
+ * and a caught error's `message` — not just the one label the check happens to build.
  */
-function redactUrl(url: string): string {
-  try {
-    const parsed = new URL(url);
-    parsed.username = '';
-    parsed.password = '';
-    return parsed.toString();
-  } catch {
-    return '<unparseable url>';
-  }
+function redactCredentials(text: string): string {
+  return text.replace(/(:\/\/)[^/@\s]+@/gu, '$1<redacted>@');
 }
 
 /**
  * One authenticated, read-only GET. §32 rule 12: the token reaches the `Authorization` header and nothing else —
- * never the detail, never the remediation, never a log line. Any URL that reaches a finding field goes through
- * `redactUrl` first, so a credential embedded in the configured URL cannot reach one either.
+ * never the detail, never the remediation, never a log line. Every externally-derived string that reaches a
+ * finding field — the probed URL, a probe's `error`, and a caught error's `message` — goes through
+ * `redactCredentials` first, so a credential embedded in the configured URL cannot reach one, however it surfaces.
  *
  * Nothing here may throw past `run()`: DNS failure, a refused connection, a TLS error and a timeout are all the
  * normal shape of "this environment cannot reach the provider", not a bug in janus doctor, so `ctx.http`'s
- * contract (report failure in the result, never throw) is trusted but the URL parsing above is still guarded.
+ * contract (report failure in the result, never throw) is trusted but the call is still guarded — a probe
+ * implementation that violates its own contract must still produce a graceful `fail`, not an exception that
+ * escapes into `runDoctor`'s generic handler.
  */
 async function reachability(input: ReachabilityInput): Promise<DoctorObservation> {
   const { ctx, id, title, system, url, tokenEnv } = input;
-  const safeUrl = redactUrl(url);
+  const safeUrl = redactCredentials(url);
   const token = ctx.env[tokenEnv];
   if (token === undefined || token.trim() === '') {
     return skipped(
@@ -67,7 +68,7 @@ async function reachability(input: ReachabilityInput): Promise<DoctorObservation
       id,
       title,
       status: 'fail',
-      detail: `probing ${system} at ${safeUrl} threw instead of returning a result: ${message}`,
+      detail: `probing ${system} at ${safeUrl} threw instead of returning a result: ${redactCredentials(message)}`,
       remediation: `check the URL in .janus/config.yaml and your network: ${system} is reachable only from the work network (§33)`,
     };
   }
@@ -84,11 +85,16 @@ async function reachability(input: ReachabilityInput): Promise<DoctorObservation
     };
   }
   if (result.status === null) {
+    // `result.error` is externally derived and may itself embed the raw, credentialed URL — most notably
+    // `fetchProbe`'s real `fetch()` rejecting a credentialed URL at Request-construction time with a message that
+    // quotes the whole URL back verbatim. It gets the same redaction as `safeUrl`, not a free pass because it
+    // came from the probe result rather than from the check's own string-building.
+    const safeError = result.error === null ? 'no response' : redactCredentials(result.error);
     return {
       id,
       title,
       status: 'fail',
-      detail: `${system} did not answer at ${safeUrl}: ${result.error ?? 'no response'}`,
+      detail: `${system} did not answer at ${safeUrl}: ${safeError}`,
       remediation: `check the URL in .janus/config.yaml and your network: ${system} is reachable only from the work network (§33)`,
     };
   }
