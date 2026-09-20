@@ -27,11 +27,15 @@ export interface SandboxPlan {
   /**
    * Spec §18.4 as amended by T06 probe R2. Real `codex exec` refuses to start outside a git work tree
    * (`Not inside a trusted directory and --skip-git-repo-check was not specified.`), and §3.3 puts the read-only
-   * class's cwd at the workspace root, which `src/workspace/layout.ts` deliberately does not `git init`. A
-   * read-only run has an **empty** writable-root list, so it cannot write anything wherever it starts, and the
-   * flag's protective purpose — keep a write-capable agent inside a known repository — does not apply to it.
-   * True for the read-only class and for nothing else; the code-writing class starts in a repo and the
-   * report-writing class starts inside `.janus/`, which is itself a git checkout.
+   * class's cwd at the workspace root, which `src/workspace/layout.ts` deliberately does not `git init`. Under the
+   * `read-only` sandbox the run has an **empty** writable-root list and cannot write anything wherever it starts,
+   * so the flag's protective purpose — keep a write-capable agent inside a known repository — does not apply to
+   * it. When `agents.allow_unsandboxed` turns this same role's sandbox into `danger-full-access` (below), the
+   * flag still adds no capability: the git check only decides whether the process starts, and containment for
+   * that configuration comes from the `allow_unsandboxed` gate itself, recorded in every checkpoint and
+   * backstopped by the §31 reflog audit — not from the writable-root list. True for the read-only class and for
+   * nothing else; the code-writing class starts in a repo and the report-writing class starts inside `.janus/`,
+   * which is itself a git checkout.
    */
   skipGitRepoCheck: boolean;
   cwd: string;

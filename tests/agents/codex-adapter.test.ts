@@ -115,12 +115,9 @@ describe('buildCodexArgs', () => {
     expect(args.join(' ')).not.toContain('network_access');
   });
 
-  it('never passes resume or --skip-git-repo-check (§18.4)', () => {
-    for (const t of [task(), task({ role: 'review', sandbox: 'read-only', network: false, writableRoots: [] })]) {
-      const args = buildCodexArgs(t, { schemaPath: '/s.json', lastMessagePath: '/m.json' });
-      expect(args).not.toContain('resume');
-      expect(args).not.toContain('--skip-git-repo-check');
-    }
+  it('never passes resume (§18.4)', () => {
+    const args = buildCodexArgs(task(), { schemaPath: '/s.json', lastMessagePath: '/m.json' });
+    expect(args).not.toContain('resume');
   });
 
   it('passes --skip-git-repo-check for a read-only task and never for a write-capable one (§18.4, T06 probe R2)', () => {
