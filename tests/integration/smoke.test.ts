@@ -9,6 +9,7 @@ import { runGit } from '../../src/git/run.js';
 import { readFakeAgents } from '../../src/providers/fake/agent-runner.js';
 import type { AgentRunner } from '../../src/providers/types.js';
 import { EVIDENCE_DIR } from '../../src/state/files.js';
+import { agentTaskFixture, stubOutcome } from '../helpers/agent-fixtures.js';
 import { createHarness, expectNoAgentGitWrites, expectStatePushed } from './harness/harness.js';
 
 /**
@@ -78,7 +79,7 @@ describe('T04 smoke: init and one checkpoint through the harness', () => {
       name: 'prepare',
       run: async ({ engine, providers }) => {
         engine.markInFlight({ agent_run_id: 'run-0001', repo: 'ui-kit' });
-        const outcome = await providers.agent.run({ runId: 'run-0001', role: 'discovery', repo: 'ui-kit' });
+        const outcome = await providers.agent.run(agentTaskFixture({ runId: 'run-0001', role: 'discovery', repo: 'ui-kit' }));
         const path = join(engine.workspace.paths.janusDir, EVIDENCE_DIR, 'agents', `${outcome.runId}.yaml`);
         mkdirSync(dirname(path), { recursive: true });
         writeFileSync(path, `run_id: ${outcome.runId}\nstatus: ${outcome.status}\nsummary: ${outcome.summary}\n`);
@@ -124,16 +125,16 @@ describe('T04 smoke: init and one checkpoint through the harness', () => {
     let repoDir = '';
     const naughty: AgentRunner = {
       name: 'fake',
-      run: async (request) => {
+      run: async (task) => {
         await commitAll(repoDir, 'feat(ui-kit): agent committed', { allowEmpty: true });
-        return { runId: request.runId, status: 'completed', summary: 'committed, which agents must never do' };
+        return stubOutcome(task, { summary: 'committed, which agents must never do' });
       },
     };
     // The deliberate violation below would otherwise trip the automatic end-of-test §31.29 check.
     const harness = await createHarness(GRAPH, { agentRunner: naughty, expectAgentGitWrites: true });
     repoDir = join(harness.root, 'repos', 'ui-kit');
 
-    await harness.providers.agent.run({ runId: 'run-0042', role: 'implementation', repo: 'ui-kit' });
+    await harness.providers.agent.run(agentTaskFixture({ runId: 'run-0042', role: 'implementation', repo: 'ui-kit' }));
 
     expect(harness.agentGitWrites.length).toBeGreaterThan(0);
     expect(() => expectNoAgentGitWrites(harness)).toThrow(/spec §31.29 violated/);

@@ -1,6 +1,7 @@
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { createFakeAgentRunner, readFakeAgents, seedFakeAgents } from '../../src/providers/fake/agent-runner.js';
+import { agentTaskFixture } from '../helpers/agent-fixtures.js';
 import { tempDir } from '../helpers/git-fixtures.js';
 
 const clock = () => new Date('2026-09-20T10:00:00.000Z');
@@ -16,9 +17,11 @@ describe('createFakeAgentRunner', () => {
     });
     const runner = createFakeAgentRunner({ fakeDir, now: clock });
 
-    const first = await runner.run({ runId: 'run-0001', role: 'implementation', repo: 'ui-kit' });
-    expect(first).toEqual({ runId: 'run-0001', status: 'failed', summary: 'first attempt broke the build' });
-    const second = await runner.run({ runId: 'run-0002', role: 'implementation', repo: 'ui-kit' });
+    const first = await runner.run(agentTaskFixture({ runId: 'run-0001', role: 'implementation', repo: 'ui-kit' }));
+    expect(first.status).toBe('failed');
+    expect(first.summary).toBe('first attempt broke the build');
+    expect(first.result?.summary).toBe('first attempt broke the build');
+    const second = await runner.run(agentTaskFixture({ runId: 'run-0002', role: 'implementation', repo: 'ui-kit' }));
     expect(second.status).toBe('completed');
 
     const store = readFakeAgents(fakeDir);
@@ -33,14 +36,12 @@ describe('createFakeAgentRunner', () => {
     seedFakeAgents(fakeDir, { review: [{ status: 'blocked', summary: 'needs the plan' }] });
     const runner = createFakeAgentRunner({ fakeDir, now: clock });
 
-    expect((await runner.run({ runId: 'r1', role: 'review', repo: null })).status).toBe('blocked');
-    expect(await runner.run({ runId: 'r2', role: 'review', repo: null })).toEqual({
-      runId: 'r2',
-      status: 'completed',
-      summary: 'fake review agent attempt 2 completed',
-    });
+    expect((await runner.run(agentTaskFixture({ runId: 'r1', role: 'review', repo: null }))).status).toBe('blocked');
+    const second = await runner.run(agentTaskFixture({ runId: 'r2', role: 'review', repo: null }));
+    expect(second.status).toBe('completed');
+    expect(second.summary).toBe('fake review agent attempt 2 completed');
     // A different role starts at attempt 1 of its own script.
-    expect((await runner.run({ runId: 'r3', role: 'planning', repo: null })).summary).toBe(
+    expect((await runner.run(agentTaskFixture({ runId: 'r3', role: 'planning', repo: null }))).summary).toBe(
       'fake planning agent attempt 1 completed',
     );
   });
@@ -53,8 +54,8 @@ describe('createFakeAgentRunner', () => {
         { status: 'completed', summary: 'fixed' },
       ],
     });
-    await createFakeAgentRunner({ fakeDir, now: clock }).run({ runId: 'a', role: 'debug', repo: 'shell' });
+    await createFakeAgentRunner({ fakeDir, now: clock }).run(agentTaskFixture({ runId: 'a', role: 'debug', repo: 'shell' }));
     const laterProcess = createFakeAgentRunner({ fakeDir, now: clock });
-    expect((await laterProcess.run({ runId: 'b', role: 'debug', repo: 'shell' })).summary).toBe('fixed');
+    expect((await laterProcess.run(agentTaskFixture({ runId: 'b', role: 'debug', repo: 'shell' }))).summary).toBe('fixed');
   });
 });

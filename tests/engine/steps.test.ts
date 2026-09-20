@@ -4,10 +4,11 @@ import { STEPLESS_STAGES, defaultSteps, placeholderStep, startStep } from '../..
 import type { StepContext } from '../../src/engine/steps.js';
 import type { Providers } from '../../src/providers/types.js';
 import { GOAL_STATUSES } from '../../src/state/state-schema.js';
+import { stubOutcome } from '../helpers/agent-fixtures.js';
 
 // Placeholders never touch the engine, so an empty object is enough here.
 const providers: Providers = {
-  agent: { name: 'fake', run: async (request) => ({ runId: request.runId, status: 'completed', summary: 'unused' }) },
+  agent: { name: 'fake', run: async (task) => stubOutcome(task) },
   ci: { name: 'fake', findBuild: async () => null },
   scm: { name: 'fake', currentUser: async () => 'janus-fake', ensureBranch: async () => undefined },
 };

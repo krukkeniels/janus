@@ -26,10 +26,15 @@ const nonNegativeInt = z.number().int().nonnegative();
 const roleTimeout = (minutes: number) =>
   z.object({ timeout_minutes: positiveInt.default(minutes) }).strict().default({});
 
+/** Spec §18.6: the reasoning efforts a model spec or a ladder entry may name. */
+export const AGENT_EFFORTS = ['minimal', 'low', 'medium', 'high', 'xhigh'] as const;
+
+export type Effort = (typeof AGENT_EFFORTS)[number];
+
 const modelSpecSchema = z
   .object({
     model: z.string().min(1),
-    effort: z.enum(['minimal', 'low', 'medium', 'high', 'xhigh']).default('high'),
+    effort: z.enum(AGENT_EFFORTS).default('high'),
     ladder: z.array(z.string().min(1)).min(1).optional(),
   })
   .strict();

@@ -46,4 +46,4 @@ export function createProviders(input: CreateProvidersInput): Providers {
   };
 }
 
-export type { AgentRunner, AgentRunOutcome, AgentRunRequest, CiProvider, Providers, ScmProvider } from './types.js';
+export type { AgentOutcome, AgentRunner, AgentTask, CiProvider, Providers, ScmProvider } from './types.js';

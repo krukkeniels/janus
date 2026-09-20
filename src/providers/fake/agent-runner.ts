@@ -1,5 +1,7 @@
 import type { AgentRole } from '../../config/config-schema.js';
-import type { AgentRunOutcome, AgentRunRequest, AgentRunner } from '../types.js';
+import type { AgentOutcome, AgentResult, AgentTask } from '../../agents/types.js';
+import { outcomeSummary } from '../../agents/types.js';
+import type { AgentRunner } from '../types.js';
 import { FAKE_AGENTS_FILE, readFakeStore, writeFakeStore } from './store.js';
 
 /**
@@ -9,7 +11,7 @@ import { FAKE_AGENTS_FILE, readFakeStore, writeFakeStore } from './store.js';
  * under `.janus/reports/<run-id>/`, and prepared results validated against the §18.3 output schema.
  */
 export interface FakeAgentScriptEntry {
-  status: AgentRunOutcome['status'];
+  status: AgentResult['status'];
   summary: string;
 }
 
@@ -18,7 +20,7 @@ export interface FakeAgentCall {
   role: AgentRole;
   repo: string | null;
   at: string;
-  status: AgentRunOutcome['status'];
+  status: AgentResult['status'];
 }
 
 /** The contents of `<workspace>/fake/agents.json` (spec §18.5). */
@@ -58,24 +60,48 @@ export interface FakeAgentRunnerInput {
 export function createFakeAgentRunner(input: FakeAgentRunnerInput): AgentRunner {
   return {
     name: 'fake',
-    run: async (request: AgentRunRequest): Promise<AgentRunOutcome> => {
+    run: async (task: AgentTask): Promise<AgentOutcome> => {
       const store = readFakeAgents(input.fakeDir);
-      const attempt = store.calls.filter((call) => call.role === request.role).length;
-      const scripted = store.script[request.role]?.[attempt];
-      const outcome: AgentRunOutcome = {
-        runId: request.runId,
-        status: scripted?.status ?? 'completed',
-        summary: scripted?.summary ?? `fake ${request.role} agent attempt ${attempt + 1} completed`,
+      const attempt = store.calls.filter((call) => call.role === task.role).length;
+      const scripted = store.script[task.role]?.[attempt];
+      const status = scripted?.status ?? 'completed';
+      const summary = scripted?.summary ?? `fake ${task.role} agent attempt ${attempt + 1} completed`;
+      const result: AgentResult = {
+        status,
+        summary,
+        changes_made: [],
+        findings: [],
+        evidence: [],
+        new_tasks: [],
+        expected_temporary_failure: false,
+        predicted_failures: null,
+        plan_change_required: false,
+        architecture_change_required: false,
+        behavior_change_required: false,
+        recommended_next_action: '',
+        handover: { current_state: summary, next_action: '', risks: [] },
       };
       store.calls.push({
-        run_id: request.runId,
-        role: request.role,
-        repo: request.repo,
+        run_id: task.runId,
+        role: task.role,
+        repo: task.repo,
         at: input.now().toISOString(),
-        status: outcome.status,
+        status,
       });
       writeFakeStore(input.fakeDir, FAKE_AGENTS_FILE, store);
-      return outcome;
+      return {
+        runId: task.runId,
+        status,
+        summary: outcomeSummary(result, null),
+        result,
+        failure: null,
+        tokens: null,
+        durationMs: 0,
+        exitCode: 0,
+        signal: null,
+        timedOut: false,
+        runnerVersion: null,
+      };
     },
   };
 }

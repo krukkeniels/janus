@@ -1,37 +1,16 @@
-import type { AgentRole } from '../config/config-schema.js';
+import type { AgentOutcome, AgentTask } from '../agents/types.js';
 
 /**
- * What the engine needs to start one agent run.
- *
- * T05 replaces this with the real §18.1 `AgentTask` (class, cwd, writable roots, network, timeout, the §18.2
- * context package, and the per-role output schema). Until then it carries only the three fields the engine
- * already records in `execution.in_flight` (§6) and in the `agent.finished` telemetry event (§27).
+ * §3.2 `AgentRunner`: `run(task: AgentTask): Promise<AgentResult>`. Implementations: the Codex adapter (§18.4)
+ * and the scripted fake (§18.5). A runner executes one task and reports what happened; it writes no telemetry and
+ * no evidence — `runAgent` in `src/agents/run.ts` does that around every runner.
  */
-export interface AgentRunRequest {
-  /** `execution.in_flight.agent_run_id`, and the basename of `evidence/agents/<run-id>.yaml`. */
-  runId: string;
-  role: AgentRole;
-  /** The repo the run is assigned to, or null for workspace-level roles. */
-  repo: string | null;
-}
-
-/**
- * What one agent run answers.
- *
- * T05 replaces this with the validated §18.3 output contract (`changes_made`, `findings`, `evidence`,
- * `new_tasks`, `predicted_failures`, `handover`, ...). `status` already uses the §18.3 vocabulary.
- */
-export interface AgentRunOutcome {
-  runId: string;
-  status: 'completed' | 'blocked' | 'failed';
-  summary: string;
-}
-
-/** §3.2 `AgentRunner`. Real implementation: the Codex adapter (§18.4), which lands in T05. */
 export interface AgentRunner {
   readonly name: 'codex' | 'fake';
-  run(request: AgentRunRequest): Promise<AgentRunOutcome>;
+  run(task: AgentTask): Promise<AgentOutcome>;
 }
+
+export type { AgentOutcome, AgentTask };
 
 /**
  * §3.2 `CiProvider`.
