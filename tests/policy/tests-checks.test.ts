@@ -8,6 +8,7 @@ import {
   testCountCheck,
   testFileRemovalCheck,
 } from '../../src/policy/checks/tests.js';
+import type { DiffAnalysis, DiffFile } from '../../src/policy/diff.js';
 import { policyContext } from '../helpers/policy-fixtures.js';
 
 describe('isTestFile', () => {
@@ -53,7 +54,48 @@ describe('forbiddenTestPatternsCheck', () => {
 
   it('flags a forbidden pattern added outside a test file too', async () => {
     const ctx = policyContext({ files: [{ path: 'karma.conf.js', added: ['  // fdescribe( left behind'] }] });
-    expect(await forbiddenTestPatternsCheck.run(ctx)).toHaveLength(1);
+    const findings = await forbiddenTestPatternsCheck.run(ctx);
+    expect(findings).toHaveLength(1);
+    expect(findings?.[0]?.path).toBe('karma.conf.js');
+    expect(findings?.[0]?.detail).toContain('fdescribe(');
+  });
+
+  it('ignores a forbidden pattern already at HEAD and unchanged by the diff', async () => {
+    // Built by hand rather than through the `diffFile` helper, because the hazard under test is specifically
+    // about *unchanged context lines*: `xit('legacy', ...)` sits in the hunk as plain (space-prefixed) context,
+    // never entering `hunk.added`, while an unrelated line is genuinely added below it. If the check ever
+    // widened its scan from `addedLines(file)` to the raw section text, this `xit(` would suddenly match.
+    const file: DiffFile = {
+      status: 'M',
+      path: 'a.spec.ts',
+      previousPath: null,
+      binary: false,
+      generated: false,
+      hunks: [
+        {
+          oldStart: 1,
+          newStart: 1,
+          added: [{ text: "it('new', () => {});", line: 2 }],
+          removed: [],
+        },
+      ],
+      added: 1,
+      removed: 0,
+      section: [
+        'diff --git a/a.spec.ts b/a.spec.ts',
+        '@@ -1,2 +1,3 @@',
+        " xit('legacy', () => {});",
+        "+it('new', () => {});",
+        " describe('suite', () => {});",
+      ].join('\n'),
+    };
+    const analysis: DiffAnalysis = {
+      files: [file],
+      patch: file.section,
+      totals: { changedFiles: 1, addedLines: 1, removedLines: 0 },
+    };
+    const ctx = policyContext({ analysis });
+    expect(await forbiddenTestPatternsCheck.run(ctx)).toEqual([]);
   });
 
   it('flags a tautological expectation', async () => {
@@ -104,6 +146,10 @@ describe('isTautologicalExpectation', () => {
     expect(isTautologicalExpectation('expect(a).toBe(b)')).toBeNull();
     expect(isTautologicalExpectation('const x = 1;')).toBeNull();
   });
+
+  it('finds a tautology padded with internal whitespace', () => {
+    expect(isTautologicalExpectation('expect(a).toBe(  a  )')).toBe('expect(a).toBe(  a  )');
+  });
 });
 
 describe('testFileRemovalCheck', () => {
@@ -153,6 +199,19 @@ describe('countTestDeclarations', () => {
 
   it('counts a declaration at the start of a line', () => {
     expect(countTestDeclarations("it('one', () => {});")).toBe(1);
+  });
+
+  it('does not count a declaration commented out with //', () => {
+    expect(countTestDeclarations("it('one', () => {});\n// it('two', () => {});")).toBe(1);
+  });
+
+  it('does not count a declaration commented out inside a multi-line block comment', () => {
+    const source = ["it('one', () => {});", '/*', "it('two', () => {});", '*/', "it('three', () => {});"].join('\n');
+    expect(countTestDeclarations(source)).toBe(2);
+  });
+
+  it('does not inflate the count from a comment mentioning it( in prose', () => {
+    expect(countTestDeclarations("// it( is the mocha declaration form\nit('real', () => {});")).toBe(1);
   });
 });
 
@@ -208,13 +267,29 @@ describe('testCountCheck', () => {
     expect(await testCountCheck.run(ctx)).toEqual([]);
   });
 
+  it('flags a test that was commented out rather than deleted', async () => {
+    // The most likely way to disable a test without leaving a forbidden-pattern trace: comment it out. If
+    // countTestDeclarations counted textually without stripping the comment, before and after would both read
+    // 2 and this check would pass a diff that silently dropped test "b" from the suite.
+    const ctx = policyContext({
+      files: [{ path: 'a.spec.ts', added: ["// it('b', () => {});"], removed: ["it('b', () => {});"] }],
+      head: { 'a.spec.ts': "it('a', () => {});\nit('b', () => {});" },
+      working: { 'a.spec.ts': "it('a', () => {});\n// it('b', () => {});" },
+    });
+    const findings = await testCountCheck.run(ctx);
+    expect(findings).toHaveLength(1);
+    expect(findings?.[0]?.detail).toContain('declared 2 tests and now declare 1');
+  });
+
   it('counts a deleted test file as zero afterwards', async () => {
     const ctx = policyContext({
       files: [{ path: 'a.spec.ts', status: 'D' }],
       head: { 'a.spec.ts': "it('one', () => {});\nit('two', () => {});" },
       working: {},
     });
-    expect(await testCountCheck.run(ctx)).toHaveLength(1);
+    const findings = await testCountCheck.run(ctx);
+    expect(findings).toHaveLength(1);
+    expect(findings?.[0]?.detail).toContain('declared 2 tests and now declare 0');
   });
 
   it('reads a renamed test file from its old name at HEAD', async () => {

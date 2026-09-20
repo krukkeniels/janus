@@ -1,6 +1,6 @@
 import { addedLines } from '../diff.js';
 import { violation } from '../types.js';
-import type { PolicyCheck, PolicyCheckContext, PolicyFinding } from '../types.js';
+import type { PolicyCheck, PolicyFinding } from '../types.js';
 
 /**
  * What counts as a test file: the `.spec.` / `.test.` suffix in any JS or TS flavour, or anything under a
@@ -22,8 +22,28 @@ export function isTestFile(path: string): boolean {
  */
 const TEST_DECLARATION = /(?:^|[^\w.$])(?:it|test)\s*(?:\.\s*\w+\s*)?\(/gmu;
 
+/**
+ * Strips `//` line comments and C-style block comments (including multi-line ones) before counting, so
+ * commenting a test out — the most obvious way an agent disables one, more likely in practice than an `xit(` —
+ * moves the count instead of leaving it steady. Block comments are stripped first so a `//` sequence that
+ * happens to sit inside one cannot truncate the strip early.
+ */
+function stripComments(source: string): string {
+  return source.replace(/\/\*[\s\S]*?\*\//gu, '').replace(/\/\/.*$/gmu, '');
+}
+
+/**
+ * Counts `it(...)`/`test(...)` declarations in `source`, after stripping comments so a commented-out test is not
+ * counted.
+ *
+ * Known limitation: this is textual, not lexical. A string literal containing a declaration-like substring
+ * (`"call it(later)"`) can still inflate the count, and this deliberately does not attempt to strip string
+ * literals to avoid that — doing so correctly without a parser risks false negatives, which are worse here than
+ * the false positives this leaves. That class of judgment — is this really a test declaration — belongs to spec
+ * §21's AI checkpoint, the same place §14 already sends "is this assertion weaker than it was".
+ */
 export function countTestDeclarations(source: string): number {
-  return source.match(TEST_DECLARATION)?.length ?? 0;
+  return stripComments(source).match(TEST_DECLARATION)?.length ?? 0;
 }
 
 // No `.not.` alternation on purpose: `expect(x).not.toBe(x)` always *fails*, so it is a broken test rather than
@@ -47,13 +67,17 @@ export function isTautologicalExpectation(line: string): string | null {
   const pair = EXPECT_PAIR.exec(line);
   if (pair === null) return null;
   const [, left, , right] = pair;
-  if (left === undefined || right === undefined || left === '') return null;
-  return left === right ? pair[0] : null;
+  if (left === undefined || right === undefined) return null;
+  const trimmedLeft = left.trim();
+  const trimmedRight = right.trim();
+  if (trimmedLeft === '') return null;
+  return trimmedLeft === trimmedRight ? pair[0] : null;
 }
 
 /**
  * Spec §14: "forbidden test patterns added — `xit(`, `xdescribe(`, `fit(`, `fdescribe(`, `.skip(`, `.only(`,
- * `it.todo(`, tautological expectations".
+ * tautological expectations". The concrete pattern list is `config.policy.forbidden_test_patterns` (that same
+ * six-pattern default); this check is fully config-driven and does not hardcode any pattern itself.
  *
  * Only **added** lines are examined: removing an `xit(` is a repair, and flagging it would make the check fight
  * the fix it is supposed to produce. Every file is examined, not only test files — a `.only(` left in a
@@ -165,6 +189,3 @@ export const testCountCheck: PolicyCheck = {
     ];
   },
 };
-
-/** Exported for the registry's exhaustiveness assertion and for tests; not part of the public surface. */
-export type { PolicyCheckContext };
