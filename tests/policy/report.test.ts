@@ -11,7 +11,7 @@ import {
   writePolicyEvidence,
   writePolicyPatch,
 } from '../../src/policy/report.js';
-import type { PolicyReport } from '../../src/policy/types.js';
+import type { PolicyCheck, PolicyReport } from '../../src/policy/types.js';
 import { workspacePaths } from '../../src/workspace/layout.js';
 import { tempDir } from '../helpers/git-fixtures.js';
 import { policyContext, policyReportFixture } from '../helpers/policy-fixtures.js';
@@ -38,14 +38,22 @@ describe('policyAttemptId', () => {
 });
 
 describe('runPolicyChecks', () => {
-  it('passes a clean diff and records which checks ran', async () => {
+  it('passes a clean diff and records exactly the checks that ran, in registry order', async () => {
     const report = await runPolicyChecks(
       inputs({ ctx: policyContext({ allowedScope: ['src/**'], files: [{ path: 'src/a.ts', added: ['const a = 1;'] }] }) }),
     );
     expect(report.passed).toBe(true);
     expect(report.violations).toEqual([]);
-    expect(report.checks_run).toContain('scope.outside_allowed');
-    expect(report.checks_run).toContain('paths.forbidden');
+    // Only these five apply to a single non-manifest, non-runner-config file with a scope configured; the other
+    // five (tests.count_decreased, runner_config.weakened, angular.version_beyond_target, size.limits,
+    // lockfile.scope) all return null here and must be absent, not merely unchecked.
+    expect(report.checks_run).toEqual([
+      'tests.forbidden_pattern_added',
+      'tests.file_removed',
+      'paths.forbidden',
+      'scope.outside_allowed',
+      'secrets.detected',
+    ]);
     expect(report.checked_at).toBe('2026-09-20T12:00:00.000Z');
   });
 
@@ -68,6 +76,20 @@ describe('runPolicyChecks', () => {
     expect(report.violations.map((finding) => finding.check)).toEqual(['paths.forbidden']);
     expect(report.warnings.map((finding) => finding.check)).toEqual(['lockfile.scope']);
     expect(report.passed).toBe(false);
+  });
+
+  it('passes when the only finding is a warning: lockfile.scope alone never blocks the commit', async () => {
+    const report = await runPolicyChecks(
+      inputs({
+        ctx: policyContext({
+          allowedScope: ['package.json'],
+          files: [{ path: 'package.json', added: ['  "x": 1'] }],
+        }),
+      }),
+    );
+    expect(report.violations).toEqual([]);
+    expect(report.warnings.map((finding) => finding.check)).toEqual(['lockfile.scope']);
+    expect(report.passed).toBe(true);
   });
 
   it('describes every changed file with its counts', async () => {
@@ -96,6 +118,47 @@ describe('runPolicyChecks', () => {
     expect(report.totals).toEqual({ changed_files: 3, added_lines: 3, removed_lines: 1 });
   });
 
+  it('describes an added file, a deleted file and a binary file with every report field', async () => {
+    const report = await runPolicyChecks(
+      inputs({
+        ctx: policyContext({
+          files: [
+            { path: 'src/new.ts', status: 'A', added: ['export const a = 1;'] },
+            { path: 'src/old.ts', status: 'D', removed: ['export const b = 1;'] },
+            { path: 'assets/logo.png', status: 'M', binary: true },
+          ],
+        }),
+      }),
+    );
+    expect(report.files).toContainEqual({
+      path: 'src/new.ts',
+      status: 'A',
+      previous_path: null,
+      added: 1,
+      removed: 0,
+      binary: false,
+      generated: false,
+    });
+    expect(report.files).toContainEqual({
+      path: 'src/old.ts',
+      status: 'D',
+      previous_path: null,
+      added: 0,
+      removed: 1,
+      binary: false,
+      generated: false,
+    });
+    expect(report.files).toContainEqual({
+      path: 'assets/logo.png',
+      status: 'M',
+      previous_path: null,
+      added: 0,
+      removed: 0,
+      binary: true,
+      generated: false,
+    });
+  });
+
   it('carries the identifying fields onto the report', async () => {
     const report = await runPolicyChecks(inputs({ phase: 'recheck', runId: null }));
     expect(report.attempt_id).toBe('wp-01-ui-kit-a1');
@@ -112,6 +175,19 @@ describe('runPolicyChecks', () => {
     expect(report.checks_run).toEqual([]);
     expect(report.passed).toBe(true);
   });
+
+  it('names which check threw, and aborts the run rather than continuing past it', async () => {
+    const throwingCheck: PolicyCheck = {
+      id: 'secrets.detected',
+      title: 'a check that always throws',
+      run: async () => {
+        throw new Error('kaboom');
+      },
+    };
+    await expect(runPolicyChecks(inputs({ checks: [throwingCheck] }))).rejects.toThrow(
+      'policy check "secrets.detected" threw while running: kaboom',
+    );
+  });
 });
 
 describe('writePolicyEvidence and writePolicyPatch', () => {
@@ -125,6 +201,19 @@ describe('writePolicyEvidence and writePolicyPatch', () => {
     const parsed = parse(readFileSync(policyEvidencePath(paths.janusDir, 'wp-01-ui-kit-a1'), 'utf8')) as PolicyReport;
     expect(parsed.violations[0]?.check).toBe('paths.forbidden');
     expect(parsed.passed).toBe(false);
+  });
+
+  it('serialises file fields as snake_case in the raw YAML, never camelCase', () => {
+    const paths = workspacePaths(join(tempDir(), 'ws'));
+    const report: PolicyReport = policyReportFixture({
+      files: [
+        { path: 'src/b.ts', status: 'R', previous_path: 'src/old.ts', added: 1, removed: 0, binary: false, generated: false },
+      ],
+    });
+    writePolicyEvidence(paths, report);
+    const raw = readFileSync(policyEvidencePath(paths.janusDir, report.attempt_id), 'utf8');
+    expect(raw).toContain('previous_path');
+    expect(raw).not.toContain('previousPath');
   });
 
   it('writes the patch beside the report', () => {

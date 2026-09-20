@@ -41,10 +41,16 @@ export interface RunPolicyChecksInput {
 /**
  * Spec §14 step 2: "runs policy checks".
  *
- * Every check runs, even after one has already failed: a fix agent that is told about one violation and then
- * trips the next one on its second attempt has cost the goal two attempts for one diff. A check that returns
- * `null` — its inputs were absent — is left out of `checks_run`, so the evidence file never claims a check ran
- * that did not.
+ * Every check runs, even after an earlier one has already produced a violation: a fix agent that is told about
+ * one violation and then trips the next one on its second attempt has cost the goal two attempts for one diff.
+ * A check that returns `null` — its inputs were absent — is left out of `checks_run`, so the evidence file never
+ * claims a check ran that did not.
+ *
+ * That guarantee covers *violations*, not *exceptions*. A check that throws aborts the whole run — deliberately,
+ * not by omission — and no evidence file is written for this attempt: whether the diff is safe is unknown when a
+ * check crashes, and a policy gate that cannot finish evaluating a diff must not let it through by continuing
+ * past the failure. The `catch` below exists only to name which check threw before rethrowing; it does not
+ * swallow the error or let the loop continue.
  */
 export async function runPolicyChecks(input: RunPolicyChecksInput): Promise<PolicyReport> {
   const checks = input.checks ?? ALL_POLICY_CHECKS;
@@ -52,7 +58,13 @@ export async function runPolicyChecks(input: RunPolicyChecksInput): Promise<Poli
   const violations: PolicyFinding[] = [];
   const warnings: PolicyFinding[] = [];
   for (const check of checks) {
-    const findings = await check.run(input.ctx);
+    let findings: PolicyFinding[] | null;
+    try {
+      findings = await check.run(input.ctx);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`policy check "${check.id}" threw while running: ${message}`, { cause: error });
+    }
     if (findings === null) continue;
     checksRun.push(check.id);
     for (const finding of findings) {
