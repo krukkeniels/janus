@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { checkoutBranch, commitAll, initRepo, revParse } from '../../src/git/ops.js';
 import { runGit } from '../../src/git/run.js';
-import { merge, reflog, resetHard, workingTreeDiff } from '../../src/git/tree.js';
+import { listRefs, merge, reflog, reflogExists, resetHard, workingTreeDiff } from '../../src/git/tree.js';
 import { tempDir } from '../helpers/git-fixtures.js';
 
 async function repoWithFile(): Promise<string> {
@@ -92,5 +92,34 @@ describe('reflog', () => {
     expect(entries[0]?.sha).toBe(second);
     expect(entries[0]?.subject).toContain('second');
     expect(entries.map((entry) => entry.selector)).toContain('HEAD@{0}');
+  });
+
+  it('reads the reflog of a named ref', async () => {
+    const dir = await repoWithFile();
+    await commitAll(dir, 'chore(r): second', { allowEmpty: true });
+    const entries = await reflog(dir, 'refs/heads/main');
+    expect(entries[0]?.selector).toBe('main@{0}');
+    expect(entries[0]?.subject).toContain('second');
+  });
+});
+
+describe('listRefs', () => {
+  it('lists every ref in the repository', async () => {
+    const dir = await repoWithFile();
+    await runGit(dir, ['branch', 'side']);
+    await runGit(dir, ['tag', 'v1']);
+    expect(await listRefs(dir)).toEqual(['refs/heads/main', 'refs/heads/side', 'refs/tags/v1']);
+  });
+});
+
+describe('reflogExists', () => {
+  it('is true for a ref git logs and false for one it does not', async () => {
+    const dir = await repoWithFile();
+    expect(await reflogExists(dir, 'HEAD')).toBe(true);
+    expect(await reflogExists(dir, 'refs/heads/main')).toBe(true);
+    // A tag never gets a reflog, and `git reflog show` would silently fall back to a plain log for it.
+    await runGit(dir, ['tag', 'v1']);
+    expect(await reflogExists(dir, 'refs/tags/v1')).toBe(false);
+    expect(await reflogExists(dir, 'refs/heads/does-not-exist')).toBe(false);
   });
 });

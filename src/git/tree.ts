@@ -66,9 +66,31 @@ export interface ReflogEntry {
 
 const FIELD_SEPARATOR = '\x1f';
 
-/** HEAD reflog, newest first. Used later to audit that no agent process ever moved HEAD. */
-export async function reflog(cwd: string): Promise<ReflogEntry[]> {
-  const output = await runGit(cwd, ['reflog', 'show', '--format=%H%x1f%gd%x1f%gs', 'HEAD']);
+/** Every ref in the repository (branches, tags, remote-tracking), in git's own sorted order. */
+export async function listRefs(cwd: string): Promise<string[]> {
+  const output = await runGit(cwd, ['for-each-ref', '--format=%(refname)']);
+  return output === '' ? [] : output.split('\n');
+}
+
+/**
+ * True when `ref` has a reflog.
+ *
+ * `git reflog show <ref>` on a ref without one silently falls back to a plain log of that ref, which would make
+ * an audit report commits that were never ref *updates*; callers check this first.
+ */
+export async function reflogExists(cwd: string, ref: string): Promise<boolean> {
+  try {
+    await runGit(cwd, ['reflog', 'exists', ref]);
+    return true;
+  } catch (error) {
+    if (error instanceof GitError && error.exitCode === 1) return false;
+    throw error;
+  }
+}
+
+/** Reflog of `ref` (HEAD by default), newest first. Used to audit that no agent process moved a ref (§31.29). */
+export async function reflog(cwd: string, ref = 'HEAD'): Promise<ReflogEntry[]> {
+  const output = await runGit(cwd, ['reflog', 'show', '--format=%H%x1f%gd%x1f%gs', ref]);
   if (output === '') return [];
   return output.split('\n').map((line) => {
     const [sha = '', selector = '', subject = ''] = line.split(FIELD_SEPARATOR);
