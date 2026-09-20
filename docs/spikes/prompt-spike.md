@@ -263,4 +263,104 @@ thirteen base-shape fields was present, `handover.next_action` was non-empty, an
 
 ## Findings and resulting changes
 
-*(written last, from the probe sections)*
+### 1. `parseCodexUsage` recorded `total: 0` for every real run (probe R1)
+
+**Evidence.** codex-cli 0.146.0 emits `turn.completed.usage` with no `total_tokens` key.
+**Change.** `src/agents/codex/jsonl.ts` derives `total = input_tokens + output_tokens` when the key is absent.
+**Also changed.** The hand-written fixtures spelled an item's kind `item_type`; the binary spells it `type`.
+**Not changed.** `cache_write_input_tokens` is real but unmodelled — §18.6's comparison names input, cached,
+output and reasoning, and nothing consumes a fifth counter.
+
+### 2. Every read-only agent would have failed at spawn (probe R2)
+
+**Evidence.** `codex exec -s read-only -C <non-repo>` exits 1 with
+`Not inside a trusted directory and --skip-git-repo-check was not specified.`, before any model call. §3.3 puts
+`checkpoint`, `review` and `triage` at the workspace root, which is not a git repository.
+**Change.** §18.4's flag ban narrowed to the write-capable classes; `SandboxPlan.skipGitRepoCheck` and
+`AgentTask.skipGitRepoCheck` added, set for the read-only class only; `buildCodexArgs` emits the flag;
+`AgentEvidence.skip_git_repo_check` records it. §3.3 gained a sentence saying the workspace root is deliberately
+not a repository, and why.
+**Rejected.** A repo cwd for read-only roles (no single repo to pick for workspace-level roles); `git init` at the
+workspace root (nests a fourth repository around `.janus/` and every `repos/<name>`, adds an unaudited reflog);
+a `projects.<dir>.trust_level` override (does not work on 0.146.0).
+**Needs ratification by the spec owner.**
+
+### 3. The report-writing cwd only passes Codex's trust check because `.janus/` is a real checkout (probes S1a, S1b)
+
+**Evidence.** `.janus/reports/<run-id>/`, `-s workspace-write`, network off, one `--add-dir`: the report landed
+inside the report directory, nothing was written to the sibling repo, and the run was not refused — because
+`.janus/` is a single-branch git clone (§5), not because Codex's git-work-tree check is lenient. A code-writing
+role installed dependencies entirely through `npm_config_store_dir`, with no `.npmrc` written anywhere and HEAD
+unmoved (§32 rule 11).
+**Change.** No production change: this confirms T05's sandbox plan and pnpm store setup as specified. Recorded as
+an operational warning — any future hand-built test workspace must `git init` `.janus/` or the report-writing
+class fails at spawn for a reason unrelated to the agent.
+**Not changed.** Nothing in `src/workspace/` or `src/agents/sandbox.ts`; both probes passed against the existing
+design.
+
+### 4. `ng update --allow-dirty` does not refuse a dirty tree, and the measured footprint is a minimal-scaffold floor, not a typical one (probes A1, A2)
+
+**Evidence.** `ng update @angular/core@16 @angular/cli@16 --allow-dirty` on a bare `ng new` scaffold proceeded
+past a dirty tree (printed a warning, exit 0) and changed 3 files: `package.json`, `pnpm-lock.yaml`, and
+`src/main.ts` (the one file already dirty before the migration ran, not a migration edit). Every individual
+migration schematic reported "Migration completed (No changes made)", because the scaffold has almost no
+application code — no route guards, resolvers, or `moduleId` usage for the CLI to rewrite. A code-writing agent
+completed the same upgrade unsupervised in ~2.3 minutes, well inside budget, and its production build was green
+afterward — but it reported `changes_made.length === 2` while the tree held 3 changed files: an under-report.
+**Change.** §12's `allowed_scope` guidance amended to say the measured count is a minimal-scaffold floor, not a
+typical footprint, and that `allowed_scope` must cover `package.json`, the lockfile, and `src/**` broadly because
+a real multi-repo upgrade will touch far more of `src/**` than this scaffold did. `ANGULAR_GUIDANCE`
+(`src/agents/prompts/shared.ts`) carries the same floor framing plus the reason (a bare scaffold has almost no
+application code to rewrite), and now tells every role to report `changes_made` verified with `git status
+--porcelain`, not from memory. `implementation`'s template text gained a matching sentence tying `changes_made`
+to the orchestrator's policy check.
+**Not changed.** No runtime scope validator was added; §12 states the qualitative floor, and `changes_made`
+verification against the real tree is deferred to T08/T12 (see "Feeds into other tasks" below), not built here.
+
+### 5. All four S2 roles produced a schema-valid result on the first attempt — a real, not tautological, pass (probe S2)
+
+**Evidence.** `discovery`, `planning`, `implementation` and `debug` each answered a real Codex turn with every
+§18.3 base-shape field present, a non-empty `handover.next_action`, and no `invalid_output` failure — nothing was
+relaxed or retried to get there. Per-role cost, transcribed from Task 6's report:
+
+| Role | Class | Input | Cached | Output | Reasoning | Total | Wall time |
+|---|---|---|---|---|---|---|---|
+| discovery | report-writing | 167229 | 141696 | 6252 | 1413 | 173481 | 141085 ms |
+| planning | report-writing | 218783 | 194688 | 4369 | 1312 | 223152 | 122672 ms |
+| implementation | code-writing | 85405 | 50560 | 2108 | 642 | 87513 | 52697 ms |
+| debug | code-writing | 99733 | 81536 | 1288 | 236 | 101021 | 39685 ms |
+| review (read-only, comparison row) | read-only | 17099 | 0 | 182 | 83 | 17281 | 9223 ms |
+
+Even a trivial read-only turn costs roughly 14.5k input tokens before any Janus context — Codex's own instruction
+preamble — so the marginal cost of a §18.2 context package is `input - 14500`, not `input`.
+**Change (schema compliance).** None needed; this is a positive finding recorded as-is, not a defect to fix.
+**Change (silent path self-correction).** The plan slice's relative repository path was one directory level too
+shallow for the report-writing cwd (`../../repos/ui-kit` instead of `../../../repos/ui-kit`). Neither role
+failed: `discovery` searched the filesystem, found the repository, and surfaced the mismatch as a decision item in
+its report; `planning` also found the right path but never mentioned the discrepancy. Since Janus edits several
+repositories per goal, an agent that silently self-corrects a bad path — rather than failing loudly — risks acting
+on the wrong repository undetected. `discovery`'s and `planning`'s template text (`src/agents/prompts/templates.ts`)
+each gained a sentence instructing the agent to report an unresolvable path and stop, rather than search for a
+plausible match. This is the prompt-side half only; runtime existence-checking of path fields before the prompt is
+sent is recorded below as a recommendation for a later task, not built here.
+**Change (`changes_made` unreliable in both directions).** Task 5's A2 agent under-reported (2 claimed vs 3
+actual). Here `discovery` over-reported (2 claimed vs 1 actual file in its report directory); `planning`,
+`implementation` and `debug` matched the real tree exactly. `ANGULAR_GUIDANCE` and `implementation`'s template
+text now both instruct agents to enumerate changed files with `git status --porcelain` rather than reconstruct the
+list from memory, and to treat `changes_made` as unverified until cross-checked. The verification-side
+consequence (T08/T12 cross-checking `changes_made` against the real tree) is recorded below, not built here.
+**Change (scope discipline).** `implementation` and `debug` both honored their narrow scope exactly — neither
+opportunistically fixed the other's target bug. Recorded as a positive finding; no change needed.
+
+## Feeds into other tasks
+
+| Finding | Goes to |
+|---|---|
+| Read-only runs need `--skip-git-repo-check` | T07 `codex.probe.read_only`, which probes exactly that shape |
+| `.janus/` must be a git checkout for report-writing to spawn | every future hand-built test workspace; §5 already requires it |
+| The workspace pnpm store needs no `.npmrc` | T07 `pnpm.store` |
+| Measured `ng update` footprint is a minimal-scaffold floor, not a typical one | §12 `allowed_scope` floor (done here); T11's `plan.yaml` validator; T08's scope check |
+| Per-role token baselines | §18.6 comparisons; T21's `janus telemetry compare`; T22's dogfood budget |
+| Per-role schema compliance | T05 prompt templates (done here); T12's attempt accounting |
+| A model can silently self-correct an unresolvable repository path by searching instead of failing | prompt-side fix done here (T07); runtime path existence-validation in the context package is a recommendation for a later task, not built here |
+| `changes_made` is unreliable in both directions (over- and under-report) | prompt-side fix done here (T07); T08's and T12's verification should cross-check `changes_made` against `git status --porcelain` on the real tree rather than trust the self-report |

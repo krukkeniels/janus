@@ -583,7 +583,7 @@ exception_annotations:
     reason: known flaky checkout test, tracked in JIRA FE-1234
 ```
 
-Engine validation: every repo exists; `depends_on` is acyclic; coupled repos share a group; red windows respect `guardrails.max_work_packages_without_green`; `requires_publish` only on libraries with a publish build; `allowed_scope` is wide enough to include lockfiles and Angular CLI migration targets (the validator warns when `package.json` is in scope but the lockfile is not).
+Engine validation: every repo exists; `depends_on` is acyclic; coupled repos share a group; red windows respect `guardrails.max_work_packages_without_green`; `requires_publish` only on libraries with a publish build; `allowed_scope` is wide enough to include lockfiles and Angular CLI migration targets (the validator warns when `package.json` is in scope but the lockfile is not). T06 measured this on an Angular 15 to 16 application: `ng update @angular/core@16 @angular/cli@16 --allow-dirty` changed 3 files, spread over `package.json`, the lockfile, and `src/main.ts`. That run was against a bare `ng new` scaffold with almost no application code, so 3 files is a minimal-scaffold floor, not a typical footprint — a real application will have far more under `src/**` for the CLI migrations to rewrite. The example scope above is therefore the floor, not a suggestion: `allowed_scope` must cover `package.json`, the lockfile, and `src/**` broadly, because CLI migrations touch files across the whole repository and a scope drawn too tightly manufactures spurious policy violations. See `docs/spikes/prompt-spike.md`.
 
 Gate 1: `janus approve plan --commit <state-sha> [--exception <id> ...]`. Approval covers plan, packages, groups, verification strategy, baseline, and the listed exceptions.
 

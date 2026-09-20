@@ -37,7 +37,9 @@ export const FORBIDDEN_ACTIONS: string[] = [
 export const ANGULAR_GUIDANCE = [
   'Use the repository’s own package manager, pnpm. Never switch package managers and never hand-edit a lockfile.',
   'Run `ng update` with `--allow-dirty`: the working tree is intentionally uncommitted, because Janus commits, not you.',
-  'Expect CLI migrations to touch files across the whole repository. That is normal and in scope.',
+  'Expect CLI migrations to touch files across the whole repository, not just the manifest: `package.json`, the lockfile, `angular.json`, `tsconfig*.json`, and files under `src/**` and `projects/**` are all normal and in scope. A scope drawn too tightly around a handful of files manufactures spurious policy violations on a real upgrade.',
+  'A minimal `ng new` scaffold has almost no application code, so a footprint measured against one is a floor, not a typical expectation: T06 measured a major-version `ng update --allow-dirty` on such a scaffold changing only 3 files (`package.json`, the lockfile, and one file under `src/`). A real application — with route guards, resolvers, or `moduleId` usage — will change many more files under `src/**`. Never treat a small measured count as the ceiling of what a migration may touch.',
+  'Report every file you changed in `changes_made`, verified with `git status --porcelain` in your working directory, including files a CLI migration rewrote for you. A changed file you did not report reads as an unexplained change when the diff is policy-checked, and `changes_made` on its own is never treated as a trustworthy audit.',
   'Never edit CI configuration.',
 ].join('\n');
 
