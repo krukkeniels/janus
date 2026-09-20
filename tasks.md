@@ -17,8 +17,8 @@ Update this table when a task merges to `main`. A task is done when its plan's f
 | T03 | done | 48ae5d3 (2026-09-20) | 557 tests; gate-entry ordering fixed after final review; §6/§26/§27 spec edits |
 | T04 | done | 437a35f (2026-09-20) | 597 tests; provider seam, persisted fakes, reflog audit, `pnpm test:integration` |
 | T05 | done | 01d63fe (2026-09-20) | 727 tests; agent contract, generated output schemas, prompts, Codex adapter, fake runner, `janus agent run` |
-| T06 | done | (pending merge) | prompt spike; §18.4 read-only cwd ruling, real JSONL usage shape, per-role token baselines; `docs/spikes/prompt-spike.md` |
-| T07 | done | (pending merge) | `janus doctor`: 13 checks, `--json` contract, every check unit-tested with a simulated failure |
+| T06 | done | b3e81de (2026-09-20) | prompt spike; §18.4 read-only cwd ruling, real JSONL usage shape, per-role token baselines; `docs/spikes/prompt-spike.md` |
+| T07 | done | b3e81de (2026-09-20) | `janus doctor`: 13 checks, `--json` contract, every check unit-tested with a simulated failure |
 | T08 to T24 | pending | | next: T08 (policy checks and orchestrator commit/push) |
 
 ---
