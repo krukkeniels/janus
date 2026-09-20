@@ -47,4 +47,14 @@ pnpm dev --help    # run the CLI from source
 node bin/janus.js --help
 ```
 
+### Real-Codex smoke test
+
+`tests/integration/codex-smoke.test.ts` runs two real `codex exec` invocations — a read-only echo and a
+workspace-write `pnpm install` in a scratch project. It is skipped unless you opt in, because it needs the `codex`
+binary and working Codex credentials:
+
+```bash
+JANUS_REAL_CODEX=1 pnpm test:integration
+```
+
 Node 20 or newer and pnpm are required, though the dev toolchain (ESLint 10) needs Node 20.19 or newer. Tokens for TeamCity and Bitbucket come from environment variables named in `config.yaml` (`JANUS_TEAMCITY_TOKEN`, `JANUS_BITBUCKET_TOKEN` by default) and are never read from files.
