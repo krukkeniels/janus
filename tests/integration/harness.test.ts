@@ -2,7 +2,8 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { ExitCode } from '../../src/cli/exit-codes.js';
-import { commitAll } from '../../src/git/ops.js';
+import { commitAll, revParse } from '../../src/git/ops.js';
+import { runGit } from '../../src/git/run.js';
 import { readFakeAgents } from '../../src/providers/fake/agent-runner.js';
 import { createHarness, expectNoAgentGitWrites, expectStatePushed } from './harness/harness.js';
 
@@ -70,9 +71,19 @@ describe('expectStatePushed', () => {
 
   it('rejects with the branch, the local HEAD, and the remote sha when they diverge', async () => {
     const harness = await createHarness(SPECS);
+    const remoteSha = await revParse(harness.janusDir, 'HEAD');
     const sha = await commitAll(harness.janusDir, 'chore(test): local-only checkpoint', { allowEmpty: true });
     await expect(expectStatePushed(harness)).rejects.toThrow(
-      `state branch ${harness.stateBranch}: local HEAD ${sha} but remote `,
+      `state branch ${harness.stateBranch}: local HEAD ${sha} but remote ${remoteSha}`,
+    );
+  });
+
+  it('rejects with "(absent)" when the remote branch does not exist', async () => {
+    const harness = await createHarness(SPECS);
+    const head = await revParse(harness.janusDir, 'HEAD');
+    await runGit(harness.fixture.stateBare, ['update-ref', '-d', `refs/heads/${harness.stateBranch}`]);
+    await expect(expectStatePushed(harness)).rejects.toThrow(
+      `state branch ${harness.stateBranch}: local HEAD ${head} but remote (absent)`,
     );
   });
 });
