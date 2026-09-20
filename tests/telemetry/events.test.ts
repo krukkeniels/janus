@@ -27,6 +27,7 @@ describe('telemetry events', () => {
     expect(EVENT_TYPES).toContain('agent.started');
     expect(EVENT_TYPES).toContain('agent.finished');
     expect(EVENT_TYPES).toContain('agent.model_switch');
+    expect(EVENT_TYPES).toContain('policy.checked');
     expect(new Set(EVENT_TYPES).size).toBe(EVENT_TYPES.length);
   });
 
@@ -55,5 +56,24 @@ describe('telemetry events', () => {
     if (first === undefined || first.type !== 'agent.finished') throw new Error('expected agent.finished');
     expect(first.tokens?.reasoning).toBe(8);
     expect(first.prompt_version).toBe('implementation@1');
+  });
+
+  it('narrows policy.checked to its §27 dimensions', () => {
+    const event: TelemetryEvent = {
+      type: 'policy.checked',
+      work_package: 'wp-01',
+      repo: 'ui-kit',
+      attempt_id: 'wp-01-ui-kit-a1',
+      run_id: 'run-0001',
+      phase: 'initial',
+      passed: false,
+      changed_files: 3,
+      violations: 1,
+      warnings: 1,
+      violated_checks: ['scope.outside_allowed'],
+      evidence: 'evidence/policy/wp-01-ui-kit-a1.yaml',
+    };
+    if (event.type !== 'policy.checked') throw new Error('expected policy.checked');
+    expect(event.violated_checks).toEqual(['scope.outside_allowed']);
   });
 });

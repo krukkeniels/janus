@@ -11,3 +11,5 @@ export const EVIDENCE_DIR = 'evidence';
 export const REPORTS_DIR = 'reports';
 /** Spec §5: `evidence/agents/<run-id>.yaml` — validated result, token usage, duration. */
 export const AGENTS_EVIDENCE_DIR = 'evidence/agents';
+/** Spec §14: `evidence/policy/<attempt-id>.yaml` — the policy report, and `<attempt-id>.patch` on a reset. */
+export const POLICY_EVIDENCE_DIR = 'evidence/policy';

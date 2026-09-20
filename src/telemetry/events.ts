@@ -1,6 +1,7 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import type { AgentRole } from '../config/config-schema.js';
+import type { PolicyCheckId } from '../policy/types.js';
 import { EVENTS_FILE } from '../state/files.js';
 import type { BudgetName, GateType, GoalStatus } from '../state/state-schema.js';
 
@@ -204,6 +205,30 @@ export interface RepoDriftEvent {
   remote_base: string;
 }
 
+/**
+ * Spec §27 `policy.checked`, emitted once per run of the §14 checks — including the recheck after the in-place
+ * fix agent, which `phase` distinguishes.
+ *
+ * `violated_checks` lists the distinct ids that produced a violation, not every finding, so `janus telemetry`
+ * (T21) can answer "which check costs us the most attempts" without reading every evidence file.
+ */
+export interface PolicyCheckedEvent {
+  type: 'policy.checked';
+  work_package: string;
+  repo: string;
+  attempt_id: string;
+  /** The code-writing agent run whose diff was checked, or null. */
+  run_id: string | null;
+  phase: 'initial' | 'recheck';
+  passed: boolean;
+  changed_files: number;
+  violations: number;
+  warnings: number;
+  violated_checks: PolicyCheckId[];
+  /** `.janus`-relative path of the report YAML. */
+  evidence: string;
+}
+
 export type TelemetryEvent =
   | RunStartedEvent
   | RunStoppedEvent
@@ -214,6 +239,7 @@ export type TelemetryEvent =
   | AgentStartedEvent
   | AgentFinishedEvent
   | AgentModelSwitchEvent
+  | PolicyCheckedEvent
   | BudgetIncrementedEvent
   | BudgetResetEvent
   | GuardrailHitEvent
@@ -240,6 +266,7 @@ export const EVENT_TYPES = [
   'agent.started',
   'agent.finished',
   'agent.model_switch',
+  'policy.checked',
   'budget.incremented',
   'budget.reset',
   'guardrail.hit',
