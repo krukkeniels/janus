@@ -229,6 +229,27 @@ export interface PolicyCheckedEvent {
   evidence: string;
 }
 
+/** Spec §27 `commit.created`: the orchestrator's own commit on a goal branch (§14 step 3, §32 rule 11). */
+export interface CommitCreatedEvent {
+  type: 'commit.created';
+  repo: string;
+  work_package: string;
+  branch: string;
+  sha: string;
+  /** The subject line only; the trailers are already in the commit and in the evidence file. */
+  subject: string;
+  changed_files: number;
+}
+
+/** Spec §27 `push.completed`: the fast-forward-only push that followed (§2 "no rebase", `git push` without `--force`). */
+export interface PushCompletedEvent {
+  type: 'push.completed';
+  repo: string;
+  remote: string;
+  branch: string;
+  sha: string;
+}
+
 export type TelemetryEvent =
   | RunStartedEvent
   | RunStoppedEvent
@@ -240,6 +261,8 @@ export type TelemetryEvent =
   | AgentFinishedEvent
   | AgentModelSwitchEvent
   | PolicyCheckedEvent
+  | CommitCreatedEvent
+  | PushCompletedEvent
   | BudgetIncrementedEvent
   | BudgetResetEvent
   | GuardrailHitEvent
@@ -267,6 +290,8 @@ export const EVENT_TYPES = [
   'agent.finished',
   'agent.model_switch',
   'policy.checked',
+  'commit.created',
+  'push.completed',
   'budget.incremented',
   'budget.reset',
   'guardrail.hit',

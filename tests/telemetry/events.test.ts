@@ -28,6 +28,8 @@ describe('telemetry events', () => {
     expect(EVENT_TYPES).toContain('agent.finished');
     expect(EVENT_TYPES).toContain('agent.model_switch');
     expect(EVENT_TYPES).toContain('policy.checked');
+    expect(EVENT_TYPES).toContain('commit.created');
+    expect(EVENT_TYPES).toContain('push.completed');
     expect(new Set(EVENT_TYPES).size).toBe(EVENT_TYPES.length);
   });
 
