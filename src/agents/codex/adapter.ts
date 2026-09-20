@@ -155,16 +155,16 @@ export function createCodexAgentRunner(input: CodexAdapterInput): AgentRunner {
           };
         }
 
-        // Null out `answer` once `failure` is set, even if it validated: a run the adapter judged unusable (a
-        // timeout or a signal kill mid-work, in particular) must not hand back a `result` that looks trustworthy
-        // alongside `status: 'failed'` — §18.3's "unusable answer is one failed attempt" cuts both ways.
-        const resultOut = failure === null ? answer : null;
-
+        // `result` always carries whatever validated, even when `failure` is set: §18.4 records "the validated
+        // final message" unconditionally, and the scratch cleanup above deletes `last-message.json` once this
+        // returns, so `result` is the only place a timed-out or signal-killed run's answer survives for the
+        // evidence file's audit trail. Failure is signalled by `status`/`failure` (and, per `outcomeSummary`,
+        // by `summary`), never by discarding the answer.
         return {
           runId: task.runId,
           status: failure === null && answer !== null ? answer.status : 'failed',
-          summary: outcomeSummary(resultOut, failure),
-          result: resultOut,
+          summary: outcomeSummary(answer, failure),
+          result: answer,
           failure,
           tokens,
           durationMs: result.durationMs,

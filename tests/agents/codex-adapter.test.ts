@@ -199,20 +199,20 @@ describe('createCodexAgentRunner', () => {
     expect(outcome.tokens).toBeNull();
   });
 
-  it('reports a timeout as failed even when the killed process still wrote a validating answer', async () => {
+  it('reports a timeout as failed even when the killed process still wrote a validating answer, but keeps the answer for the evidence trail', async () => {
     const { runner } = runnerFor(replay({ timedOut: true, exitCode: 0 }));
     const outcome = await runner.run(task());
     expect(outcome.status).toBe('failed');
-    expect(outcome.result).toBeNull();
+    expect(outcome.result?.summary).toBe('Updated ui-kit to Angular 16.2.12; 214 tests pass.');
     expect(outcome.failure?.kind).toBe('timeout');
     expect(outcome.summary).toContain('agent run failed (timeout)');
   });
 
-  it('reports a signal kill as a failure even when the killed process still wrote a validating answer', async () => {
+  it('reports a signal kill as a failure even when the killed process still wrote a validating answer, but keeps the answer for the evidence trail', async () => {
     const { runner } = runnerFor(replay({ signal: 'SIGKILL', exitCode: 0 }));
     const outcome = await runner.run(task());
     expect(outcome.status).toBe('failed');
-    expect(outcome.result).toBeNull();
+    expect(outcome.result?.summary).toBe('Updated ui-kit to Angular 16.2.12; 214 tests pass.');
     expect(outcome.failure?.kind).toBe('nonzero_exit');
     expect(outcome.failure?.detail).toContain('SIGKILL');
     expect(outcome.summary).toContain('agent run failed (nonzero_exit)');
