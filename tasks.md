@@ -15,7 +15,8 @@ Update this table when a task merges to `main`. A task is done when its plan's f
 | T01 | done | f2a35a2 (2026-09-19) | 77 tests; commander pinned to 14 for the Node 20 floor |
 | T02 | done | 2055b8f (2026-09-19) | 151 tests; store dir via `npm_config_store_dir`, `clone_url` fields added |
 | T03 | done | 48ae5d3 (2026-09-20) | 557 tests; gate-entry ordering fixed after final review; §6/§26/§27 spec edits |
-| T04 to T24 | pending | | next: T04 (integration harness), then T05 (agent runner) |
+| T04 | done | 437a35f (2026-09-20) | 597 tests; provider seam, persisted fakes, reflog audit, `pnpm test:integration` |
+| T05 to T24 | pending | | next: T05 (agent runner); plan committed in 249e577 |
 
 ---
 
