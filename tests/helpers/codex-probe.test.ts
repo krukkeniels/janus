@@ -1,8 +1,9 @@
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { probeLogPath, recordProbe } from './codex-probe.js';
+import { tempDir } from './git-fixtures.js';
 
 const KEY = 'JANUS_SPIKE_LOG';
 let previous: string | undefined;
@@ -18,7 +19,7 @@ afterEach(() => {
 
 describe('recordProbe', () => {
   it('appends one JSON line per probe to the configured log', () => {
-    const log = join(mkdtempSync(join(tmpdir(), 'janus-probe-')), 'probe-log.jsonl');
+    const log = join(tempDir('janus-probe-'), 'probe-log.jsonl');
     process.env[KEY] = log;
 
     const returned = recordProbe({
