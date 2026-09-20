@@ -35,6 +35,27 @@ Exit codes: `0` completed or `--until` reached, `3` the next step is not impleme
 
 Gates 1 and 2 are passed with `janus approve plan --commit <sha> [--exception <id> ...]` and `janus approve revised-plan --commit <sha>`; the sha must be the state-branch commit printed by `janus run` (the commit at which the gate was entered), and the approver is taken from the git identity in `.janus/` and written to `decisions.md`. `janus reject plan --reason "..."` sends the goal back to `planning` (or `replanning` after an escalation). Guardrail hits (spec §20) and step failures write `.janus/escalation.md` and move the goal to `escalated`; `janus escalation resolve` arrives with T13.
 
+## `janus doctor`
+
+Checks everything an agent run depends on, and says what to do about each failure:
+
+- the `codex` CLI, its login, and that every model in the active `model_profiles` entry is accepted (a one-token
+  probe per model, ~14.5k input tokens each)
+- the three real §18.4 probes: a read-only `codex exec`, a `workspace-write` install in a scratch project, and
+  `ng update --allow-dirty --dry-run` when the workspace has an Angular repository
+- user namespaces, which the Codex sandbox needs
+- git identity, the provider token environment variables, and that the pnpm store is really writable
+- provider reachability, skipped when the configured provider is a fake
+- a warning when the state branch lives in a product repository, because that repository's CI must exclude
+  `janus/*` from its VCS root branch spec
+
+```bash
+janus doctor          # human report; exits 1 if any check failed
+janus doctor --json   # the machine contract: { version, generated_at, workspace, summary, checks[] }
+```
+
+It runs without a workspace too — the configuration-dependent checks then report `skip`.
+
 ## Development
 
 ```bash

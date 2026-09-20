@@ -9,11 +9,14 @@ import { configSchema } from '../../src/config/config-schema.js';
 import type { AgentRole } from '../../src/config/config-schema.js';
 import { buildAgentTask } from '../../src/agents/task.js';
 import { isCodeWriting } from '../../src/agents/roles.js';
+import { ALL_CHECKS, buildDoctorContext } from '../../src/doctor/index.js';
+import { doctorJson, runDoctor } from '../../src/doctor/report.js';
 import { runGit } from '../../src/git/run.js';
 import { workspacePaths } from '../../src/workspace/layout.js';
 import { promptFixture } from '../helpers/agent-fixtures.js';
 import { captureFixture, recordProbe } from '../helpers/codex-probe.js';
 import { tempDir } from '../helpers/git-fixtures.js';
+import { createHarness } from './harness/harness.js';
 
 const ENABLED = process.env['JANUS_REAL_CODEX'] === '1';
 const TEN_MINUTES = 600_000;
@@ -681,6 +684,48 @@ describe.skipIf(!ENABLED)('real codex smoke test', () => {
       expect(result).not.toBeNull();
       expect(result?.handover.next_action.length).toBeGreaterThan(0);
       expect(outcome.tokens?.total).toBeGreaterThan(0);
+    },
+    FORTY_FIVE_MINUTES,
+  );
+
+  /**
+   * T07 probe D1: `janus doctor`'s real registry against a real fake-provider workspace. Everything that can pass
+   * on this machine must pass.
+   *
+   * `state.branch_spec` is a `pass`, not a `warn`: `graphFixture` (`tests/helpers/workspace-fixtures.ts`) always
+   * writes `state: { clone_url: stateBare }` into the harness's `config.yaml`, so `stateRemote` resolves to a
+   * dedicated state repository (`remoteName: 'state-repo'`) — this was an incorrect assumption in the original
+   * plan (it expected the harness to have no dedicated state repo), caught by actually running the real registry
+   * end to end here, exactly the kind of integration-level surprise T07 was written to expect. Doctor itself is
+   * correct: it reports what `stateRemote` actually resolves to. `codex.probe.ng_update` and the provider checks
+   * still skip, because this harness has no Angular repository and both providers are fakes.
+   */
+  it(
+    'probe D1: janus doctor reports no failure in a fake-provider workspace',
+    async () => {
+      const harness = await createHarness([{ name: 'ui-kit', kind: 'library' as const }], {});
+      const report = await runDoctor(ALL_CHECKS, buildDoctorContext({ cwd: harness.root, env: process.env, now: () => new Date() }));
+
+      const byId = new Map(report.checks.map((finding) => [finding.id, finding]));
+      recordProbe({
+        probe: 'D1',
+        question: 'Does janus doctor pass on this machine against a fake-provider workspace?',
+        outcome: report.summary.fail === 0 ? 'pass' : 'fail',
+        detail: `${String(report.summary.pass)} ok, ${String(report.summary.warn)} warn, ${String(report.summary.fail)} fail, ${String(report.summary.skip)} skip`,
+        data: { statuses: Object.fromEntries([...byId].map(([id, finding]) => [id, finding.status])) },
+      });
+
+      expect(byId.get('codex.binary')?.status).toBe('pass');
+      expect(byId.get('codex.login')?.status).toBe('pass');
+      expect(byId.get('codex.probe.read_only')?.status).toBe('pass');
+      expect(byId.get('codex.probe.workspace_write')?.status).toBe('pass');
+      expect(byId.get('pnpm.store')?.status).toBe('pass');
+      // graphFixture always gives the harness a dedicated state repo (see the doc comment above).
+      expect(byId.get('state.branch_spec')?.status).toBe('pass');
+      expect(byId.get('codex.probe.ng_update')?.status).toBe('skip');
+      expect(byId.get('provider.ci')?.status).toBe('skip');
+      expect(byId.get('provider.scm')?.status).toBe('skip');
+      expect(report.summary.fail, doctorJson(report)).toBe(0);
     },
     FORTY_FIVE_MINUTES,
   );
