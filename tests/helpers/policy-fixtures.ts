@@ -22,23 +22,53 @@ export interface DiffFileSpec {
  * A `DiffFile` built from intent (these lines were added, those removed) rather than from raw patch text, so a
  * check's test says what it means. `analyzeDiff` itself is covered end to end in `tests/policy/diff.test.ts`
  * against real git repositories; these fixtures exercise the checks, not the parser.
+ *
+ * The section header and the `binary` flag are derived from the spec rather than taken independently, so a
+ * fixture cannot describe a state real git never produces: a rename's header names `previousPath` on the `a/`
+ * side, and a binary file cannot also carry text hunks (`diffFile` throws if a caller asks for both — no real
+ * git patch has a `Binary files ... differ` section with `+`/`-` lines in it).
  */
 export function diffFile(spec: DiffFileSpec): DiffFile {
+  if (spec.binary === true && ((spec.added?.length ?? 0) > 0 || (spec.removed?.length ?? 0) > 0)) {
+    throw new Error(
+      `diffFile: "${spec.path}" cannot be both binary and carry added/removed text lines — no real git diff does`,
+    );
+  }
+  const fromPath = spec.previousPath ?? spec.path;
+  const status = spec.status ?? 'M';
+  const generated = spec.generated ?? false;
+  if (spec.binary === true) {
+    const section = [
+      `diff --git a/${fromPath} b/${spec.path}`,
+      `Binary files a/${fromPath} and b/${spec.path} differ`,
+    ].join('\n');
+    return {
+      status,
+      path: spec.path,
+      previousPath: spec.previousPath ?? null,
+      binary: true,
+      generated,
+      hunks: [],
+      added: 0,
+      removed: 0,
+      section,
+    };
+  }
   const start = spec.startLine ?? 1;
   const added = (spec.added ?? []).map((text, index) => ({ text, line: start + index }));
   const removed = (spec.removed ?? []).map((text, index) => ({ text, line: start + index }));
   const section = [
-    `diff --git a/${spec.path} b/${spec.path}`,
+    `diff --git a/${fromPath} b/${spec.path}`,
     `@@ -${start},${removed.length} +${start},${added.length} @@`,
     ...removed.map((line) => `-${line.text}`),
     ...added.map((line) => `+${line.text}`),
   ].join('\n');
   return {
-    status: spec.status ?? 'M',
+    status,
     path: spec.path,
     previousPath: spec.previousPath ?? null,
-    binary: spec.binary ?? false,
-    generated: spec.generated ?? false,
+    binary: false,
+    generated,
     hunks: [{ oldStart: start, newStart: start, added, removed }],
     added: added.length,
     removed: removed.length,

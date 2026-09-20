@@ -64,34 +64,49 @@ export async function analyzeDiff(cwd: string): Promise<DiffAnalysis> {
  * Both listings are produced from the same diff queue in the same order, which is the only association that
  * survives git's path quoting: a `diff --git` header C-quotes any non-ASCII path (`"a/\303\246.txt"`) and is
  * genuinely ambiguous for a rename between two paths containing spaces, so parsing the header would be guessing.
- * When the counts disagree — which no observed git output does, including empty new files, mode-only changes and
- * binary files — this throws rather than mis-attributing a hunk, because a check reading the wrong file's added
- * lines is exactly the failure this module exists to prevent.
+ *
+ * One case breaks the naive one-section-per-record count: a **typechange** (`T` — regular file <-> symlink, or
+ * <-> gitlink) is a single `--name-status` record but git's patch prints it as two consecutive `diff --git`
+ * sections, "deleted file mode ..." followed by "new file mode ...", because the patch format has no way to
+ * express "this path changed kind" in one hunk. So the expected section count is `changed.length` plus one for
+ * every `T` record, and a `T` record consumes its **two** sections in order, concatenated into that file's
+ * `section` and with both halves' hunks merged — the delete half's removed lines and the add half's added lines
+ * both belong to that path. For every other status, one record is one section. When the counts still disagree
+ * after accounting for typechanges, this throws rather than mis-attributing a hunk, because a check reading the
+ * wrong file's added lines is exactly the failure this module exists to prevent.
  */
+const BINARY_SECTION = /^(?:Binary files .* differ|GIT binary patch)$/mu;
+
 export function buildDiffAnalysis(changed: ChangedFile[], patch: string): DiffAnalysis {
   const sections = splitPatchSections(patch);
-  if (sections.length !== changed.length) {
+  const typechanges = changed.filter((file) => file.status === 'T').length;
+  const expectedSections = changed.length + typechanges;
+  if (sections.length !== expectedSections) {
     throw new DiffAnalysisError(
-      `git reported ${changed.length} changed file(s) but ${sections.length} patch section(s); ` +
+      `git reported ${changed.length} changed file(s) (${typechanges} typechange(s), expecting ` +
+        `${expectedSections} patch section(s) in total) but found ${sections.length}; ` +
         'refusing to guess which hunk belongs to which file',
     );
   }
-  const files: DiffFile[] = changed.map((file, index) => {
-    const section = sections[index] ?? '';
-    const binary = /^(?:Binary files .* differ|GIT binary patch)$/mu.test(section);
+  const files: DiffFile[] = [];
+  let sectionIndex = 0;
+  for (const file of changed) {
+    if (file.status === 'T') {
+      const deleteHalf = sections[sectionIndex] ?? '';
+      const addHalf = sections[sectionIndex + 1] ?? '';
+      sectionIndex += 2;
+      const section = `${deleteHalf}\n${addHalf}`;
+      const binary = BINARY_SECTION.test(section);
+      const hunks = binary ? [] : [...parseHunks(deleteHalf), ...parseHunks(addHalf)];
+      files.push(makeDiffFile(file, section, binary, hunks));
+      continue;
+    }
+    const section = sections[sectionIndex] ?? '';
+    sectionIndex += 1;
+    const binary = BINARY_SECTION.test(section);
     const hunks = binary ? [] : parseHunks(section);
-    return {
-      status: file.status,
-      path: file.path,
-      previousPath: file.previousPath ?? null,
-      binary,
-      generated: isGeneratedPath(file.path),
-      hunks,
-      added: hunks.reduce((sum, hunk) => sum + hunk.added.length, 0),
-      removed: hunks.reduce((sum, hunk) => sum + hunk.removed.length, 0),
-      section,
-    };
-  });
+    files.push(makeDiffFile(file, section, binary, hunks));
+  }
   return {
     files,
     patch,
@@ -100,6 +115,20 @@ export function buildDiffAnalysis(changed: ChangedFile[], patch: string): DiffAn
       addedLines: files.reduce((sum, file) => sum + file.added, 0),
       removedLines: files.reduce((sum, file) => sum + file.removed, 0),
     },
+  };
+}
+
+function makeDiffFile(file: ChangedFile, section: string, binary: boolean, hunks: DiffHunk[]): DiffFile {
+  return {
+    status: file.status,
+    path: file.path,
+    previousPath: file.previousPath ?? null,
+    binary,
+    generated: isGeneratedPath(file.path),
+    hunks,
+    added: hunks.reduce((sum, hunk) => sum + hunk.added.length, 0),
+    removed: hunks.reduce((sum, hunk) => sum + hunk.removed.length, 0),
+    section,
   };
 }
 
@@ -193,10 +222,16 @@ export function changeSummaryFrom(analysis: DiffAnalysis): ChangeSummaryEntry[] 
  * a lockfile or anything under `dist/`, `coverage/` or `.angular/`, and an `ng update` diff always contains a
  * lockfile — so handing over `analysis.patch` unfiltered would crash on the first real violation. The files are
  * still listed, with their counts, in CHANGE SUMMARY.
+ *
+ * A file's `generated` flag is derived from its **new** path only (`file.path`), but `renderContextPackage`'s
+ * guard reads every path on a `diff --git` header, old and new alike — so a rename **out of** a generated
+ * directory (`git mv dist/bundle.js bundle.js`) has `generated: false` yet its section still carries
+ * `a/dist/bundle.js` and would trip that guard. Both directions are checked here for that reason; a rename
+ * **into** a generated directory is already covered because `generated` follows the new path.
  */
 export function inlineDiffFrom(analysis: DiffAnalysis): string {
   return analysis.files
-    .filter((file) => !file.generated)
+    .filter((file) => !file.generated && !(file.previousPath !== null && isGeneratedPath(file.previousPath)))
     .map((file) => file.section)
     .join('\n');
 }

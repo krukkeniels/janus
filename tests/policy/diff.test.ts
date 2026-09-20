@@ -1,15 +1,17 @@
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { commitAll, initRepo } from '../../src/git/ops.js';
 import { runGit } from '../../src/git/run.js';
 import {
+  addedLines,
   analyzeDiff,
   buildDiffAnalysis,
   changeSummaryFrom,
   DiffAnalysisError,
   inlineDiffFrom,
   parseHunks,
+  removedLines,
   splitPatchSections,
 } from '../../src/policy/diff.js';
 import { tempDir } from '../helpers/git-fixtures.js';
@@ -83,6 +85,101 @@ describe('analyzeDiff', () => {
     expect(changeSummaryFrom(analysis)).toContainEqual({ path: 'pnpm-lock.yaml', added: 1, removed: 0, generated: true });
     expect(inlineDiffFrom(analysis)).not.toContain('pnpm-lock.yaml');
     expect(inlineDiffFrom(analysis)).toContain('src-a.ts');
+  });
+
+  it('merges a typechange into one file whose section carries both halves and both sets of lines', async () => {
+    const dir = join(tempDir(), 'r');
+    mkdirSync(dir);
+    await initRepo(dir, 'main');
+    writeFileSync(join(dir, 'target.txt'), 'target\n');
+    symlinkSync('target.txt', join(dir, 'link.txt'));
+    await commitAll(dir, 'feat(r): base with a symlink');
+
+    // git 2.43.0, reproduced: a symlink -> regular-file transition is one `T` name-status record but two
+    // `diff --git` patch sections (a delete of the symlink, then an add of the regular file). This is exactly
+    // the case `buildDiffAnalysis` must not mis-count or mis-attribute.
+    rmSync(join(dir, 'link.txt'));
+    writeFileSync(join(dir, 'link.txt'), 'now a real file\n');
+
+    const analysis = await analyzeDiff(dir);
+    expect(analysis.files).toHaveLength(1);
+    const file = analysis.files[0];
+    expect(file?.path).toBe('link.txt');
+    expect(file?.status).toBe('T');
+    expect(file?.section).toContain('deleted file mode 120000');
+    expect(file?.section).toContain('new file mode 100644');
+    expect(file !== undefined && removedLines(file).some((line) => line.text === 'target.txt')).toBe(true);
+    expect(file !== undefined && addedLines(file).some((line) => line.text === 'now a real file')).toBe(true);
+  });
+
+  it('drops a file renamed out of a generated directory from the inline diff, even though its new path is not generated', async () => {
+    const dir = await repo();
+    mkdirSync(join(dir, 'dist'));
+    writeFileSync(join(dir, 'dist', 'bundle.js'), 'console.log(1);\n');
+    await commitAll(dir, 'chore(r): add build output');
+
+    await runGit(dir, ['mv', 'dist/bundle.js', 'bundle.js']);
+
+    const analysis = await analyzeDiff(dir);
+    const file = analysis.files.find((entry) => entry.path === 'bundle.js');
+    expect(file?.status).toBe('R');
+    expect(file?.previousPath).toBe('dist/bundle.js');
+    // The new path alone is not under a generated directory, so `generated` (derived from `file.path`) is false —
+    // it is `inlineDiffFrom` that must still exclude the section because its header still names `a/dist/bundle.js`.
+    expect(file?.generated).toBe(false);
+    expect(inlineDiffFrom(analysis)).not.toContain('bundle.js');
+    expect(changeSummaryFrom(analysis)).toContainEqual({ path: 'bundle.js', added: 0, removed: 0, generated: false });
+  });
+
+  it('attributes every non-trivial diff shape to the right path in one diff', async () => {
+    const dir = join(tempDir(), 'r');
+    mkdirSync(dir);
+    await initRepo(dir, 'main');
+    writeFileSync(join(dir, 'mode.sh'), '#!/bin/sh\necho hi\n');
+    writeFileSync(join(dir, 'logo.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+    writeFileSync(join(dir, 'target.txt'), 'target\n');
+    symlinkSync('target.txt', join(dir, 'link.txt'));
+    writeFileSync(join(dir, 'first name.ts'), 'export const first = 1;\n');
+    await commitAll(dir, 'feat(r): base for attribution');
+
+    // Empty new file: no hunk, just an "added" record with no content.
+    writeFileSync(join(dir, 'empty.txt'), '');
+    // Mode-only change: no content difference, just the executable bit.
+    chmodSync(join(dir, 'mode.sh'), 0o755);
+    // Binary file: git detects the NUL byte and refuses to produce a text hunk.
+    writeFileSync(join(dir, 'logo.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0x01, 0x02, 0x03]));
+    // Typechange: symlink -> regular file, same as the dedicated typechange test above.
+    rmSync(join(dir, 'link.txt'));
+    writeFileSync(join(dir, 'link.txt'), 'now a real file\n');
+    // Rename between two space-containing paths, pure rename (no content change).
+    await runGit(dir, ['mv', 'first name.ts', 'second name.ts']);
+
+    const analysis = await analyzeDiff(dir);
+    const byPath = new Map(analysis.files.map((file) => [file.path, file]));
+
+    const empty = byPath.get('empty.txt');
+    expect(empty?.status).toBe('A');
+    expect(empty?.hunks).toEqual([]);
+    expect(empty?.added).toBe(0);
+
+    const mode = byPath.get('mode.sh');
+    expect(mode?.hunks).toEqual([]);
+    expect(mode?.added).toBe(0);
+    expect(mode?.removed).toBe(0);
+
+    const logo = byPath.get('logo.png');
+    expect(logo?.binary).toBe(true);
+    expect(logo?.hunks).toEqual([]);
+
+    const link = byPath.get('link.txt');
+    expect(link?.status).toBe('T');
+    expect(link !== undefined && removedLines(link).some((line) => line.text === 'target.txt')).toBe(true);
+    expect(link !== undefined && addedLines(link).some((line) => line.text === 'now a real file')).toBe(true);
+
+    const renamed = byPath.get('second name.ts');
+    expect(renamed?.status).toBe('R');
+    expect(renamed?.previousPath).toBe('first name.ts');
+    expect(byPath.has('first name.ts')).toBe(false);
   });
 });
 
@@ -162,5 +259,6 @@ describe('buildDiffAnalysis', () => {
     );
     expect(analysis.files[0]?.binary).toBe(true);
     expect(analysis.files[0]?.added).toBe(0);
+    expect(analysis.files[0]?.hunks).toEqual([]);
   });
 });
