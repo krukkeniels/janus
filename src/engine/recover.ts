@@ -46,8 +46,17 @@ export async function recoverInFlight(engine: Engine): Promise<InFlightRecovery 
     engine.emit({
       type: 'agent.finished',
       run_id: runId,
+      role: null,
       repo: inFlight.repo,
       status: 'interrupted',
+      model: null,
+      effort: null,
+      prompt_version: null,
+      profile: null,
+      experiment_id: null,
+      tokens: null,
+      duration_ms: null,
+      failure: 'interrupted',
       step,
       patch: patchFile === null ? null : relative(paths.janusDir, patchFile),
     });

@@ -44,7 +44,9 @@ describe('T04 smoke: init and one checkpoint through the harness', () => {
     await expectStatePushed(harness);
     const events = harness.events();
     expect(events.map((event) => event['type'])).toEqual(['goal.created']);
-    expect(events[0]?.['repos']).toEqual(TOPOLOGICAL);
+    const first = events[0];
+    if (first === undefined || first.type !== 'goal.created') throw new Error('expected goal.created');
+    expect(first.repos).toEqual(TOPOLOGICAL);
     expectNoAgentGitWrites(harness);
   });
 
@@ -80,7 +82,23 @@ describe('T04 smoke: init and one checkpoint through the harness', () => {
         const path = join(engine.workspace.paths.janusDir, EVIDENCE_DIR, 'agents', `${outcome.runId}.yaml`);
         mkdirSync(dirname(path), { recursive: true });
         writeFileSync(path, `run_id: ${outcome.runId}\nstatus: ${outcome.status}\nsummary: ${outcome.summary}\n`);
-        engine.emit({ type: 'agent.finished', run_id: outcome.runId, repo: 'ui-kit', status: outcome.status, step: 'prepare' });
+        engine.emit({
+          type: 'agent.finished',
+          run_id: outcome.runId,
+          role: 'discovery',
+          repo: 'ui-kit',
+          status: outcome.status,
+          model: null,
+          effort: null,
+          prompt_version: null,
+          profile: null,
+          experiment_id: null,
+          tokens: null,
+          duration_ms: null,
+          failure: null,
+          step: 'prepare',
+          patch: null,
+        });
         return { kind: 'advance', to: 'discovering', summary: outcome.summary };
       },
     };

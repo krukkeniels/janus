@@ -21,7 +21,7 @@ describe('createEngine', () => {
       engine.warn('careful');
       expect(lines).toEqual(['hello']);
       expect(warnings).toEqual(['careful']);
-      const recorded = engine.emit({ type: 'stage.entered', stage: 'preparing' });
+      const recorded = engine.emit({ type: 'stage.entered', stage: 'preparing', from: 'created' });
       expect(recorded.timestamp).toBe('2026-09-19T14:00:00.000Z');
       const result = await engine.checkpoint('chore(janus): test checkpoint', {
         at: now.toISOString(),

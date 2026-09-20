@@ -2,6 +2,7 @@ import { revParse } from '../git/ops.js';
 import type { Providers } from '../providers/types.js';
 import { emptyInFlight } from '../state/state-schema.js';
 import type { GoalStatus } from '../state/state-schema.js';
+import type { RunStopReason } from '../telemetry/events.js';
 import type { Workspace } from '../workspace/open-workspace.js';
 import { checkGoalRuntime } from './budgets.js';
 import { enterStage } from './engine.js';
@@ -13,7 +14,7 @@ import { recoverInFlight } from './recover.js';
 import type { StepContext, StepRegistry } from './steps.js';
 import { HAPPY_PATH } from './transitions.js';
 
-export type RunStopReason = 'completed' | 'gate' | 'wait_exceeded' | 'escalated' | 'until' | 'not_implemented';
+export type { RunStopReason };
 
 export interface RunEngineInput {
   engine: Engine;

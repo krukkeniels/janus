@@ -1,7 +1,7 @@
 import type { JanusConfig } from '../config/config-schema.js';
 import { BUDGET_NAMES } from '../state/state-schema.js';
 import type { BudgetName, JanusState } from '../state/state-schema.js';
-import type { TelemetryEvent } from '../telemetry/events.js';
+import type { GuardrailName, TelemetryEvent } from '../telemetry/events.js';
 
 export interface BudgetContext {
   state: JanusState;
@@ -10,7 +10,7 @@ export interface BudgetContext {
 }
 
 /** Every counter a guardrail can name: the seven budgets, per-package `policy_violations`, and `goal_runtime_hours`. */
-export type GuardrailName = BudgetName | 'policy_violations' | 'goal_runtime_hours';
+export type { GuardrailName } from '../telemetry/events.js';
 
 /** A limit that was reached. */
 export interface GuardrailHit {
