@@ -4,12 +4,10 @@ import type { AgentRole } from '../../src/config/config-schema.js';
 import type { ContextPackage, ContextPackageInput } from '../../src/agents/context.js';
 import { outputSchemaFor } from '../../src/agents/output-schema.js';
 import type { AgentResult } from '../../src/agents/output-schema.js';
+import { promptVersionFor } from '../../src/agents/prompts/templates.js';
 import { sandboxClassFor } from '../../src/agents/roles.js';
 import type { AgentOutcome, AgentTask } from '../../src/agents/types.js';
 import { outcomeSummary } from '../../src/agents/types.js';
-
-// TODO(T06): replace with `import { promptVersionFor } from '../../src/agents/prompts/templates.js';` once Task 6 lands.
-const promptVersionFor = (role: AgentRole): string => `${role}@1`;
 
 export function contextPackageInputFixture(overrides: Partial<ContextPackageInput> = {}): ContextPackageInput {
   return {
