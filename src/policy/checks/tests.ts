@@ -1,4 +1,5 @@
 import { addedLines } from '../diff.js';
+import { stripComments } from '../source.js';
 import { violation } from '../types.js';
 import type { PolicyCheck, PolicyFinding } from '../types.js';
 
@@ -21,16 +22,6 @@ export function isTestFile(path: string): boolean {
  * a method call on some object. The `m` flag is what makes the `^` alternative mean "start of a line".
  */
 const TEST_DECLARATION = /(?:^|[^\w.$])(?:it|test)\s*(?:\.\s*\w+\s*)?\(/gmu;
-
-/**
- * Strips `//` line comments and C-style block comments (including multi-line ones) before counting, so
- * commenting a test out — the most obvious way an agent disables one, more likely in practice than an `xit(` —
- * moves the count instead of leaving it steady. Block comments are stripped first so a `//` sequence that
- * happens to sit inside one cannot truncate the strip early.
- */
-function stripComments(source: string): string {
-  return source.replace(/\/\*[\s\S]*?\*\//gu, '').replace(/\/\/.*$/gmu, '');
-}
 
 /**
  * Counts `it(...)`/`test(...)` declarations in `source`, after stripping comments so a commented-out test is not
