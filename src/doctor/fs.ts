@@ -25,7 +25,9 @@ export interface DoctorFs {
    * Creates a fresh, uniquely-named directory under `prefix` and returns its path. Unlike the rest of this
    * interface, this **can throw** — an unwritable temp filesystem is a real environment failure, and the caller
    * (a `DoctorCheck`) is expected to catch it and turn it into a graceful `fail` finding rather than let it
-   * propagate out of `run()` and take down the whole `runDoctor` pass.
+   * propagate out of `run()` into `runDoctor`'s generic catch. That catch does contain the throw — the pass
+   * completes and every other check still reports — but its remediation ("this is a bug in janus doctor") is
+   * wrong for a broken environment, so the escaped failure is mislabelled rather than lost.
    */
   mkdtemp(prefix: string): string;
   /**
