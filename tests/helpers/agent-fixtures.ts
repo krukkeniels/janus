@@ -78,6 +78,7 @@ export function agentTaskFixture(overrides: Partial<AgentTask> = {}): AgentTask 
     experimentId: null,
     sandbox: 'workspace-write',
     env: {},
+    envKeys: [],
     ...overrides,
   };
 }

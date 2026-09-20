@@ -68,6 +68,12 @@ describe('planSandbox', () => {
     ).toThrow('code-writing role "implementation" needs a repo');
   });
 
+  it('refuses a run id that is not a single path segment, so it cannot escape the reports directory', () => {
+    expect(() =>
+      planSandbox({ role: 'discovery', runId: 'a/../..', repo: null, paths: paths(), config: config(), globalPnpmStore: null }),
+    ).toThrow(SandboxPlanError);
+  });
+
   it('overrides every class with danger-full-access when agents.allow_unsandboxed is true (§18.4)', () => {
     const p = paths();
     const unsandboxed = config({ agents: { allow_unsandboxed: true } });

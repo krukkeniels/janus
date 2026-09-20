@@ -10,6 +10,9 @@ import { sandboxClassFor } from './roles.js';
 
 const execFileAsync = promisify(execFile);
 
+/** A run id must stay a single path segment: it is joined straight into `.janus/reports/<run-id>/` (§18.4). */
+const RUN_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
+
 export class SandboxPlanError extends Error {
   constructor(message: string) {
     super(message);
@@ -50,6 +53,12 @@ export interface PlanSandboxInput {
  * the resolved store path and `~/.cache` become writable roots instead.
  */
 export function planSandbox(input: PlanSandboxInput): SandboxPlan {
+  if (!RUN_ID_PATTERN.test(input.runId)) {
+    throw new SandboxPlanError(
+      `run id "${input.runId}" must be a single path segment (letters, digits, "_" and "-" only); it is joined ` +
+        'directly into a workspace path',
+    );
+  }
   const unsandboxed = input.config.agents.allow_unsandboxed;
   const cls = sandboxClassFor(input.role);
 

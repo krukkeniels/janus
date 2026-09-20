@@ -1,7 +1,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import { resetHard, workingTreeDiff } from '../git/tree.js';
-import { EVIDENCE_DIR } from '../state/files.js';
+import { AGENTS_EVIDENCE_DIR } from '../state/files.js';
 import { emptyInFlight } from '../state/state-schema.js';
 import { incrementBudget } from './budgets.js';
 import type { BudgetIncrement } from './budgets.js';
@@ -36,7 +36,7 @@ export async function recoverInFlight(engine: Engine): Promise<InFlightRecovery 
       const dir = paths.repoDir(inFlight.repo);
       const diff = await workingTreeDiff(dir);
       if (diff.patch !== '') {
-        patchFile = join(paths.janusDir, EVIDENCE_DIR, 'agents', `${runId}.interrupted.patch`);
+        patchFile = join(paths.janusDir, AGENTS_EVIDENCE_DIR, `${runId}.interrupted.patch`);
         mkdirSync(dirname(patchFile), { recursive: true });
         writeFileSync(patchFile, diff.patch);
       }
