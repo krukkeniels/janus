@@ -32,7 +32,7 @@ async function run(ws: WorkspaceFixture, steps: StepRegistry, options: RunOption
       until: options.until ?? null,
       maxWaitMs: options.maxWaitMs ?? 60_000,
       modelProfile: 'default',
-      providers: testProviders(workspace.paths.fakeDir),
+      providers: testProviders(workspace.paths),
       ...(options.maxSteps === undefined ? {} : { maxSteps: options.maxSteps }),
     });
     return { result, warnings, state: workspace.state };
@@ -121,7 +121,7 @@ describe('runEngine', () => {
         until: null,
         maxWaitMs: 60_000,
         modelProfile: 'default',
-        providers: testProviders(workspace.paths.fakeDir),
+        providers: testProviders(workspace.paths),
       }),
     ).rejects.toThrow('simulated crash between C0 and gate entry');
     workspace.release();
@@ -287,7 +287,7 @@ describe('runEngine', () => {
         until: null,
         maxWaitMs: 60_000,
         modelProfile: 'default',
-        providers: testProviders(workspace.paths.fakeDir),
+        providers: testProviders(workspace.paths),
       });
       expect(result.reason).toBe('escalated');
       expect(result.steps).toBe(0);

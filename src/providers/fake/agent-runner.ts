@@ -1,33 +1,51 @@
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import type { AgentRole } from '../../config/config-schema.js';
-import type { AgentOutcome, AgentResult, AgentTask } from '../../agents/types.js';
+import { validateAgentResult } from '../../agents/output-schema.js';
+import type { AgentResult } from '../../agents/output-schema.js';
+import type { AgentOutcome, AgentRunFailure, AgentTask, AgentTokenUsage } from '../../agents/types.js';
 import { outcomeSummary } from '../../agents/types.js';
+import { runGit } from '../../git/run.js';
+import { REPORTS_DIR } from '../../state/files.js';
+import type { WorkspacePaths } from '../../workspace/layout.js';
 import type { AgentRunner } from '../types.js';
 import { FAKE_AGENTS_FILE, readFakeStore, writeFakeStore } from './store.js';
 
 /**
- * One scripted answer.
- *
- * T05 replaces this with the full §18.5 script: prepared patches applied to the repo, prepared reports written
- * under `.janus/reports/<run-id>/`, and prepared results validated against the §18.3 output schema.
+ * One scripted answer. Spec §18.5: "Scripted by role and attempt number; applies prepared patches, writes prepared
+ * reports, returns prepared results; state persisted under `fake/agents.json`."
  */
 export interface FakeAgentScriptEntry {
   status: AgentResult['status'];
   summary: string;
+  /** A unified diff applied to the assigned repo's **working tree**. Never a commit: §32 rule 11. */
+  patch?: string;
+  /** Files written under `.janus/reports/<run-id>/`, keyed by relative path. */
+  reports?: Record<string, string>;
+  /** Overrides merged over the generated §18.3 result. Validated against the role schema before it is returned. */
+  result?: Partial<AgentResult>;
+  tokens?: AgentTokenUsage;
+  durationMs?: number;
+  /** An adapter-level failure to simulate (timeout, invalid output, ...). Suppresses `result`. */
+  failure?: AgentRunFailure;
 }
 
 export interface FakeAgentCall {
   run_id: string;
   role: AgentRole;
   repo: string | null;
+  attempt: number;
   at: string;
   status: AgentResult['status'];
+  applied_patch: boolean;
+  wrote_reports: string[];
 }
 
 /** The contents of `<workspace>/fake/agents.json` (spec §18.5). */
 export interface FakeAgentStore {
-  /** Answers consumed in order per role; a role that runs out falls back to a generated `completed`. */
+  /** Answers per role, indexed by `attempt - 1`. A role that runs out falls back to a generated `completed`. */
   script: Partial<Record<AgentRole, FakeAgentScriptEntry[]>>;
-  /** Every call made in this workspace, so a second `janus run` continues where the first stopped. */
+  /** Every call made in this workspace, across processes. */
   calls: FakeAgentCall[];
 }
 
@@ -37,8 +55,7 @@ export function emptyFakeAgentStore(): FakeAgentStore {
 
 /** Seeds the script before a run and clears any recorded calls. */
 export function seedFakeAgents(fakeDir: string, script: FakeAgentStore['script']): void {
-  const store: FakeAgentStore = { script, calls: [] };
-  writeFakeStore(fakeDir, FAKE_AGENTS_FILE, store);
+  writeFakeStore(fakeDir, FAKE_AGENTS_FILE, { script, calls: [] } satisfies FakeAgentStore);
 }
 
 export function readFakeAgents(fakeDir: string): FakeAgentStore {
@@ -46,60 +63,105 @@ export function readFakeAgents(fakeDir: string): FakeAgentStore {
 }
 
 export interface FakeAgentRunnerInput {
-  /** `WorkspacePaths.fakeDir`. */
-  fakeDir: string;
+  paths: WorkspacePaths;
   now(): Date;
 }
 
+function baseResult(role: AgentRole, status: AgentResult['status'], summary: string): AgentResult {
+  return {
+    status,
+    summary,
+    changes_made: [],
+    findings: [],
+    evidence: [],
+    new_tasks: [],
+    expected_temporary_failure: false,
+    predicted_failures: null,
+    plan_change_required: false,
+    architecture_change_required: false,
+    behavior_change_required: false,
+    recommended_next_action: `fake ${role} agent has nothing further to recommend`,
+    handover: { current_state: summary, next_action: '', risks: [] },
+  };
+}
+
 /**
- * Spec §18.5: scripted by role and attempt number, state persisted under `fake/agents.json`.
+ * Spec §18.5's scripted runner.
  *
- * It writes nothing but that one file and never invokes git, which is what makes the §31.29 reflog audit
- * meaningful: a git write observed while this runner is in flight is a real violation, not fixture noise.
+ * It applies a patch with `git apply`, which writes the working tree and index but **no ref**, so T04's reflog
+ * audit (§31.29) still sees zero git writes during an agent run — exactly as a real Codex agent, which edits files
+ * and never commits.
  */
 export function createFakeAgentRunner(input: FakeAgentRunnerInput): AgentRunner {
+  const { paths } = input;
   return {
     name: 'fake',
     run: async (task: AgentTask): Promise<AgentOutcome> => {
-      const store = readFakeAgents(input.fakeDir);
-      const attempt = store.calls.filter((call) => call.role === task.role).length;
-      const scripted = store.script[task.role]?.[attempt];
+      const store = readFakeAgents(paths.fakeDir);
+      const index = Math.max(task.attempt, 1) - 1;
+      const scripted = store.script[task.role]?.[index];
       const status = scripted?.status ?? 'completed';
-      const summary = scripted?.summary ?? `fake ${task.role} agent attempt ${attempt + 1} completed`;
-      const result: AgentResult = {
-        status,
-        summary,
-        changes_made: [],
-        findings: [],
-        evidence: [],
-        new_tasks: [],
-        expected_temporary_failure: false,
-        predicted_failures: null,
-        plan_change_required: false,
-        architecture_change_required: false,
-        behavior_change_required: false,
-        recommended_next_action: '',
-        handover: { current_state: summary, next_action: '', risks: [] },
-      };
+      const summary = scripted?.summary ?? `fake ${task.role} agent attempt ${index + 1} completed`;
+
+      let appliedPatch = false;
+      if (scripted?.patch !== undefined && scripted.patch !== '') {
+        if (task.repo === null) {
+          throw new Error(`fake agent script for role ${task.role} attempt ${index + 1} has a patch but the task has no repo`);
+        }
+        const patchFile = join(paths.fakeDir, 'patches', `${task.runId}.patch`);
+        mkdirSync(dirname(patchFile), { recursive: true });
+        writeFileSync(patchFile, scripted.patch.endsWith('\n') ? scripted.patch : `${scripted.patch}\n`);
+        await runGit(paths.repoDir(task.repo), ['apply', '--whitespace=nowarn', patchFile]);
+        appliedPatch = true;
+      }
+
+      const wroteReports: string[] = [];
+      if (scripted?.reports !== undefined) {
+        const dir = join(paths.janusDir, REPORTS_DIR, task.runId);
+        for (const [name, contents] of Object.entries(scripted.reports)) {
+          const path = join(dir, name);
+          mkdirSync(dirname(path), { recursive: true });
+          writeFileSync(path, contents);
+          wroteReports.push(name);
+        }
+      }
+
+      const failure = scripted?.failure ?? null;
+      let result: AgentResult | null = null;
+      if (failure === null) {
+        const merged = { ...baseResult(task.role, status, summary), ...(scripted?.result ?? {}) };
+        const validated = validateAgentResult(task.role, merged);
+        if (!validated.ok) {
+          throw new Error(
+            `fake agent script for role ${task.role} attempt ${index + 1} is not a valid ${task.role} result: ${validated.errors.join('; ')}`,
+          );
+        }
+        result = validated.result;
+      }
+
       store.calls.push({
         run_id: task.runId,
         role: task.role,
         repo: task.repo,
+        attempt: task.attempt,
         at: input.now().toISOString(),
-        status,
+        status: failure === null ? status : 'failed',
+        applied_patch: appliedPatch,
+        wrote_reports: wroteReports,
       });
-      writeFakeStore(input.fakeDir, FAKE_AGENTS_FILE, store);
+      writeFakeStore(paths.fakeDir, FAKE_AGENTS_FILE, store);
+
       return {
         runId: task.runId,
-        status,
-        summary: outcomeSummary(result, null),
+        status: failure === null ? status : 'failed',
+        summary: outcomeSummary(result, failure),
         result,
-        failure: null,
-        tokens: null,
-        durationMs: 0,
-        exitCode: 0,
-        signal: null,
-        timedOut: false,
+        failure,
+        tokens: scripted?.tokens ?? null,
+        durationMs: scripted?.durationMs ?? 0,
+        exitCode: failure === null ? 0 : null,
+        signal: failure?.kind === 'timeout' ? 'SIGTERM' : null,
+        timedOut: failure?.kind === 'timeout',
         runnerVersion: null,
         promptBytes: null,
         truncations: [],

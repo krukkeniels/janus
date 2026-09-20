@@ -123,7 +123,7 @@ export async function createHarness(specs: RepoGraphSpec[], options: HarnessOpti
       assertNoAgentGitWrites(agentGitWrites);
     });
   }
-  const inner = options.agentRunner ?? createFakeAgentRunner({ fakeDir: paths.fakeDir, now });
+  const inner = options.agentRunner ?? createFakeAgentRunner({ paths, now });
   const providers: Providers = {
     agent: auditAgentRunner(inner, auditTargets, agentGitWrites),
     ci: createFakeCiProvider({ fakeDir: paths.fakeDir, now }),

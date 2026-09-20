@@ -15,6 +15,7 @@ import { GOAL_FILE } from '../../src/state/files.js';
 import { emptyInFlight } from '../../src/state/state-schema.js';
 import type { BudgetName, GoalStatus, InFlight } from '../../src/state/state-schema.js';
 import { readState, writeState } from '../../src/state/state-store.js';
+import type { WorkspacePaths } from '../../src/workspace/layout.js';
 import type { Workspace } from '../../src/workspace/open-workspace.js';
 import { tempDir } from './git-fixtures.js';
 import { runCli } from './run-cli.js';
@@ -107,11 +108,11 @@ export function scriptedSteps(overrides: StepRegistry = {}): StepRegistry {
   };
 }
 
-/** A providers bag backed by the fakes, rooted at a workspace's `fake/` directory. */
-export function testProviders(fakeDir: string, now: () => Date = () => new Date()): Providers {
+/** A providers bag backed by the fakes, rooted at a workspace's paths. */
+export function testProviders(paths: WorkspacePaths, now: () => Date = () => new Date()): Providers {
   return {
-    agent: createFakeAgentRunner({ fakeDir, now }),
-    ci: createFakeCiProvider({ fakeDir, now }),
-    scm: createFakeScmProvider({ fakeDir, now }),
+    agent: createFakeAgentRunner({ paths, now }),
+    ci: createFakeCiProvider({ fakeDir: paths.fakeDir, now }),
+    scm: createFakeScmProvider({ fakeDir: paths.fakeDir, now }),
   };
 }

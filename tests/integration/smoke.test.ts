@@ -114,7 +114,16 @@ describe('T04 smoke: init and one checkpoint through the harness', () => {
     expect(harness.evidence('agents/run-0001.yaml')).toContain('summary: discovery found 3 repos');
     const agents = readFakeAgents(harness.fakeDir);
     expect(agents.calls).toEqual([
-      { run_id: 'run-0001', role: 'discovery', repo: 'ui-kit', at: '2026-09-20T14:00:00.000Z', status: 'completed' },
+      {
+        run_id: 'run-0001',
+        role: 'discovery',
+        repo: 'ui-kit',
+        attempt: 1,
+        at: '2026-09-20T14:00:00.000Z',
+        status: 'completed',
+        applied_patch: false,
+        wrote_reports: [],
+      },
     ]);
     expect(harness.events().some((event) => event['type'] === 'agent.finished')).toBe(true);
     await expectStatePushed(harness);
