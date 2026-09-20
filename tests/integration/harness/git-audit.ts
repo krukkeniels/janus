@@ -37,6 +37,9 @@ export interface AgentGitWrite extends GitWrite {
 export async function captureRefLogs(targets: readonly AuditTarget[]): Promise<RefLogSnapshot> {
   const snapshot: RefLogSnapshot = new Map();
   for (const target of targets) {
+    if (snapshot.has(target.label)) {
+      throw new Error(`duplicate audit target label: ${target.label}`);
+    }
     const refs: RefLogs = new Map();
     for (const ref of ['HEAD', ...(await listRefs(target.dir))]) {
       if (!(await reflogExists(target.dir, ref))) continue;
@@ -52,11 +55,15 @@ export async function captureRefLogs(targets: readonly AuditTarget[]): Promise<R
 }
 
 /**
- * Entries present in `after` but not in `before`.
+ * Entries present in `after` but not in `before`, plus any ref that vanished entirely.
  *
  * A reflog only grows at the front, so the entries added during the window are the prefix of the new list that
  * sits on top of the old one. When the new list is not the old list with a prefix added — a ref was deleted and
  * recreated, or a reflog was rewritten, both of which are themselves git writes — the whole new list is reported.
+ *
+ * A ref (and its reflog) can also be erased outright — `git branch -D`, `git update-ref -d`, or a deleting push
+ * all do this — which is itself a history rewrite under spec §32 rule 11. Any label/ref present in `before` but
+ * missing from `after` is reported as a deletion, with `sha: ''` and `subject: 'ref deleted'`.
  */
 export function diffRefLogs(before: RefLogSnapshot, after: RefLogSnapshot): GitWrite[] {
   const writes: GitWrite[] = [];
@@ -71,6 +78,14 @@ export function diffRefLogs(before: RefLogSnapshot, after: RefLogSnapshot): GitW
         const sha = space === -1 ? entry : entry.slice(0, space);
         const subject = space === -1 ? '' : entry.slice(space + 1);
         writes.push({ label, ref, sha, subject });
+      }
+    }
+  }
+  for (const [label, refs] of before) {
+    const currentRefs = after.get(label) ?? new Map<string, string[]>();
+    for (const ref of refs.keys()) {
+      if (!currentRefs.has(ref)) {
+        writes.push({ label, ref, sha: '', subject: 'ref deleted' });
       }
     }
   }

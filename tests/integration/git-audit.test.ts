@@ -58,6 +58,23 @@ describe('captureRefLogs and diffRefLogs', () => {
     );
     expect(writes.some((write) => write.sha === sha && write.subject.includes('agent wrote this'))).toBe(true);
   });
+
+  it('reports a deleted ref, since deleting it also erases its reflog', async () => {
+    const dir = await repo('deleting');
+    await runGit(dir, ['checkout', '-q', '-b', 'ai/scratch']);
+    await runGit(dir, ['checkout', '-q', 'main']);
+    const targets = [{ label: 'repos/deleting', dir }];
+
+    const before = await captureRefLogs(targets);
+    await runGit(dir, ['branch', '-D', 'ai/scratch']);
+    const writes = diffRefLogs(before, await captureRefLogs(targets));
+
+    expect(writes).toEqual(
+      expect.arrayContaining([
+        { label: 'repos/deleting', ref: 'refs/heads/ai/scratch', sha: '', subject: 'ref deleted' },
+      ]),
+    );
+  });
 });
 
 describe('auditAgentRunner', () => {
@@ -85,6 +102,7 @@ describe('auditAgentRunner', () => {
 
     expect(sink.length).toBeGreaterThan(0);
     expect(sink.every((write) => write.runId === 'run-0007' && write.role === 'implementation')).toBe(true);
+    expect(sink.map((write) => write.ref)).toContain('refs/heads/main');
     const message = formatGitWrites(sink);
     expect(message).toContain('repos/naughty');
     expect(message).toContain('agent wrote this');
