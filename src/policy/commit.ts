@@ -71,6 +71,12 @@ export interface CommitAndPushResult {
 /**
  * Spec §14 step 3 and §32 rule 11: the orchestrator — never an agent — stages every change, commits, and pushes.
  *
+ * `commitAll` runs `git add -A`: it stages the **entire working tree** at `repoDir`, with no structural link to
+ * the file set the policy report analysed. The caller is therefore required to invoke this immediately after the
+ * policy check clears, with no intervening writes to `repoDir` — anything written into the work tree between the
+ * check and this call is committed too. (Task 10 owns that sequencing; this function does not and should not
+ * re-verify it — a check that aborts after the commit is already made is worse than the gap it would close.)
+ *
  * The push is `git push` with no `--force` (see `src/git/ops.ts`), so git itself refuses a non-fast-forward and
  * `PushRejectedError` propagates to the caller. That is §16.6's base-branch-sync situation and is deliberately
  * **not** handled here: the commit exists and must not be thrown away, so the decision belongs to the stage step.
