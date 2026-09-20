@@ -16,7 +16,8 @@ Update this table when a task merges to `main`. A task is done when its plan's f
 | T02 | done | 2055b8f (2026-09-19) | 151 tests; store dir via `npm_config_store_dir`, `clone_url` fields added |
 | T03 | done | 48ae5d3 (2026-09-20) | 557 tests; gate-entry ordering fixed after final review; §6/§26/§27 spec edits |
 | T04 | done | 437a35f (2026-09-20) | 597 tests; provider seam, persisted fakes, reflog audit, `pnpm test:integration` |
-| T05 to T24 | pending | | next: T05 (agent runner); plan committed in 249e577 |
+| T05 | done | 01d63fe (2026-09-20) | 727 tests; agent contract, generated output schemas, prompts, Codex adapter, fake runner, `janus agent run` |
+| T06 to T24 | pending | | next: T06 (prompt spike); it must also verify the §3.3/§18.4 read-only cwd tension against real Codex |
 
 ---
 
