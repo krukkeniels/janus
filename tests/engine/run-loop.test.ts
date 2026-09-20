@@ -20,7 +20,7 @@ import type { WorkspaceFixture } from '../helpers/engine-fixtures.js';
 
 const approver = { name: 'Janus Test', email: 'janus@test.invalid' };
 
-type RunOptions = Partial<Pick<RunEngineInput, 'until' | 'maxWaitMs' | 'maxSteps'>>;
+type RunOptions = Partial<Pick<RunEngineInput, 'until' | 'maxWaitMs' | 'maxSteps' | 'modelProfile'>>;
 
 async function run(ws: WorkspaceFixture, steps: StepRegistry, options: RunOptions = {}) {
   const workspace = await openWorkspace(ws.root);
@@ -31,7 +31,7 @@ async function run(ws: WorkspaceFixture, steps: StepRegistry, options: RunOption
       steps,
       until: options.until ?? null,
       maxWaitMs: options.maxWaitMs ?? 60_000,
-      modelProfile: 'default',
+      modelProfile: options.modelProfile ?? 'default',
       providers: testProviders(workspace.paths),
       ...(options.maxSteps === undefined ? {} : { maxSteps: options.maxSteps }),
     });
@@ -96,6 +96,30 @@ describe('runEngine', () => {
       'awaiting_plan_approval',
     ]);
     expect(types.filter((type) => type === 'gate.entered')).toHaveLength(1);
+  });
+
+  it('records the resolved model profile in state as well as telemetry (§18.6), without re-applying it on resume', async () => {
+    const ws = await initWorkspace();
+    expect(readState(ws.janusDir).execution.model_profile).toBeNull();
+
+    await run(ws, scriptedSteps(), { until: 'preparing' });
+    expect(readState(ws.janusDir).execution.model_profile).toBe('default');
+    expect(readEvents(ws.janusDir).find((event) => event['type'] === 'run.started')?.['model_profile']).toBe('default');
+
+    // Descriptive only: the next invocation resolves its own profile (here a `--model-profile` override, which
+    // the CLI has already checked against `model_profiles`) and overwrites the record. Nothing reads the stored
+    // value back to choose a model, so resuming never re-applies the profile the previous run used.
+    const configPath = join(ws.janusDir, CONFIG_FILE);
+    const config = parse(readFileSync(configPath, 'utf8')) as Record<string, unknown>;
+    config['model_profiles'] = {
+      default: { '*': { model: 'gpt-5.6-sol', effort: 'high' } },
+      cheap: { '*': { model: 'gpt-5.6-mini', effort: 'low' } },
+    };
+    writeFileSync(configPath, stringify(config));
+
+    const second = await run(ws, scriptedSteps(), { until: 'discovering', modelProfile: 'cheap' });
+    expect(second.result.status).toBe('discovering');
+    expect(readState(ws.janusDir).execution.model_profile).toBe('cheap');
   });
 
   it('recovers when a crash lands between the step-outcome checkpoint and gate entry', async () => {

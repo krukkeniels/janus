@@ -2,6 +2,7 @@ import { revParse } from '../git/ops.js';
 import type { Providers } from '../providers/types.js';
 import { emptyInFlight } from '../state/state-schema.js';
 import type { GoalStatus } from '../state/state-schema.js';
+import { writeState } from '../state/state-store.js';
 import type { RunStopReason } from '../telemetry/events.js';
 import type { Workspace } from '../workspace/open-workspace.js';
 import { checkGoalRuntime } from './budgets.js';
@@ -50,6 +51,12 @@ export async function runEngine(input: RunEngineInput): Promise<RunResult> {
   const { state, paths } = engine.workspace;
   const maxSteps = input.maxSteps ?? 1000;
   let executed = 0;
+  // §18.6: `--model-profile` "is recorded in state and telemetry". The event below carries it for this run; this
+  // field carries it for the goal, so a resumed `state.yaml` can say which profile produced the evidence on the
+  // state branch. Descriptive only — nothing reads it back to decide a model; every invocation re-resolves the
+  // profile from `--model-profile` or `workflow_models.profile`.
+  state.execution.model_profile = input.modelProfile;
+  writeState(paths.janusDir, state);
   engine.emit({
     type: 'run.started',
     pid: process.pid,

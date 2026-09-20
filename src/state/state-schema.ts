@@ -186,6 +186,12 @@ export const stateSchema = z
       .object({
         current_work_package: nullableString.default(null),
         current_verification_group: nullableString.default(null),
+        /**
+         * §18.6: the `--model-profile` (or `workflow_models.profile`) the most recent `janus run` resolved, so a
+         * resumed goal's state can say which profile produced its evidence. **Descriptive only**: resume never
+         * re-applies it — every invocation resolves the profile afresh — and it is not an attempt record (T12).
+         */
+        model_profile: nullableString.default(null),
         work_packages: z.record(z.string(), workPackageStateSchema).default({}),
         in_flight: z
           .object({
