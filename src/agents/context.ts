@@ -1,4 +1,5 @@
 import type { AgentRole } from '../config/config-schema.js';
+import { ANGULAR_GUIDANCE, outputContractBlock } from './prompts/shared.js';
 
 /**
  * One line of the §18.2 CHANGE SUMMARY: "file list with added/removed line counts; lockfiles and generated files
@@ -54,4 +55,55 @@ export interface ContextPackage extends ContextPackageInput {
   budget: string;
   /** §18.2 OUTPUT CONTRACT: the role's result fields, rendered from its schema. */
   outputContract: string;
+}
+
+/** Spec §18.2, verbatim and in order. The renderer emits exactly these, no more and no fewer. */
+export const SECTION_ORDER = [
+  'GOAL',
+  'REPOSITORY',
+  'APPROVED PLAN SLICE',
+  'CURRENT STATE',
+  'CHANGE SUMMARY',
+  'INLINE DIFF',
+  'LATEST VERIFICATION EVIDENCE',
+  'PREVIOUS ATTEMPTS',
+  'KNOWN BASELINE EXCEPTIONS',
+  'GUARDRAILS AND FORBIDDEN ACTIONS',
+  'ANGULAR GUIDANCE',
+  'BUDGET',
+  'OUTPUT CONTRACT',
+] as const;
+
+const LOCKFILES = new Set(['pnpm-lock.yaml', 'package-lock.json', 'yarn.lock', 'npm-shrinkwrap.json']);
+
+/** Directories whose entire contents are build output or tooling caches, never hand-written source. */
+const GENERATED_DIRECTORIES = new Set(['dist', 'out', 'build', 'coverage', '.angular', 'node_modules']);
+
+/** Spec §18.2: "lockfiles and generated files listed but never inlined". */
+export function isGeneratedPath(path: string): boolean {
+  const segments = path.split('/');
+  const base = segments[segments.length - 1] ?? path;
+  if (LOCKFILES.has(base)) return true;
+  return segments.slice(0, -1).some((segment) => GENERATED_DIRECTORIES.has(segment));
+}
+
+export interface BuildContextPackageInput {
+  role: AgentRole;
+  context: ContextPackageInput;
+  /** Repo-specific guardrails: forbidden paths, allowed scope, diff caps. §19's fixed list is added by the renderer. */
+  guardrails: string[];
+  /** §18.2 BUDGET: the counters and limits this attempt runs under. */
+  budget: string;
+}
+
+/** Fills the four blocks Janus always supplies, so no caller can ship a prompt without guardrails or a contract. */
+export function buildContextPackage(input: BuildContextPackageInput): ContextPackage {
+  return {
+    ...input.context,
+    role: input.role,
+    guardrails: input.guardrails,
+    angularGuidance: ANGULAR_GUIDANCE,
+    budget: input.budget,
+    outputContract: outputContractBlock(input.role),
+  };
 }
