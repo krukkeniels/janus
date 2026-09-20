@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { configSchema } from '../../src/config/config-schema.js';
 import { goalSchema } from '../../src/config/goal-schema.js';
 import { branchSpecCheck, gitIdentityCheck, tokensCheck } from '../../src/doctor/checks/repo.js';
+import { runDoctor } from '../../src/doctor/report.js';
 import { workspacePaths } from '../../src/workspace/layout.js';
 import { doctorContext, stubRunner } from '../helpers/doctor-fixtures.js';
 import { validGoal } from '../fixtures/valid-goal.js';
@@ -69,6 +70,37 @@ describe('tokensCheck', () => {
     const findings = await tokensCheck.run(ctx);
     expect(findings.map((f) => `${f.id}=${f.status}`)).toEqual(['tokens[JANUS_TEAMCITY_TOKEN]=fail', 'tokens[JANUS_BITBUCKET_TOKEN]=fail']);
     expect(findings[0]?.remediation).toContain('JANUS_TEAMCITY_TOKEN');
+  });
+
+  it('emits one finding, not two, when both providers point at the same shared variable', async () => {
+    // `teamcity.token_env` and `bitbucket.token_env` are independent fields with no cross-field constraint, and a
+    // single PAT shared by two systems on the same work network is an ordinary configuration. Two findings would
+    // share the id `tokens[SHARED_TOKEN]`, and `runDoctor`'s uniqueness invariant would throw away the whole
+    // report over it.
+    const shared = configSchema.parse({
+      workflow: { ci_provider: 'teamcity', scm_provider: 'bitbucket-server' },
+      teamcity: { url: 'https://teamcity.example.internal', token_env: 'SHARED_TOKEN' },
+      bitbucket: { url: 'https://bitbucket.example.internal', token_env: 'SHARED_TOKEN' },
+    });
+    const findings = await tokensCheck.run(doctorContext({ config: shared, env: { SHARED_TOKEN: 'shared-secret-value' } }));
+    expect(findings.map((f) => f.id)).toEqual(['tokens[SHARED_TOKEN]']);
+    expect(findings[0]?.status).toBe('pass');
+    // The one finding still explains both reasons the variable is required.
+    expect(findings[0]?.detail).toContain('ci_provider');
+    expect(findings[0]?.detail).toContain('scm_provider');
+    expect(JSON.stringify(findings)).not.toContain('shared-secret-value');
+  });
+
+  it('runs the shared-variable config through runDoctor without a contract error, and reports it as missing once', async () => {
+    const shared = configSchema.parse({
+      workflow: { ci_provider: 'teamcity', scm_provider: 'bitbucket-server' },
+      teamcity: { url: 'https://teamcity.example.internal', token_env: 'SHARED_TOKEN' },
+      bitbucket: { url: 'https://bitbucket.example.internal', token_env: 'SHARED_TOKEN' },
+    });
+    const report = await runDoctor([tokensCheck], doctorContext({ config: shared, env: {} }));
+    expect(report.checks.map((f) => f.id)).toEqual(['tokens[SHARED_TOKEN]']);
+    expect(report.summary.fail).toBe(1);
+    expect(report.checks[0]?.remediation).toContain('SHARED_TOKEN');
   });
 
   it('skips entirely when both providers are fakes, because no token is required', async () => {

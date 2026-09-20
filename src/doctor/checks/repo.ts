@@ -55,6 +55,14 @@ export const gitIdentityCheck: DoctorCheck = {
  *
  * §32 rule 12: the finding reports the variable **name** and whether it is set. It never reports the value, its
  * length, or any prefix of it.
+ *
+ * One finding **per variable**, not per provider: `teamcity.token_env` and `bitbucket.token_env` are independent
+ * config fields with no cross-field constraint, and pointing both at one shared PAT for two systems on the same
+ * work network is an ordinary way to configure Janus. Emitting a finding per provider would then produce two
+ * findings with the id `tokens[<VAR>]`, which `runDoctor`'s uniqueness invariant — correctly — rejects by throwing
+ * `DoctorContractError`, costing the operator the whole report (exit 1, zero findings, a message naming a Janus
+ * internal) over a config that is merely unusual. So the reasons are collected per variable and the detail names
+ * all of them.
  */
 export const tokensCheck: DoctorCheck = {
   id: 'tokens',
@@ -63,14 +71,20 @@ export const tokensCheck: DoctorCheck = {
     if (ctx.config === null) {
       return [skipped('tokens', tokensCheck.title, 'no config.yaml: doctor is not running inside a workspace', NO_WORKSPACE)];
     }
-    const required: Array<{ variable: string; why: string }> = [];
+    // Insertion-ordered, so the findings keep the declaration order regardless of how the reasons collapse.
+    const required = new Map<string, string[]>();
+    const require = (variable: string, why: string): void => {
+      const reasons = required.get(variable);
+      if (reasons === undefined) required.set(variable, [why]);
+      else reasons.push(why);
+    };
     if (ctx.config.workflow.ci_provider === 'teamcity') {
-      required.push({ variable: ctx.config.teamcity.token_env, why: 'workflow.ci_provider is "teamcity"' });
+      require(ctx.config.teamcity.token_env, 'workflow.ci_provider is "teamcity"');
     }
     if (ctx.config.workflow.scm_provider === 'bitbucket-server') {
-      required.push({ variable: ctx.config.bitbucket.token_env, why: 'workflow.scm_provider is "bitbucket-server"' });
+      require(ctx.config.bitbucket.token_env, 'workflow.scm_provider is "bitbucket-server"');
     }
-    if (required.length === 0) {
+    if (required.size === 0) {
       return [
         skipped(
           'tokens',
@@ -81,9 +95,10 @@ export const tokensCheck: DoctorCheck = {
       ];
     }
     const findings: DoctorObservation[] = [];
-    for (const { variable, why } of required) {
+    for (const [variable, reasons] of required) {
       const value = ctx.env[variable];
       const present = value !== undefined && value.trim() !== '';
+      const why = reasons.join(' and ');
       findings.push({
         id: `tokens[${variable}]`,
         title: `${variable} is set`,
