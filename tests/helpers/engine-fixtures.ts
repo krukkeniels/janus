@@ -6,6 +6,8 @@ import type { Engine } from '../../src/engine/engine.js';
 import { startStep } from '../../src/engine/steps.js';
 import type { Step, StepRegistry } from '../../src/engine/steps.js';
 import { checkoutBranch, commitAll, push } from '../../src/git/ops.js';
+import { createFakeAgentRunner } from '../../src/providers/fake/agent-runner.js';
+import type { Providers } from '../../src/providers/types.js';
 import { checkpoint } from '../../src/state/checkpoint.js';
 import { GOAL_FILE } from '../../src/state/files.js';
 import { emptyInFlight } from '../../src/state/state-schema.js';
@@ -21,6 +23,7 @@ export interface WorkspaceFixture {
   fixture: GoalFixture;
   root: string;
   janusDir: string;
+  fakeDir: string;
 }
 
 /** A freshly initialized workspace (status `created`) built by `janus init --goal` against temp bare remotes. */
@@ -29,7 +32,7 @@ export async function initWorkspace(): Promise<WorkspaceFixture> {
   const root = join(tempDir(), 'ws');
   const result = await runCli(['init', '--goal', fixture.goalPath, '--workspace', root]);
   if (result.code !== ExitCode.Ok) throw new Error(`janus init failed (${result.code}): ${result.stderr}`);
-  return { fixture, root, janusDir: join(root, '.janus') };
+  return { fixture, root, janusDir: join(root, '.janus'), fakeDir: join(root, 'fake') };
 }
 
 export interface TestEngine {
@@ -99,5 +102,14 @@ export function scriptedSteps(overrides: StepRegistry = {}): StepRegistry {
     awaiting_human_review: advanceStep('observe-pr-review', 'awaiting_merge'),
     awaiting_merge: advanceStep('observe-merge', 'completed'),
     ...overrides,
+  };
+}
+
+/** A providers bag backed by the fakes, rooted at a workspace's `fake/` directory. */
+export function testProviders(fakeDir: string, now: () => Date = () => new Date()): Providers {
+  return {
+    agent: createFakeAgentRunner({ fakeDir, now }),
+    ci: { name: 'fake', findBuild: async () => null },
+    scm: { name: 'fake', currentUser: async () => 'janus-fake', ensureBranch: async () => undefined },
   };
 }
