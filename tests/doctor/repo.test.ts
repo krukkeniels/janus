@@ -99,6 +99,26 @@ describe('branchSpecCheck', () => {
     expect(finding?.detail).toContain('janus-state');
   });
 
+  it('redacts a credentialed state.clone_url on the pass path, where it would otherwise print on every healthy run (§32 rule 12)', async () => {
+    // `state.clone_url` is a free `z.string().min(1)`, and a service-account clone URL with the credential inline
+    // is an ordinary way to configure one. This is the `pass` branch, so it reaches the human report, `--json`
+    // and the §35 operator skill on every healthy run. The placeholders below are obviously fake by design: they
+    // exist to prove redaction, not to look like a credential worth copying.
+    const config = configSchema.parse({
+      workflow: { ci_provider: 'fake', scm_provider: 'fake' },
+      state: { clone_url: 'https://svcuser:PLACEHOLDER-NOT-A-REAL-PAT@bitbucket.example.internal/scm/fe/state.git#token=PLACEHOLDER-FRAGMENT' },
+    });
+    const [finding] = await branchSpecCheck.run(doctorContext({ config, goal, paths }));
+    expect(finding?.status).toBe('pass');
+    const serialised = JSON.stringify(finding);
+    expect(serialised).not.toContain('PLACEHOLDER-NOT-A-REAL-PAT');
+    expect(serialised).not.toContain('PLACEHOLDER-FRAGMENT');
+    expect(serialised).not.toContain('svcuser');
+    // The host and path survive, so the finding still says which repository the state branch lives in.
+    expect(finding?.detail).toContain('bitbucket.example.internal/scm/fe/state.git');
+    expect(finding?.detail).toContain('janus/angular-15-to-16');
+  });
+
   it('warns, names the product repository and the branch, and offers both ways out (§33, §31.33)', async () => {
     const config = configSchema.parse({
       workflow: { ci_provider: 'teamcity', scm_provider: 'fake' },

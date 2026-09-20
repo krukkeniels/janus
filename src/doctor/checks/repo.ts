@@ -1,6 +1,7 @@
 import { ConfigError } from '../../config/errors.js';
 import { formatIdentity, parseIdent } from '../../git/identity.js';
 import { stateBranchName, stateRemote } from '../../workspace/remotes.js';
+import { redactCredentials, redactUrl } from '../redact.js';
 import { skipped } from '../types.js';
 import type { DoctorCheck, DoctorObservation } from '../types.js';
 import { lastLine } from './codex.js';
@@ -116,7 +117,10 @@ export const branchSpecCheck: DoctorCheck = {
     try {
       remote = stateRemote(ctx.goal, ctx.config);
     } catch (error) {
-      const detail = error instanceof ConfigError ? error.message : error instanceof Error ? error.message : String(error);
+      const raw = error instanceof ConfigError ? error.message : error instanceof Error ? error.message : String(error);
+      // Free text, not a parseable URL: the best-effort pass. Today's `ConfigError` messages name config keys
+      // rather than their values, but this is a caught message from outside this function and gets no free pass.
+      const detail = redactCredentials(raw);
       return [
         {
           id: 'state.branch_spec',
@@ -133,7 +137,11 @@ export const branchSpecCheck: DoctorCheck = {
           id: 'state.branch_spec',
           title: branchSpecCheck.title,
           status: 'pass',
-          detail: `the state branch ${branch} lives in the dedicated state repository ${remote.url}`,
+          // §32 rule 12: `remote.url` is `state.clone_url` verbatim, or `bitbucket.url` through the clone-URL
+          // template — either can legitimately be a credentialed `https://user:<pat>@host/...` clone URL, and this
+          // is the `pass` branch, so it prints on every healthy run. The structural redaction, not the best-effort
+          // one: this string is known to be a URL.
+          detail: `the state branch ${branch} lives in the dedicated state repository ${redactUrl(remote.url)}`,
           remediation: null,
         },
       ];

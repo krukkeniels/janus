@@ -1,4 +1,5 @@
 import { ExitCode } from '../cli/exit-codes.js';
+import { redactCredentials } from './redact.js';
 import { DoctorContractError } from './types.js';
 import type { DoctorCheck, DoctorCheckContext, DoctorFinding, DoctorObservation, DoctorStatus } from './types.js';
 
@@ -20,7 +21,12 @@ export async function runDoctor(checks: readonly DoctorCheck[], ctx: DoctorCheck
     try {
       observations = await check.run(ctx);
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      // §32 rule 12, at the boundary: this message is arbitrary text from an arbitrary failure — a raw `fetch`
+      // rejection quotes a whole credentialed URL back, which is exactly why `providers.ts` redacts its own catch.
+      // Doing it here too is belt-and-braces on top of that per-check discipline, not a replacement for it: a
+      // check still redacts every string it puts in a finding itself, because only the check knows which of its
+      // strings are parseable URLs (structural redaction) and which are free text (this best-effort pass).
+      const message = redactCredentials(error instanceof Error ? error.message : String(error));
       observations = [
         {
           id: check.id,

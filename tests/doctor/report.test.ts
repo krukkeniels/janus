@@ -48,6 +48,31 @@ describe('runDoctor', () => {
     expect(report.checks[0]?.remediation).toContain('janus doctor');
   });
 
+  it('redacts a credential out of a thrown check message before it reaches the finding (§32 rule 12)', async () => {
+    // This is the shape a raw `fetch` rejection has: the whole configured URL quoted back verbatim, userinfo and
+    // query string both. `providers.ts` guards its own call site, but the generic handler is the last boundary,
+    // and a check that forgot to redact — or one that throws from somewhere other than its probe call — reaches
+    // here. The placeholders are obviously fake: they prove redaction, they are not credential shapes.
+    const leaky: DoctorCheck = {
+      id: 'leaky',
+      title: 'throws a credentialed URL',
+      run: async () => {
+        throw new Error(
+          'TypeError: Request cannot be constructed from a URL that includes credentials: https://svcuser:PLACEHOLDER-NOT-A-REAL-PAT@teamcity.example.internal/app/rest/server?access_token=PLACEHOLDER-QUERY',
+        );
+      },
+    };
+    const report = await runDoctor([leaky], doctorContext());
+    expect(report.checks[0]?.status).toBe('fail');
+    const serialised = JSON.stringify(report);
+    expect(serialised).not.toContain('PLACEHOLDER-NOT-A-REAL-PAT');
+    expect(serialised).not.toContain('PLACEHOLDER-QUERY');
+    expect(serialised).not.toContain('svcuser');
+    // The diagnostic value survives: the operator still sees what threw and against which host.
+    expect(report.checks[0]?.detail).toContain('the check itself threw');
+    expect(report.checks[0]?.detail).toContain('teamcity.example.internal');
+  });
+
   it('refuses a non-pass finding with no remediation (§10 of the plan; every failure tells the operator what to do)', async () => {
     const bad = check('bad', [{ id: 'bad', title: 'Bad', status: 'fail', detail: 'x', remediation: null }]);
     await expect(runDoctor([bad], doctorContext())).rejects.toBeInstanceOf(DoctorContractError);

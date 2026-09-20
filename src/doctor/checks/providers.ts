@@ -1,3 +1,4 @@
+import { redactCredentials, redactUrl } from '../redact.js';
 import { skipped } from '../types.js';
 import type { DoctorCheck, DoctorCheckContext, DoctorObservation } from '../types.js';
 
@@ -15,66 +16,11 @@ interface ReachabilityInput {
 }
 
 /**
- * Query parameter names that commonly carry a credential when a provider URL uses query-string auth instead of
- * (or alongside) userinfo or a bearer header. Not exhaustive — see `redactCredentials` below.
- */
-const CREDENTIAL_QUERY_PARAMS = ['token', 'access_token', 'api_key', 'apikey', 'key', 'password', 'secret', 'auth'];
-const CREDENTIAL_QUERY_PARAM_RE = new RegExp(`([?&](?:${CREDENTIAL_QUERY_PARAMS.join('|')})=)[^&\\s]*`, 'giu');
-
-/**
- * The structural redaction: parses `url`, strips userinfo **and the entire query string**, and serialises what's
- * left. This is the guarantee for the URL the check itself builds and sends to `ctx.http` — a real URL can be
- * parsed exactly, so there is no credential-shape to guess at and no denylist to maintain. Dropping the whole
- * query string, not just known credential params, is deliberate: nothing diagnostically valuable is lost from a
- * reachability probe's detail line by doing so (the host and path are what identify what was probed), and a
- * denylist of query keys is exactly the kind of guess that a future auth scheme can slip past. When a query
- * string was removed, the redacted form says so explicitly, so an operator reading the report isn't left thinking
- * the probe hit a bare path it didn't. An unparseable URL yields a fixed placeholder, not any fragment of the
- * input — guessing at redaction on unparseable input is how a credential slips through.
- */
-function redactUrl(url: string): string {
-  try {
-    const parsed = new URL(url);
-    const hadQuery = parsed.search !== '';
-    parsed.username = '';
-    parsed.password = '';
-    parsed.search = '';
-    const base = parsed.toString();
-    return hadQuery ? `${base} (query string redacted)` : base;
-  } catch {
-    return '<unparseable url>';
-  }
-}
-
-/**
- * The best-effort redaction, for free text that did not come from parsing a URL: `result.error` and a caught
- * error's `message`. §32 rule 12: a configured provider URL can legitimately embed credentials, and it is not
- * only the URL the check builds itself that can carry one into a finding — `fetchProbe`'s real `fetch()` call
- * rejects a credentialed URL at Request-construction time, before any network I/O, with an error message that
- * embeds the whole raw URL verbatim, userinfo and query string both
- * (`TypeError: Request cannot be constructed from a URL that includes credentials: https://user:pass@host/...`).
- * That message comes back as `result.error` — a *returned* value, not a thrown one — so a `try/catch` around the
- * probe call never sees it, and for a userinfo-credentialed URL it is the *only* branch that can ever reach it
- * (`pass`, `401`, `403` and the generic non-2xx branches all require a response, which `fetch()` never attempts to
- * get for such a URL) — but a *query-string* credential survives into an ordinary `pass`, because `fetch()` has no
- * objection to those and the request succeeds.
- *
- * Unlike `redactUrl`, this text cannot be parsed structurally — it strips the same `scheme://user:pass@` shape
- * `GitError` in `src/git/run.ts` already redacts from arbitrary git args, and additionally blanks the *value* of
- * any query parameter named like a credential (case-insensitive), but it is best-effort: it catches the common
- * shapes, it does not guarantee coverage of every way a credential could appear in free text. The structural
- * guarantee lives in `redactUrl`, which is why every URL that reaches a finding field goes through that first.
- */
-function redactCredentials(text: string): string {
-  return text.replace(/(:\/\/)[^/@\s]+@/gu, '$1<redacted>@').replace(CREDENTIAL_QUERY_PARAM_RE, '$1<redacted>');
-}
-
-/**
  * One authenticated, read-only GET. §32 rule 12: the token reaches the `Authorization` header and nothing else —
  * never the detail, never the remediation, never a log line. Every externally-derived string that reaches a
- * finding field is redacted before it does: the probed URL through `redactUrl` (structural — userinfo and the
- * whole query string), and free text (`result.error`, a caught error's `message`) through `redactCredentials`
- * (best-effort).
+ * finding field is redacted before it does: the probed URL through `redactUrl` (structural — userinfo, the whole
+ * query string and the fragment), and free text (`result.error`, a caught error's `message`) through
+ * `redactCredentials` (best-effort).
  *
  * Nothing here may throw past `run()`: DNS failure, a refused connection, a TLS error and a timeout are all the
  * normal shape of "this environment cannot reach the provider", not a bug in janus doctor, so `ctx.http`'s
