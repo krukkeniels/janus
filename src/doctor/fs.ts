@@ -1,11 +1,12 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 /**
  * The filesystem seam. Two checks need it for reasons a stub must be able to reproduce: `sandbox.user_namespaces`
  * reads `/proc` entries that do not exist on every machine, and `pnpm.store` has to actually attempt a write —
  * `access(W_OK)` lies on read-only mounts, on full filesystems and under some container overlays, which is exactly
- * the case §31 item 33 asks doctor to detect.
+ * the case §31 item 33 asks doctor to detect. `codex.model` needs a real scratch directory outside any git repo,
+ * for the same "unit-testable with no real I/O" reason as the rest of this seam.
  */
 export interface DoctorFs {
   /** File contents, or null when the file is missing or unreadable. Never throws. */
@@ -14,6 +15,13 @@ export interface DoctorFs {
   mkdirp(dir: string): void;
   /** Creates and deletes a probe file in `dir`. Returns null on success, or the error message. Never throws. */
   probeWritable(dir: string): string | null;
+  /**
+   * Creates a fresh, uniquely-named directory under `prefix` and returns its path. Unlike the rest of this
+   * interface, this **can throw** — an unwritable temp filesystem is a real environment failure, and the caller
+   * (a `DoctorCheck`) is expected to catch it and turn it into a graceful `fail` finding rather than let it
+   * propagate out of `run()` and take down the whole `runDoctor` pass.
+   */
+  mkdtemp(prefix: string): string;
 }
 
 export const nodeFs: DoctorFs = {
@@ -40,4 +48,5 @@ export const nodeFs: DoctorFs = {
       rmSync(probe, { force: true });
     }
   },
+  mkdtemp: (prefix) => mkdtempSync(prefix),
 };

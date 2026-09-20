@@ -35,14 +35,22 @@ export function stubHttp(result: Partial<HttpProbeResult>): HttpProbe {
   return async () => ({ ok: false, status: null, error: null, ...result });
 }
 
-/** A `DoctorFs` backed by a plain map of path to contents. `writableError` makes `probeWritable` report a failure. */
-export function stubFs(options: { files?: Record<string, string>; writableError?: string } = {}): DoctorFs {
+/**
+ * A `DoctorFs` backed by a plain map of path to contents. `writableError` makes `probeWritable` report a failure.
+ * `mkdtempError` makes `mkdtemp` throw instead of returning a fake path, so a check's "the temp filesystem is
+ * unwritable" path can be exercised without ever touching the real filesystem.
+ */
+export function stubFs(options: { files?: Record<string, string>; writableError?: string; mkdtempError?: string } = {}): DoctorFs {
   const files = options.files ?? {};
   return {
     readText: (path) => files[path] ?? null,
     exists: (path) => path in files,
     mkdirp: () => undefined,
     probeWritable: () => options.writableError ?? null,
+    mkdtemp: (prefix) => {
+      if (options.mkdtempError !== undefined) throw new Error(options.mkdtempError);
+      return `${prefix}stub`;
+    },
   };
 }
 

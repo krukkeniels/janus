@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { configSchema } from '../../src/config/config-schema.js';
 import { codexBinaryCheck, codexLoginCheck, codexModelsCheck, distinctModels } from '../../src/doctor/checks/codex.js';
-import { doctorContext, stubRunner } from '../helpers/doctor-fixtures.js';
+import { doctorContext, stubFs, stubRunner } from '../helpers/doctor-fixtures.js';
 
 const isVersion = (bin: string, args: string[]): boolean => bin === 'codex' && args[0] === '--version';
 const isLogin = (bin: string, args: string[]): boolean => bin === 'codex' && args[0] === 'login';
@@ -32,7 +32,7 @@ describe('codexBinaryCheck', () => {
     const [finding] = await codexBinaryCheck.run(ctx);
     expect(finding?.status).toBe('fail');
     expect(finding?.detail).toContain('127');
-    expect(finding?.remediation).not.toBeNull();
+    expect(finding?.remediation).toContain('reinstall');
   });
 });
 
@@ -55,6 +55,17 @@ describe('codexLoginCheck', () => {
     expect(finding?.remediation).toContain('codex login');
     // §28: "Codex authentication is handled outside Janus" — the remediation must not suggest a config change.
     expect(finding?.remediation).not.toContain('config.yaml');
+  });
+
+  it('fails when codex exits 0 but reports it is not logged in (the "not logged in" substring trap)', async () => {
+    // 'not logged in'.includes('logged in') is true, so a naive substring check false-passes this. exitCode is
+    // deliberately 0 here so the exit-code disjunct cannot mask the bug the way the exitCode:1 test above does.
+    const ctx = doctorContext({
+      run: stubRunner([{ match: (r) => isLogin(r.bin, r.args), result: { exitCode: 0, stdout: 'Not logged in\n', stderr: '' } }]),
+    });
+    const [finding] = await codexLoginCheck.run(ctx);
+    expect(finding?.status).toBe('fail');
+    expect(finding?.remediation).toContain('codex login');
   });
 });
 
@@ -104,6 +115,8 @@ describe('codexModelsCheck', () => {
     expect(seen[0]).toContain('-m');
     expect(seen[0]).toContain('gpt-5.6-sol');
     expect(seen[0]).toContain('model_reasoning_effort=high');
+    // Decision 14: bound the probe's own cost, not just its prompt — "one-token probe" must be enforced, not just asked for.
+    expect(seen[0]).toContain('model_max_output_tokens=1');
     expect(seen[0]).not.toContain('--add-dir');
   });
 
@@ -136,5 +149,18 @@ describe('codexModelsCheck', () => {
     expect(findings).toHaveLength(1);
     expect(findings[0]?.status).toBe('skip');
     expect(findings[0]?.remediation).toContain('janus init');
+  });
+
+  it('fails gracefully, instead of throwing out of run(), when the scratch directory cannot be created', async () => {
+    const ctx = doctorContext({
+      fs: stubFs({ mkdtempError: 'EACCES: permission denied, mkdtemp' }),
+      run: stubRunner([{ match: (r) => isExec(r.bin, r.args), result: { exitCode: 0 } }]),
+    });
+    const findings = await codexModelsCheck.run(ctx);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.status).toBe('fail');
+    expect(findings[0]?.detail).toContain('EACCES');
+    expect(findings[0]?.remediation).not.toBeNull();
+    expect(findings[0]?.remediation).toContain('writable');
   });
 });

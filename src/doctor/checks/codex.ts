@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parseLadderEntry } from '../../agents/models.js';
@@ -59,13 +59,23 @@ export const codexBinaryCheck: DoctorCheck = {
   },
 };
 
+/**
+ * True only when `output` **starts with** "logged in" (case-insensitive). Anchoring at the start, rather than
+ * checking for the substring anywhere, matters because `'not logged in'.includes('logged in')` is `true` — a bare
+ * substring check false-passes every "Not logged in" / "Not authenticated" message Codex can print, since those
+ * negative messages all *contain* the positive phrase. None of them start with it.
+ */
+function isLoggedIn(output: string): boolean {
+  return /^logged in\b/i.test(output.trim());
+}
+
 export const codexLoginCheck: DoctorCheck = {
   id: 'codex.login',
   title: 'codex is authenticated',
   run: async (ctx) => {
     const result = await ctx.run({ bin: CODEX_BIN, args: ['login', 'status'], cwd: tmpdir(), timeoutMs: LOGIN_TIMEOUT_MS });
     const output = result.stdout.trim() === '' ? lastLine(result.stderr) : result.stdout.trim();
-    if (result.spawnFailed || result.exitCode !== 0 || !output.toLowerCase().includes('logged in')) {
+    if (result.spawnFailed || result.exitCode !== 0 || !isLoggedIn(output)) {
       return [
         {
           id: 'codex.login',
@@ -129,7 +139,25 @@ export const codexModelsCheck: DoctorCheck = {
       ];
     }
 
-    const scratch = mkdtempSync(join(tmpdir(), 'janus-doctor-model-'));
+    let scratch: string;
+    try {
+      // Through the `DoctorFs` seam, not a direct `node:fs` call — `DoctorCheckContext` forbids direct `node:fs`
+      // so every check stays unit-testable with no real I/O. `mkdtemp` is the one `DoctorFs` method that can
+      // throw, so an unwritable temp filesystem is caught here and turned into a graceful `fail` finding instead
+      // of an uncaught exception that would take down the rest of `runDoctor`.
+      scratch = ctx.fs.mkdtemp(join(tmpdir(), 'janus-doctor-model-'));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return [
+        {
+          id: 'codex.model',
+          title: codexModelsCheck.title,
+          status: 'fail',
+          detail: `could not create a scratch directory for the model probe: ${message}`,
+          remediation: 'ensure the system temp directory is writable, then re-run janus doctor',
+        },
+      ];
+    }
     try {
       const findings: DoctorObservation[] = [];
       for (const { model, effort } of models) {
@@ -148,6 +176,8 @@ export const codexModelsCheck: DoctorCheck = {
             model,
             '-c',
             `model_reasoning_effort=${effort}`,
+            '-c',
+            'model_max_output_tokens=1',
             '-',
           ],
           cwd: scratch,
