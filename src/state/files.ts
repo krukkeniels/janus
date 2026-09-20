@@ -7,3 +7,7 @@ export const DECISIONS_FILE = 'decisions.md';
 export const EVENTS_FILE = 'telemetry/events.jsonl';
 export const ESCALATION_FILE = 'escalation.md';
 export const EVIDENCE_DIR = 'evidence';
+/** Spec §5: `reports/<run-id>/` — raw agent-written reports before the orchestrator files them. */
+export const REPORTS_DIR = 'reports';
+/** Spec §5: `evidence/agents/<run-id>.yaml` — validated result, token usage, duration. */
+export const AGENTS_EVIDENCE_DIR = 'evidence/agents';

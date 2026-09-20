@@ -88,6 +88,7 @@ export async function createWorkspace(input: CreateWorkspaceInput): Promise<Crea
       goal: input.goal,
       message: `chore(janus): initialize workspace for ${input.goal.id}`,
       push: true,
+      allowUnsandboxed: input.config.agents.allow_unsandboxed,
       decision: {
         at: now.toISOString(),
         by: 'janus init',

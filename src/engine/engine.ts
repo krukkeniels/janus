@@ -52,6 +52,7 @@ export function createEngine(input: CreateEngineInput): Engine {
         message,
         push,
         now: now(),
+        allowUnsandboxed: input.workspace.config.agents.allow_unsandboxed,
         ...(decision === undefined ? {} : { decision }),
       }),
     markInFlight: (patch) => {

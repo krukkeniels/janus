@@ -1,8 +1,19 @@
+import { UNSANDBOXED_NOTE } from '../agents/sandbox.js';
 import type { Goal } from '../config/goal-schema.js';
 import type { JanusState } from '../state/state-schema.js';
 
+export interface RenderHandoverOptions {
+  /** `agents.allow_unsandboxed`; §18.4 requires it recorded in every checkpoint. */
+  allowUnsandboxed: boolean;
+}
+
 /** The human-readable handover regenerated at every checkpoint (spec §5, §7). state.yaml stays authoritative. */
-export function renderHandover(state: JanusState, goal: Goal, now: Date): string {
+export function renderHandover(
+  state: JanusState,
+  goal: Goal,
+  now: Date,
+  options: RenderHandoverOptions = { allowUnsandboxed: false },
+): string {
   const lines: string[] = [];
   lines.push(`# Handover: ${goal.title}`, '');
   lines.push(
@@ -24,6 +35,9 @@ export function renderHandover(state: JanusState, goal: Goal, now: Date): string
     lines.push(
       `| ${repo.name} | ${repoState.goal_branch} | ${short(repoState.base_commit)} | ${short(repoState.head_commit)} | ${repoState.pr.url ?? '-'} | ${repoState.merged ? 'yes' : 'no'} |`,
     );
+  }
+  if (options.allowUnsandboxed) {
+    lines.push('', '## Sandbox', '', `> ${UNSANDBOXED_NOTE}`);
   }
   lines.push('', '## Next action', '', nextAction(state), '');
   return lines.join('\n');

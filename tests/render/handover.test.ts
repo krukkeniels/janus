@@ -35,4 +35,11 @@ describe('renderHandover', () => {
     expect(text).toContain('- Gate: plan_approval (waiting)');
     expect(text).toContain('janus approve plan --commit <sha>');
   });
+
+  it('records that agents run unsandboxed, because §18.4 wants it in every checkpoint', () => {
+    const current = state();
+    const text = renderHandover(current, goal, now, { allowUnsandboxed: true });
+    expect(text).toContain('danger-full-access');
+    expect(renderHandover(current, goal, now)).not.toContain('danger-full-access');
+  });
 });

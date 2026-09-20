@@ -24,6 +24,8 @@ export interface CheckpointInput {
   push: boolean;
   decision?: DecisionEntry;
   now?: Date;
+  /** `agents.allow_unsandboxed`; recorded in the handover this checkpoint writes (spec §18.4). */
+  allowUnsandboxed?: boolean;
 }
 
 export interface CheckpointResult {
@@ -41,7 +43,10 @@ export async function checkpoint(input: CheckpointInput): Promise<CheckpointResu
   const now = input.now ?? new Date();
   input.state.telemetry.last_updated_at = now.toISOString();
   writeState(input.janusDir, input.state);
-  writeFileSync(join(input.janusDir, HANDOVER_FILE), renderHandover(input.state, input.goal, now));
+  writeFileSync(
+    join(input.janusDir, HANDOVER_FILE),
+    renderHandover(input.state, input.goal, now, { allowUnsandboxed: input.allowUnsandboxed ?? false }),
+  );
   if (input.decision) {
     appendDecision(input.janusDir, input.decision);
   }
