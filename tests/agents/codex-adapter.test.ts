@@ -122,6 +122,26 @@ describe('buildCodexArgs', () => {
       expect(args).not.toContain('--skip-git-repo-check');
     }
   });
+
+  it('passes --skip-git-repo-check for a read-only task and never for a write-capable one (§18.4, T06 probe R2)', () => {
+    const readOnly = task({
+      role: 'review',
+      repo: null,
+      sandboxClass: 'read-only',
+      sandbox: 'read-only',
+      network: false,
+      writableRoots: [],
+      skipGitRepoCheck: true,
+    });
+    const args = buildCodexArgs(readOnly, { schemaPath: '/tmp/s/schema.json', lastMessagePath: '/tmp/s/last.json' });
+    expect(args.slice(0, 6)).toEqual(['exec', '-C', readOnly.cwd, '-s', 'read-only', '--skip-git-repo-check']);
+    expect(args).not.toContain('--add-dir');
+    expect(args).not.toContain('resume');
+
+    const codeWriting = buildCodexArgs(task(), { schemaPath: '/tmp/s/schema.json', lastMessagePath: '/tmp/s/last.json' });
+    expect(codeWriting).not.toContain('--skip-git-repo-check');
+    expect(codeWriting).not.toContain('resume');
+  });
 });
 
 /** `runAgent` renders the §18.2 prompt once and hands it to the runner; these tests drive the adapter directly. */

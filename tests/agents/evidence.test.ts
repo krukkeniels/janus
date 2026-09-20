@@ -4,7 +4,7 @@ import { parse } from 'yaml';
 import { describe, expect, it } from 'vitest';
 import { agentEvidencePath, buildAgentEvidence, writeAgentEvidence } from '../../src/agents/evidence.js';
 import { workspacePaths } from '../../src/workspace/layout.js';
-import { agentTaskFixture, promptFixture, resultFixture } from '../helpers/agent-fixtures.js';
+import { agentTaskFixture, promptFixture, resultFixture, stubOutcome } from '../helpers/agent-fixtures.js';
 import { tempDir } from '../helpers/git-fixtures.js';
 
 const TOKEN = 'bbt-super-secret-token-value';
@@ -104,5 +104,18 @@ describe('agent evidence', () => {
     } finally {
       delete process.env['JANUS_TEAMCITY_TOKEN'];
     }
+  });
+
+  it('records whether the run was allowed outside a git work tree (§18.4, T06 probe R2)', () => {
+    const evidence = buildAgentEvidence({
+      task: agentTaskFixture({ role: 'review', repo: null, sandboxClass: 'read-only', sandbox: 'read-only', skipGitRepoCheck: true, writableRoots: [] }),
+      paths: workspacePaths(tempDir('janus-evidence-skipflag-')),
+      runner: 'codex',
+      startedAt: '2026-09-20T12:00:00.000Z',
+      finishedAt: '2026-09-20T12:00:05.000Z',
+      outcome: stubOutcome(agentTaskFixture({ role: 'review' })),
+      prompt: promptFixture(agentTaskFixture({ role: 'review' })),
+    });
+    expect(evidence.skip_git_repo_check).toBe(true);
   });
 });

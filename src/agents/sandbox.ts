@@ -24,6 +24,16 @@ export interface SandboxPlan {
   sandbox: 'read-only' | 'workspace-write' | 'danger-full-access';
   /** `-c sandbox_workspace_write.network_access=<bool>`; only meaningful for `workspace-write`. */
   network: boolean;
+  /**
+   * Spec §18.4 as amended by T06 probe R2. Real `codex exec` refuses to start outside a git work tree
+   * (`Not inside a trusted directory and --skip-git-repo-check was not specified.`), and §3.3 puts the read-only
+   * class's cwd at the workspace root, which `src/workspace/layout.ts` deliberately does not `git init`. A
+   * read-only run has an **empty** writable-root list, so it cannot write anything wherever it starts, and the
+   * flag's protective purpose — keep a write-capable agent inside a known repository — does not apply to it.
+   * True for the read-only class and for nothing else; the code-writing class starts in a repo and the
+   * report-writing class starts inside `.janus/`, which is itself a git checkout.
+   */
+  skipGitRepoCheck: boolean;
   cwd: string;
   /** Absolute paths passed as `--add-dir`. */
   writableRoots: string[];
@@ -60,14 +70,15 @@ export function planSandbox(input: PlanSandboxInput): SandboxPlan {
   const cls = sandboxClassFor(input.role);
 
   if (cls === 'read-only') {
-    // Spec-literal, and knowingly in tension: §3.3 puts a read-only agent's cwd at the workspace root, §18.4
-    // forbids `--skip-git-repo-check`, and the workspace root is never `git init`-ed — so `codex exec -C <root>`
-    // may refuse to start. Janus follows the spec here rather than inventing a cwd or a flag; T06's manual spike
-    // (§29.4) and T07's `janus doctor` probe verify it against the real binary and, if it does refuse, that is
-    // where the ruling gets revisited.
+    // §3.3 gives this class the workspace root as its cwd, and that root is not a git repository. T06 probe R2
+    // confirmed that real codex refuses such a run and that `--skip-git-repo-check` is the only one of the four
+    // weighed options that works without changing §3.3's table (option b) or nesting a fourth git repository
+    // around `.janus/` and every `repos/<name>` (option c); a `projects.<dir>.trust_level` override does not work
+    // on 0.146.0. §18.4 was amended to allow the flag for this class alone.
     return {
       sandbox: unsandboxed ? 'danger-full-access' : 'read-only',
       network: false,
+      skipGitRepoCheck: true,
       cwd: input.paths.root,
       writableRoots: [],
       env: {},
@@ -82,6 +93,7 @@ export function planSandbox(input: PlanSandboxInput): SandboxPlan {
     return {
       sandbox: unsandboxed ? 'danger-full-access' : 'workspace-write',
       network: false,
+      skipGitRepoCheck: false,
       cwd: dir,
       writableRoots: unsandboxed ? [] : [dir],
       env: {},
@@ -93,7 +105,7 @@ export function planSandbox(input: PlanSandboxInput): SandboxPlan {
   }
   const repoDir = input.paths.repoDir(input.repo);
   if (unsandboxed) {
-    return { sandbox: 'danger-full-access', network: true, cwd: repoDir, writableRoots: [], env: {} };
+    return { sandbox: 'danger-full-access', network: true, skipGitRepoCheck: false, cwd: repoDir, writableRoots: [], env: {} };
   }
   if (input.config.agents.pnpm_store === 'global') {
     if (input.globalPnpmStore === null) {
@@ -105,6 +117,7 @@ export function planSandbox(input: PlanSandboxInput): SandboxPlan {
     return {
       sandbox: 'workspace-write',
       network: true,
+      skipGitRepoCheck: false,
       cwd: repoDir,
       writableRoots: [repoDir, input.globalPnpmStore, join(homedir(), '.cache')],
       env: {},
@@ -113,6 +126,7 @@ export function planSandbox(input: PlanSandboxInput): SandboxPlan {
   return {
     sandbox: 'workspace-write',
     network: true,
+    skipGitRepoCheck: false,
     cwd: repoDir,
     writableRoots: [repoDir, input.paths.pnpmStoreDir],
     env: { npm_config_store_dir: input.paths.pnpmStoreDir },

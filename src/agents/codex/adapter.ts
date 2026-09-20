@@ -40,14 +40,17 @@ function currentEnv(): Record<string, string> {
  *   [-m <model>] [-c model_reasoning_effort=<x>] - < prompt.md
  * ```
  *
- * `resume` and `--skip-git-repo-check` are never passed. The network flag is passed only for `workspace-write`,
- * because it configures that sandbox; `read-only` and `danger-full-access` do not take it.
+ * `resume` is never passed. `--skip-git-repo-check` is passed only when `task.skipGitRepoCheck` is set, which
+ * `planSandbox` does for the read-only class alone (§18.4 as amended by T06 probe R2). The network flag is passed
+ * only for `workspace-write`, because it configures that sandbox; `read-only` and `danger-full-access` do not
+ * take it.
  */
 export function buildCodexArgs(task: AgentTask, files: { schemaPath: string; lastMessagePath: string }): string[] {
   const args = ['exec', '-C', task.cwd, '-s', task.sandbox];
   if (task.sandbox === 'workspace-write') {
     args.push('-c', `sandbox_workspace_write.network_access=${String(task.network)}`);
   }
+  if (task.skipGitRepoCheck) args.push('--skip-git-repo-check');
   for (const root of task.writableRoots) args.push('--add-dir', root);
   args.push('--output-schema', files.schemaPath, '--json', '-o', files.lastMessagePath, '--ephemeral');
   args.push('-m', task.model.model, '-c', `model_reasoning_effort=${task.model.effort}`);

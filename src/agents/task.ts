@@ -58,6 +58,7 @@ export function buildAgentTask(input: BuildAgentTaskInput): AgentTask {
     cwd: plan.cwd,
     writableRoots: plan.writableRoots,
     network: plan.network,
+    skipGitRepoCheck: plan.skipGitRepoCheck,
     timeoutMinutes,
     context: buildContextPackage({
       role: input.role,

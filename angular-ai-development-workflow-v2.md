@@ -189,7 +189,7 @@ Codex processes started fresh per task through `codex exec`. Roles fall into thr
 | report-writing | discovery, integration discovery, planning, replanning, qa | `workspace-write`, network off | `.janus/reports/<run-id>/` | that directory only |
 | read-only | checkpoint, review, triage | `read-only` | the workspace root | none; results returned as JSON |
 
-All classes can read the whole workspace (repos and `.janus/`). `.git` directories are read-only in every class, which is why agents cannot commit. Every prompt states that git write commands are forbidden.
+All classes can read the whole workspace (repos and `.janus/`). `.git` directories are read-only in every class, which is why agents cannot commit. Every prompt states that git write commands are forbidden. The workspace root is not a git repository, and is not made one: `git init`-ing it would nest `.janus/` — itself a git checkout — and every `repos/<name>` inside a fourth repository, and would add a reflog the §31.29 audit does not enumerate. The read-only class therefore starts outside a work tree, which §18.4 permits with `--skip-git-repo-check` for that class alone.
 
 ### 3.4 TeamCity and Bitbucket
 
@@ -780,7 +780,7 @@ Writable roots for code-writing agents: the repo, the pnpm store (`pnpm store pa
 
 Angular guidance injected into code-writing prompts: use the repo's package manager; run `ng update` with `--allow-dirty` because the tree is intentionally uncommitted; expect CLI migrations to touch files across the repo; never edit CI configuration.
 
-The adapter parses `turn.completed.usage`, records duration, exit code, and the validated final message under `evidence/agents/<run-id>.yaml`, and kills the process at timeout. `resume` and `--skip-git-repo-check` are never used.
+The adapter parses `turn.completed.usage`, records duration, exit code, and the validated final message under `evidence/agents/<run-id>.yaml`, and kills the process at timeout. `resume` is never used. `--skip-git-repo-check` is passed for the **read-only class only**: §3.3 puts that class's cwd at the workspace root, which is deliberately not a git repository, and real `codex exec` refuses to start there (`Not inside a trusted directory and --skip-git-repo-check was not specified.`). A read-only run has an empty writable-root list and so cannot write anything wherever it starts, which is why the flag's purpose — keeping a write-capable agent inside a known repository — does not apply to it. It is never passed for the code-writing or report-writing classes, whose cwd is always inside a git work tree, and it stays set for a read-only role even when `agents.allow_unsandboxed` turns its sandbox into `danger-full-access`, because the cwd is what the check looks at. (T06 probe R2; `docs/spikes/prompt-spike.md`.)
 
 Bubblewrap requires user namespaces. `janus doctor` runs three real probes: a read-only `codex exec` echo, a `workspace-write` install in a scratch project, and an `ng update --allow-dirty` dry run when Angular is present. If the sandbox cannot start (containers without user namespaces), doctor reports it; running with `danger-full-access` is possible only with `agents.allow_unsandboxed: true` and is recorded in every checkpoint, with the reflog audit (§31) as the remaining guard.
 

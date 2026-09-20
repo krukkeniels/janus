@@ -82,6 +82,33 @@ Ran a `workspace-write` implementation task in a scratch repo through `createCod
 recorded here and deliberately **not** added to `AgentTokenUsage` — §18.6's comparison names input, cached,
 output and reasoning, and nothing consumes a fifth counter.
 
+### R2 — the read-only cwd tension (open question 1)
+
+| Variant | Exit | Note |
+|---|---|---|
+| `-s read-only -C <non-repo>` | 1 | stderr: `Not inside a trusted directory and --skip-git-repo-check was not specified.` — refused before any model call |
+| the same `+ --skip-git-repo-check` | 0 | runs |
+| the same in a `git init`-ed empty dir | 0 | runs |
+| the same `+ -c projects."<dir>".trust_level="trusted"` | 1 | still refused |
+
+**Verdict: the tension is real.** Every `checkpoint`, `review` and `triage` run would have failed at spawn, and
+T05's own read-only smoke test was red.
+
+**Options weighed:**
+
+- **(a) exempt the read-only class from the §18.4 flag ban — CHOSEN.** A read-only run has zero `--add-dir`
+  writable roots; it cannot write anything wherever it starts. Leaves §3.3's class table, the workspace layout and
+  the §31.29 reflog audit untouched.
+- (b) give read-only roles a repo cwd — rejected. `checkpoint` and `review` are workspace-level and span every
+  repo; there is no single repo to pick.
+- (c) `git init` the workspace root — verified to work, rejected. Nests `.janus/` and every `repos/<name>` inside a
+  fourth repository, adds an unaudited reflog, and gives a `danger-full-access` agent a root index to dirty.
+- (d) `-c projects."<dir>".trust_level="trusted"` — verified not to work on codex-cli 0.146.0.
+
+**Changes:** `SandboxPlan.skipGitRepoCheck` / `AgentTask.skipGitRepoCheck`, set by `planSandbox` for the read-only
+class only; `buildCodexArgs` emits the flag; `AgentEvidence.skip_git_repo_check` records it; §18.4 and §3.3 amended.
+**This spec amendment needs the spec owner's ratification.**
+
 ## Findings and resulting changes
 
 *(written last, from the probe sections)*

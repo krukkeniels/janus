@@ -83,4 +83,14 @@ describe('buildAgentTask', () => {
     capped.guardrails.max_agent_runtime_minutes = 20;
     expect(build({ config: capped }).timeoutMinutes).toBe(20);
   });
+
+  it('copies the sandbox plan’s skipGitRepoCheck onto the task', () => {
+    const p = workspacePaths(tempDir('janus-task-skipflag-'));
+    const cfg = configSchema.parse({ workflow: { ci_provider: 'fake', scm_provider: 'fake' } });
+    const common = { attempt: 1, paths: p, config: cfg, profile: 'default', globalPnpmStore: null, guardrails: [], budget: 'n/a' };
+    const read = buildAgentTask({ ...common, runId: 'run-a', role: 'review', repo: null, context: contextPackageInputFixture() });
+    const write = buildAgentTask({ ...common, runId: 'run-b', role: 'implementation', repo: 'ui-kit', context: contextPackageInputFixture() });
+    expect(read.skipGitRepoCheck).toBe(true);
+    expect(write.skipGitRepoCheck).toBe(false);
+  });
 });

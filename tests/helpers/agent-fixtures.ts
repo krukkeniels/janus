@@ -70,6 +70,7 @@ export function agentTaskFixture(overrides: Partial<AgentTask> = {}): AgentTask 
     cwd: join(root, 'repos', repo ?? 'ui-kit'),
     writableRoots: [join(root, 'repos', repo ?? 'ui-kit')],
     network: true,
+    skipGitRepoCheck: false,
     timeoutMinutes: 60,
     context: contextPackageFixture(role),
     outputSchema: outputSchemaFor(role),

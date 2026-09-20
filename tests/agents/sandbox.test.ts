@@ -82,4 +82,30 @@ describe('planSandbox', () => {
     expect(unsandboxedNote(unsandboxed)).toContain('danger-full-access');
     expect(unsandboxedNote(config())).toBeNull();
   });
+
+  it('asks for --skip-git-repo-check for the read-only class only (§18.4 as amended by T06 probe R2)', () => {
+    const p = paths();
+    const common = { runId: 'run-0009', paths: p, config: config(), globalPnpmStore: null };
+    expect(planSandbox({ ...common, role: 'review', repo: null }).skipGitRepoCheck).toBe(true);
+    expect(planSandbox({ ...common, role: 'checkpoint', repo: null }).skipGitRepoCheck).toBe(true);
+    expect(planSandbox({ ...common, role: 'triage', repo: null }).skipGitRepoCheck).toBe(true);
+    expect(planSandbox({ ...common, role: 'discovery', repo: null }).skipGitRepoCheck).toBe(false);
+    expect(planSandbox({ ...common, role: 'implementation', repo: 'ui-kit' }).skipGitRepoCheck).toBe(false);
+  });
+
+  it('keeps the flag for a read-only role even when allow_unsandboxed turns it into danger-full-access', () => {
+    const p = paths();
+    const plan = planSandbox({
+      role: 'review',
+      runId: 'run-0010',
+      repo: null,
+      paths: p,
+      config: config({ agents: { allow_unsandboxed: true } }),
+      globalPnpmStore: null,
+    });
+    expect(plan.sandbox).toBe('danger-full-access');
+    expect(plan.cwd).toBe(p.root);
+    // The cwd is unchanged, so the git-work-tree refusal is unchanged; the flag is about the cwd, not the sandbox.
+    expect(plan.skipGitRepoCheck).toBe(true);
+  });
 });

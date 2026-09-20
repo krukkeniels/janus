@@ -52,6 +52,8 @@ export interface AgentTask {
   writableRoots: string[];
   /** §18.1 `network`: `sandbox_workspace_write.network_access`. */
   network: boolean;
+  /** §18.4 as amended by T06 probe R2: `--skip-git-repo-check`, for the read-only class only. */
+  skipGitRepoCheck: boolean;
   /** §18.1 `timeout_minutes`: `agents.roles.<role>.timeout_minutes`, capped by `max_agent_runtime_minutes`. */
   timeoutMinutes: number;
   /** §18.1 `context`. */

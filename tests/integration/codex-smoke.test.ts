@@ -213,4 +213,60 @@ describe.skipIf(!ENABLED)('real codex smoke test', () => {
     },
     TEN_MINUTES,
   );
+
+  /**
+   * T06 probe R2 (open question 1): does real Codex refuse a read-only run outside a git work tree, and which of
+   * the three weighed options fixes it? Raw `spawnCodex` on purpose: this probes the binary, not the adapter, and
+   * a refusal happens before any model call so all four variants together cost at most two cheap turns.
+   */
+  it(
+    'probe R2: reports whether codex refuses a read-only run outside a git repository',
+    async () => {
+      const plain = tempDir('janus-probe-r2-plain-');
+      const initialized = tempDir('janus-probe-r2-git-');
+      mkdirSync(plain, { recursive: true });
+      mkdirSync(initialized, { recursive: true });
+      await runGit(initialized, ['init', '-q', '-b', 'main']);
+
+      const readOnly = async (cwd: string, extra: string[]): Promise<{ exitCode: number | null; stderr: string }> => {
+        const result = await spawnCodex({
+          bin: 'codex',
+          args: ['exec', '-C', cwd, '-s', 'read-only', ...extra, '--ephemeral', '-'],
+          cwd,
+          env: { ...process.env } as Record<string, string>,
+          stdin: 'Reply with the single word pong and nothing else.',
+          timeoutMs: 120_000,
+        });
+        return { exitCode: result.exitCode, stderr: result.stderr.trim().split('\n')[0] ?? '' };
+      };
+
+      const bare = await readOnly(plain, []);
+      const withFlag = await readOnly(plain, ['--skip-git-repo-check']);
+      const inRepo = await readOnly(initialized, []);
+      const trusted = await readOnly(plain, ['-c', `projects."${plain}".trust_level="trusted"`]);
+
+      recordProbe({
+        probe: 'R2',
+        question: 'Does codex exec -s read-only refuse outside a git work tree, and what fixes it?',
+        outcome: bare.exitCode === 0 ? 'pass' : 'fail',
+        detail: `bare exit ${String(bare.exitCode)}: ${bare.stderr}`,
+        data: {
+          bare_exit: bare.exitCode,
+          bare_stderr_first_line: bare.stderr,
+          with_skip_flag_exit: withFlag.exitCode,
+          in_git_repo_exit: inRepo.exitCode,
+          trust_level_override_exit: trusted.exitCode,
+        },
+      });
+
+      // The state this plan was written against. If any of these now differs, the §18.4 ruling must be revisited
+      // before Step 5 — say so in the report and stop.
+      expect(bare.exitCode).not.toBe(0);
+      expect(bare.stderr).toContain('--skip-git-repo-check');
+      expect(withFlag.exitCode).toBe(0);
+      expect(inRepo.exitCode).toBe(0);
+      expect(trusted.exitCode).not.toBe(0);
+    },
+    TEN_MINUTES,
+  );
 });

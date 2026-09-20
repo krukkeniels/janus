@@ -50,6 +50,8 @@ export interface AgentEvidence {
   stderr_truncated: boolean;
   sandbox: AgentTask['sandbox'];
   network: boolean;
+  /** §18.4: whether this run was allowed to start outside a git work tree. True for the read-only class only. */
+  skip_git_repo_check: boolean;
   timeout_minutes: number;
   /** Workspace-relative. */
   cwd: string;
@@ -104,6 +106,7 @@ export function buildAgentEvidence(input: BuildAgentEvidenceInput): AgentEvidenc
     stderr_truncated: outcome.stderrTruncated,
     sandbox: task.sandbox,
     network: task.network,
+    skip_git_repo_check: task.skipGitRepoCheck,
     timeout_minutes: task.timeoutMinutes,
     cwd: rel(task.cwd),
     writable_roots: task.writableRoots.map(rel),
