@@ -5,7 +5,7 @@ import type { JanusConfig } from '../../config/config-schema.js';
 import type { AgentRunner } from '../../providers/types.js';
 import type { WorkspacePaths } from '../../workspace/layout.js';
 import { validateAgentResult } from '../output-schema.js';
-import { renderContextPackage } from '../render.js';
+import { renderContextPackage, truncateUtf8Tail } from '../render.js';
 import type { AgentOutcome, AgentRunFailure, AgentTask } from '../types.js';
 import { outcomeSummary } from '../types.js';
 import { parseCodexUsage } from './jsonl.js';
@@ -54,6 +54,26 @@ export function buildCodexArgs(task: AgentTask, files: { schemaPath: string; las
   args.push('-m', task.model.model, '-c', `model_reasoning_effort=${task.model.effort}`);
   args.push('-');
   return args;
+}
+
+/**
+ * How much of a failed run's stderr reaches `AgentRunFailure.detail`, which `evidence.ts` writes under
+ * `evidence/agents/` and the CLI prints. `spawn.ts` caps the captured stream at `STDERR_CAP_BYTES` (1 MiB); a
+ * megabyte of a Codex authentication error is both unreadable and the likeliest place a credential appears, and
+ * spec line 661 wants a redaction pass before anything is written under `evidence/`. Bounding it is not that pass
+ * — T09's digest redaction is — but it keeps an unbounded, unreviewed stream off the state branch (§32 rule 12).
+ */
+const STDERR_DETAIL_BYTES = 2048;
+
+/** The **last** 2 KiB of stderr: an error's operative text (the message, the stack's innermost frame) is at the end. */
+function stderrDetail(stderr: string): string {
+  const trimmed = stderr.trim();
+  const cut = truncateUtf8Tail(trimmed, STDERR_DETAIL_BYTES);
+  if (cut.omittedBytes === 0) return trimmed;
+  return (
+    `[janus kept the last ${STDERR_DETAIL_BYTES} bytes of ${cut.totalBytes} bytes of stderr; the rest is not ` +
+    `recorded, because it is unredacted]\n${cut.text}`
+  );
 }
 
 function readLastMessage(path: string): { ok: true; value: unknown } | { ok: false; detail: string } {
@@ -138,13 +158,13 @@ export function createCodexAgentRunner(input: CodexAdapterInput): AgentRunner {
         } else if (result.spawnFailed) {
           failure = {
             kind: 'spawn_failed',
-            detail: `could not start "${bin}": ${result.stderr.trim()}; run janus doctor to check the Codex installation`,
+            detail: `could not start "${bin}": ${stderrDetail(result.stderr)}; run janus doctor to check the Codex installation`,
           };
         } else if (result.signal !== null || (answer === null && result.exitCode !== 0)) {
           const detail =
             result.signal !== null
-              ? `codex exec was killed by ${result.signal}: ${result.stderr.trim()}`
-              : `codex exec exited ${String(result.exitCode)}: ${result.stderr.trim()}`;
+              ? `codex exec was killed by ${result.signal}: ${stderrDetail(result.stderr)}`
+              : `codex exec exited ${String(result.exitCode)}: ${stderrDetail(result.stderr)}`;
           failure = { kind: 'nonzero_exit', detail };
         } else if (!message.ok) {
           failure = { kind: 'invalid_output', detail: message.detail };

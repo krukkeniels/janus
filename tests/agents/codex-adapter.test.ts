@@ -23,6 +23,7 @@ function replay(options: {
   signal?: string | null;
   jsonlTruncated?: boolean;
   stderrTruncated?: boolean;
+  stderr?: string;
   seen?: CodexSpawnRequest[];
 }): CodexSpawn {
   return async (request) => {
@@ -49,7 +50,7 @@ function replay(options: {
       exitCode: options.exitCode ?? 0,
       signal: options.signal !== undefined ? options.signal : options.timedOut === true ? 'SIGTERM' : null,
       jsonl: options.jsonl ?? fixture('implementation-success.jsonl'),
-      stderr: options.spawnFailed === true ? 'spawn codex ENOENT' : '',
+      stderr: options.stderr ?? (options.spawnFailed === true ? 'spawn codex ENOENT' : ''),
       timedOut: options.timedOut ?? false,
       spawnFailed: options.spawnFailed ?? false,
       durationMs: 252_000,
@@ -246,6 +247,27 @@ describe('createCodexAgentRunner', () => {
     const outcome = await runner.run(task());
     expect(outcome.jsonlTruncated).toBe(false);
     expect(outcome.stderrTruncated).toBe(false);
+  });
+
+  it('embeds only the last 2 KiB of stderr in the failure detail, so an unredacted megabyte never reaches evidence', async () => {
+    // `spawn.ts` captures up to STDERR_CAP_BYTES (1 MiB) and `evidence.ts` writes `failure.detail` to the state
+    // branch; spec line 661 and §32 rule 12 say that stream may not land there whole and unredacted.
+    const noise = 'CODEX_AUTH_TOKEN=sk-do-not-write-this\n'.repeat(400);
+    const { runner } = runnerFor(replay({ exitCode: 2, lastMessage: null, jsonl: '', stderr: `${noise}Error: the operative last line` }));
+    const outcome = await runner.run(task());
+
+    expect(outcome.failure?.kind).toBe('nonzero_exit');
+    const detail = outcome.failure?.detail ?? '';
+    expect(detail).toContain('Error: the operative last line');
+    expect(detail).toContain('janus kept the last 2048 bytes');
+    expect(Buffer.byteLength(detail, 'utf8')).toBeLessThan(2500);
+    expect(detail.split('CODEX_AUTH_TOKEN').length - 1).toBeLessThan(60);
+  });
+
+  it('leaves a short stderr intact, with no truncation note', async () => {
+    const { runner } = runnerFor(replay({ exitCode: 2, lastMessage: null, jsonl: '', stderr: '  boom: everything broke  ' }));
+    const outcome = await runner.run(task());
+    expect(outcome.failure?.detail).toBe('codex exec exited 2: boom: everything broke');
   });
 
   it('reports a missing codex binary as spawn_failed with a doctor hint', async () => {
