@@ -103,6 +103,10 @@ export interface AgentFinishedEvent {
   experiment_id: string | null;
   tokens: AgentTokenUsage | null;
   duration_ms: number | null;
+  /** Process exit code; null for a signal, a spawn failure, an interrupted run, or the fake runner. Without this
+   * a non-zero exit alongside a still-valid answer (§18.3: not a failure) is invisible in the event stream and
+   * survives only in the evidence YAML. */
+  exit_code: number | null;
   /** §18.4 adapter failure kind; null when the run produced a valid §18.3 result. */
   failure: 'timeout' | 'nonzero_exit' | 'invalid_output' | 'spawn_failed' | 'interrupted' | null;
   /** Interrupted runs only: the step that was in flight and the `.janus`-relative saved patch. */

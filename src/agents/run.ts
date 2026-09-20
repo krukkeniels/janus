@@ -93,6 +93,7 @@ export async function runAgent(input: RunAgentInput): Promise<AgentRunRecord> {
     experiment_id: task.experimentId,
     tokens: outcome.tokens,
     duration_ms: outcome.durationMs,
+    exit_code: outcome.exitCode,
     failure: outcome.failure === null ? null : outcome.failure.kind,
     step: null,
     patch: null,

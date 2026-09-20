@@ -19,6 +19,8 @@ function replay(options: {
   exitCode?: number;
   timedOut?: boolean;
   spawnFailed?: boolean;
+  /** Overrides the signal that would otherwise be derived from `timedOut`, for a kill Janus did not initiate. */
+  signal?: string | null;
   jsonlTruncated?: boolean;
   stderrTruncated?: boolean;
   seen?: CodexSpawnRequest[];
@@ -45,7 +47,7 @@ function replay(options: {
     }
     return {
       exitCode: options.exitCode ?? 0,
-      signal: options.timedOut === true ? 'SIGTERM' : null,
+      signal: options.signal !== undefined ? options.signal : options.timedOut === true ? 'SIGTERM' : null,
       jsonl: options.jsonl ?? fixture('implementation-success.jsonl'),
       stderr: options.spawnFailed === true ? 'spawn codex ENOENT' : '',
       timedOut: options.timedOut ?? false,
@@ -137,15 +139,22 @@ describe('createCodexAgentRunner', () => {
     expect(outcome.promptBytes).toBeGreaterThan(0);
   });
 
-  it('writes the generated output schema to the file it passes to --output-schema', async () => {
-    const seen: CodexSpawnRequest[] = [];
-    const { runner } = runnerFor(replay({ seen }));
+  it('writes the generated output schema to the file it passes to --output-schema, before the scratch dir is cleaned up', async () => {
+    // Reads inside the replay closure, which runs while the scratch dir still exists — the adapter removes it
+    // once `spawn` resolves, so a read after `run()` returns would race that cleanup.
+    let schema: Record<string, unknown> | undefined;
+    const base = replay({});
+    const spawn: CodexSpawn = async (request) => {
+      if (request.args[0] === 'exec') {
+        const schemaPath = request.args[request.args.indexOf('--output-schema') + 1];
+        if (schemaPath === undefined) throw new Error('expected a schema path');
+        schema = JSON.parse(readFileSync(schemaPath, 'utf8')) as Record<string, unknown>;
+      }
+      return base(request);
+    };
+    const { runner } = runnerFor(spawn);
     await runner.run(task());
-    const exec = seen.find((request) => request.args[0] === 'exec');
-    if (exec === undefined) throw new Error('expected an exec call');
-    const schemaPath = exec.args[exec.args.indexOf('--output-schema') + 1];
-    if (schemaPath === undefined) throw new Error('expected a schema path');
-    const schema = JSON.parse(readFileSync(schemaPath, 'utf8')) as Record<string, unknown>;
+    if (schema === undefined) throw new Error('expected the exec call to have run');
     expect(schema['title']).toBe('janus-implementation-result');
     expect(schema['additionalProperties']).toBe(false);
     expect(schema['required']).toContain('handover');
@@ -188,6 +197,25 @@ describe('createCodexAgentRunner', () => {
     expect(outcome.failure?.kind).toBe('timeout');
     expect(outcome.failure?.detail).toContain('60 minutes');
     expect(outcome.tokens).toBeNull();
+  });
+
+  it('reports a timeout as failed even when the killed process still wrote a validating answer', async () => {
+    const { runner } = runnerFor(replay({ timedOut: true, exitCode: 0 }));
+    const outcome = await runner.run(task());
+    expect(outcome.status).toBe('failed');
+    expect(outcome.result).toBeNull();
+    expect(outcome.failure?.kind).toBe('timeout');
+    expect(outcome.summary).toContain('agent run failed (timeout)');
+  });
+
+  it('reports a signal kill as a failure even when the killed process still wrote a validating answer', async () => {
+    const { runner } = runnerFor(replay({ signal: 'SIGKILL', exitCode: 0 }));
+    const outcome = await runner.run(task());
+    expect(outcome.status).toBe('failed');
+    expect(outcome.result).toBeNull();
+    expect(outcome.failure?.kind).toBe('nonzero_exit');
+    expect(outcome.failure?.detail).toContain('SIGKILL');
+    expect(outcome.summary).toContain('agent run failed (nonzero_exit)');
   });
 
   it('reports a non-zero exit with no usable answer as nonzero_exit', async () => {

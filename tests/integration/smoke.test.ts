@@ -96,6 +96,7 @@ describe('T04 smoke: init and one checkpoint through the harness', () => {
           experiment_id: null,
           tokens: null,
           duration_ms: null,
+          exit_code: null,
           failure: null,
           step: 'prepare',
           patch: null,

@@ -45,6 +45,7 @@ describe('telemetry events', () => {
         experiment_id: 'exp-1',
         tokens: { input: 100, cached_input: 40, output: 20, reasoning: 8, total: 120 },
         duration_ms: 4200,
+        exit_code: 0,
         failure: null,
         step: null,
         patch: null,

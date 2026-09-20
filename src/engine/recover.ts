@@ -56,6 +56,7 @@ export async function recoverInFlight(engine: Engine): Promise<InFlightRecovery 
       experiment_id: null,
       tokens: null,
       duration_ms: null,
+      exit_code: null,
       failure: 'interrupted',
       step,
       patch: patchFile === null ? null : relative(paths.janusDir, patchFile),

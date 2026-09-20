@@ -109,8 +109,13 @@ export interface AgentOutcome {
   stderrTruncated: boolean;
 }
 
+/**
+ * `failure` wins whenever it is set, even if `result` is also set: a run the adapter killed mid-work (timeout,
+ * a signal) or otherwise judged unusable can still have written a validating-looking answer, and a one-line
+ * summary that reads like success for a `status: 'failed'` outcome would mislead whatever reads it next.
+ */
 export function outcomeSummary(result: AgentResult | null, failure: AgentRunFailure | null): string {
-  if (result !== null) return result.summary;
   if (failure !== null) return `agent run failed (${failure.kind}): ${failure.detail}`;
+  if (result !== null) return result.summary;
   return 'agent run produced no result and reported no failure';
 }

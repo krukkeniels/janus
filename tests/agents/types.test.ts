@@ -21,4 +21,10 @@ describe('agent task and outcome', () => {
     );
     expect(outcomeSummary(null, null)).toBe('agent run produced no result and reported no failure');
   });
+
+  it('prefers the failure text even when a validating result was also produced', () => {
+    expect(
+      outcomeSummary(resultFixture({ summary: 'raised @angular/core to 16' }), { kind: 'timeout', detail: 'killed after 60 minutes' }),
+    ).toBe('agent run failed (timeout): killed after 60 minutes');
+  });
 });

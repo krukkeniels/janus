@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { JanusConfig } from '../../config/config-schema.js';
@@ -97,77 +97,89 @@ export function createCodexAgentRunner(input: CodexAdapterInput): AgentRunner {
         maxContextBytes: input.config.agents.max_context_bytes,
         maxInlineDiffBytes: input.config.agents.max_inline_diff_bytes,
       });
-      // Not cleaned up after the run: `-o` and `--output-schema` are file paths Codex (and, in tests, the replay)
-      // write to, and both the caller and tests read `lastMessagePath`/`schemaPath` only after `spawn` resolves.
-      // Each is a small (schema + one JSON answer) per-run artifact under the OS tmpdir, left for the OS/CI image's
-      // own lifecycle to reclaim — the same tradeoff `mkdtempSync` callers elsewhere in this repo make.
       const scratch = mkdtempSync(join(tmpdir(), `janus-codex-${task.runId}-`));
-      const schemaPath = join(scratch, 'schema.json');
-      const lastMessagePath = join(scratch, 'last-message.json');
-      writeFileSync(schemaPath, `${JSON.stringify(task.outputSchema, null, 2)}\n`);
+      try {
+        const schemaPath = join(scratch, 'schema.json');
+        const lastMessagePath = join(scratch, 'last-message.json');
+        writeFileSync(schemaPath, `${JSON.stringify(task.outputSchema, null, 2)}\n`);
 
-      const runnerVersion = await resolveVersion();
-      const result = await spawn({
-        bin,
-        args: buildCodexArgs(task, { schemaPath, lastMessagePath }),
-        cwd: task.cwd,
-        env: { ...currentEnv(), ...task.env },
-        stdin: rendered.text,
-        timeoutMs: task.timeoutMinutes * 60_000,
-      });
+        const runnerVersion = await resolveVersion();
+        const result = await spawn({
+          bin,
+          args: buildCodexArgs(task, { schemaPath, lastMessagePath }),
+          cwd: task.cwd,
+          env: { ...currentEnv(), ...task.env },
+          stdin: rendered.text,
+          timeoutMs: task.timeoutMinutes * 60_000,
+        });
 
-      const tokens = parseCodexUsage(result.jsonl);
-      const message = result.spawnFailed ? { ok: false as const, detail: 'codex did not start' } : readLastMessage(lastMessagePath);
-      const validated = message.ok ? validateAgentResult(task.role, message.value) : null;
-      const answer = validated !== null && validated.ok ? validated.result : null;
+        const tokens = parseCodexUsage(result.jsonl);
+        const message = result.spawnFailed ? { ok: false as const, detail: 'codex did not start' } : readLastMessage(lastMessagePath);
+        const validated = message.ok ? validateAgentResult(task.role, message.value) : null;
+        const answer = validated !== null && validated.ok ? validated.result : null;
 
-      // Precedence, deliberately: a timeout beats everything, because whatever the child wrote (including a
-      // seemingly valid answer) came from a run that was killed before it could finish. A failed spawn is next —
-      // there is no child to have produced anything. After that, a non-zero exit beats a missing or invalid
-      // answer: when the process itself reports failure, that is the more actionable diagnosis (a crash, a
-      // sandbox denial, a killed subprocess) than "no answer" or "bad JSON", which are just its symptoms. Only
-      // once the process exited 0 do the answer-shaped failures apply: first a missing/unparseable last-message
-      // file, then a schema violation. A valid, schema-passing answer is never a failure, whatever the exit code
-      // — §18.3 cares about the answer, and Codex exits non-zero for conditions the answer already describes.
-      let failure: AgentRunFailure | null = null;
-      if (result.timedOut) {
-        failure = {
-          kind: 'timeout',
-          detail: `codex exec exceeded the ${task.timeoutMinutes} minutes allowed for role ${task.role} (agents.roles.${task.role}.timeout_minutes) and was killed`,
+        // Precedence, deliberately: a timeout beats everything, because whatever the child wrote (including a
+        // seemingly valid answer) came from a run that Janus itself killed before it could finish. A failed
+        // spawn is next — there is no child to have produced anything. Then a signal kill (OOM, an external
+        // SIGKILL, the sandbox itself dying) or a plain non-zero exit *with no usable answer*: these are process-
+        // level failures. A signal kill overrides even a validating answer — "killed mid-work" is not something
+        // a schema-shaped answer on disk can retract — but a plain non-zero exit does not, because a fresh
+        // `mkdtemp` per run makes a stale answer impossible, so a validating answer really is this run's. Only
+        // once the process exited 0 (or non-zero with a valid answer) do the answer-shaped failures apply: first
+        // a missing/unparseable last-message file, then a schema violation. A valid, schema-passing answer from
+        // a process that exited cleanly of a signal is never a failure, whatever the exit code — §18.3 cares
+        // about the answer, and Codex exits non-zero for conditions the answer already describes.
+        let failure: AgentRunFailure | null = null;
+        if (result.timedOut) {
+          failure = {
+            kind: 'timeout',
+            detail: `codex exec exceeded the ${task.timeoutMinutes} minutes allowed for role ${task.role} (agents.roles.${task.role}.timeout_minutes) and was killed`,
+          };
+        } else if (result.spawnFailed) {
+          failure = {
+            kind: 'spawn_failed',
+            detail: `could not start "${bin}": ${result.stderr.trim()}; run janus doctor to check the Codex installation`,
+          };
+        } else if (result.signal !== null || (answer === null && result.exitCode !== 0)) {
+          const detail =
+            result.signal !== null
+              ? `codex exec was killed by ${result.signal}: ${result.stderr.trim()}`
+              : `codex exec exited ${String(result.exitCode)}: ${result.stderr.trim()}`;
+          failure = { kind: 'nonzero_exit', detail };
+        } else if (!message.ok) {
+          failure = { kind: 'invalid_output', detail: message.detail };
+        } else if (validated !== null && !validated.ok) {
+          failure = {
+            kind: 'invalid_output',
+            detail: `codex answered with JSON that does not match the ${task.role} output schema: ${validated.errors.join('; ')}`,
+          };
+        }
+
+        // Null out `answer` once `failure` is set, even if it validated: a run the adapter judged unusable (a
+        // timeout or a signal kill mid-work, in particular) must not hand back a `result` that looks trustworthy
+        // alongside `status: 'failed'` — §18.3's "unusable answer is one failed attempt" cuts both ways.
+        const resultOut = failure === null ? answer : null;
+
+        return {
+          runId: task.runId,
+          status: failure === null && answer !== null ? answer.status : 'failed',
+          summary: outcomeSummary(resultOut, failure),
+          result: resultOut,
+          failure,
+          tokens,
+          durationMs: result.durationMs,
+          exitCode: result.exitCode,
+          signal: result.signal,
+          timedOut: result.timedOut,
+          runnerVersion,
+          promptBytes: rendered.bytes,
+          truncations: rendered.truncations,
+          jsonlTruncated: result.jsonlTruncated,
+          stderrTruncated: result.stderrTruncated,
         };
-      } else if (result.spawnFailed) {
-        failure = {
-          kind: 'spawn_failed',
-          detail: `could not start "${bin}": ${result.stderr.trim()}; run janus doctor to check the Codex installation`,
-        };
-      } else if (answer === null && result.exitCode !== 0) {
-        failure = { kind: 'nonzero_exit', detail: `codex exec exited ${String(result.exitCode)}: ${result.stderr.trim()}` };
-      } else if (!message.ok) {
-        failure = { kind: 'invalid_output', detail: message.detail };
-      } else if (validated !== null && !validated.ok) {
-        failure = {
-          kind: 'invalid_output',
-          detail: `codex answered with JSON that does not match the ${task.role} output schema: ${validated.errors.join('; ')}`,
-        };
+      } finally {
+        if (process.env['JANUS_KEEP_TMP'] !== '1') rmSync(scratch, { recursive: true, force: true });
       }
-
-      return {
-        runId: task.runId,
-        status: failure === null && answer !== null ? answer.status : 'failed',
-        summary: outcomeSummary(answer, failure),
-        result: answer,
-        failure,
-        tokens,
-        durationMs: result.durationMs,
-        exitCode: result.exitCode,
-        signal: result.signal,
-        timedOut: result.timedOut,
-        runnerVersion,
-        promptBytes: rendered.bytes,
-        truncations: rendered.truncations,
-        jsonlTruncated: result.jsonlTruncated,
-        stderrTruncated: result.stderrTruncated,
-      };
     },
   };
 }

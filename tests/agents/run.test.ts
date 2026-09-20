@@ -40,7 +40,7 @@ describe('runAgent', () => {
         sandbox: 'workspace-write',
       });
       expect(started?.['prompt_version']).toMatch(/^implementation@\d+$/);
-      expect(finished).toMatchObject({ run_id: 'run-0100', status: 'completed', duration_ms: 1234, failure: null });
+      expect(finished).toMatchObject({ run_id: 'run-0100', status: 'completed', duration_ms: 1234, exit_code: 0, failure: null });
       expect(events.indexOf(started as never)).toBeLessThan(events.indexOf(finished as never));
     } finally {
       workspace.release();
