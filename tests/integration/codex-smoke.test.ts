@@ -6,7 +6,9 @@ import { createCodexAgentRunner } from '../../src/agents/codex/adapter.js';
 import { spawnCodex } from '../../src/agents/codex/spawn.js';
 import type { CodexSpawn } from '../../src/agents/codex/spawn.js';
 import { configSchema } from '../../src/config/config-schema.js';
+import type { AgentRole } from '../../src/config/config-schema.js';
 import { buildAgentTask } from '../../src/agents/task.js';
+import { isCodeWriting } from '../../src/agents/roles.js';
 import { runGit } from '../../src/git/run.js';
 import { workspacePaths } from '../../src/workspace/layout.js';
 import { promptFixture } from '../helpers/agent-fixtures.js';
@@ -49,6 +51,75 @@ const CONTEXT = {
 };
 
 /**
+ * A workspace shaped like a real one for the S2 probes: `.janus/` is a git checkout (§5, and probe S1a's finding),
+ * `repos/ui-kit` is a tiny TypeScript library with one deliberate defect for the debug role, and `.pnpm-store`
+ * exists so the code-writing plan's second writable root is real.
+ */
+async function spikeWorkspace(prefix: string): Promise<ReturnType<typeof workspacePaths>> {
+  const paths = workspacePaths(tempDir(prefix));
+  mkdirSync(paths.janusDir, { recursive: true });
+  await runGit(paths.janusDir, ['init', '-q', '-b', 'janus/probe']);
+  mkdirSync(paths.pnpmStoreDir, { recursive: true });
+
+  const repo = paths.repoDir('ui-kit');
+  mkdirSync(join(repo, 'src'), { recursive: true });
+  writeFileSync(
+    join(repo, 'package.json'),
+    `${JSON.stringify({ name: 'ui-kit', version: '1.0.0', private: true, scripts: { test: 'node --test' } }, null, 2)}\n`,
+  );
+  // `sum` is wrong on purpose: the debug role gets a digest naming the failing test and must fix the source.
+  writeFileSync(join(repo, 'src', 'sum.js'), 'export function sum(a, b) {\n  return a - b;\n}\n');
+  writeFileSync(
+    join(repo, 'src', 'sum.test.js'),
+    [
+      "import { test } from 'node:test';",
+      "import assert from 'node:assert';",
+      "import { sum } from './sum.js';",
+      '',
+      "test('sum adds', () => {",
+      '  assert.strictEqual(sum(2, 3), 5);',
+      '});',
+      '',
+    ].join('\n'),
+  );
+  await runGit(repo, ['init', '-q', '-b', 'main']);
+  await runGit(repo, ['add', '-A']);
+  await runGit(repo, ['commit', '-q', '-m', 'ui-kit baseline']);
+  return paths;
+}
+
+/** The four roles `tasks.md` T06 names, with the slice each one is given. */
+const S2_ROLES: ReadonlyArray<{ role: AgentRole; planSlice: string; verificationEvidence: string | null }> = [
+  {
+    role: 'discovery',
+    planSlice:
+      'Survey ../../repos/ui-kit for an Angular major upgrade. Write one markdown file per area you were asked about into your working directory, naming the files you read.',
+    verificationEvidence: null,
+  },
+  {
+    role: 'planning',
+    planSlice:
+      'Write plan.md and plan.yaml into your working directory for upgrading ../../repos/ui-kit one major version. One work package, with an allowed_scope wide enough for CLI migrations and the lockfile.',
+    verificationEvidence: null,
+  },
+  {
+    role: 'implementation',
+    planSlice: 'wp-01-ui-kit: add a `product(a, b)` function to src/sum.js and a test for it in src/sum.test.js. Change nothing else.',
+    verificationEvidence: null,
+  },
+  {
+    role: 'debug',
+    planSlice: 'wp-01-ui-kit: the test below fails. Find the cause and fix the source, not the test.',
+    verificationEvidence: [
+      'build: ui-kit #41, status FAILURE, classification tests_failed',
+      'failed test: src/sum.test.js > sum adds',
+      "  AssertionError: Expected values to be strictly equal: -1 !== 5",
+      '    at src/sum.test.js:6:10',
+    ].join('\n'),
+  },
+];
+
+/**
  * Spec §29 item 5 and `tasks.md` T05: "opt-in real-Codex smoke test (`JANUS_REAL_CODEX=1`) for a read-only echo
  * and a workspace-write scratch install". Skipped by default — CI has no `codex` binary and no Codex credentials.
  * Run it by hand: `JANUS_REAL_CODEX=1 pnpm test:integration`.
@@ -79,6 +150,28 @@ describe.skipIf(!ENABLED)('real codex smoke test', () => {
       expect(task.sandbox).toBe('read-only');
 
       const outcome = await runner.run(task, promptFixture(task));
+
+      // T06 Task 3 flagged that this run's token usage was not recorded anywhere observable outside the
+      // process (task-3-report.md, "Concerns / notes for the controller"). This is the same real-Codex turn
+      // the assertions below already pay for — recording it here closes that gap without a second invocation,
+      // so the read-only sandbox class is not a hole in the probe log's cost picture alongside S2's four roles.
+      recordProbe({
+        probe: 'S2-read-only',
+        question: 'What does a read-only-class turn cost (§3.3 checkpoint/review/triage), for comparison with S2 report-writing/code-writing roles?',
+        outcome: outcome.failure === null ? 'observed' : 'fail',
+        detail: outcome.failure === null ? outcome.summary : `${outcome.failure.kind}: ${outcome.failure.detail}`,
+        data: {
+          role: 'review',
+          sandbox_class: task.sandboxClass,
+          sandbox: task.sandbox,
+          model: task.model.model,
+          effort: task.model.effort,
+          status: outcome.status,
+          tokens: outcome.tokens,
+          duration_ms: outcome.durationMs,
+        },
+      });
+
       expect(outcome.failure, JSON.stringify(outcome.failure)).toBeNull();
       expect(outcome.status).toBe('completed');
       expect(outcome.result?.summary.length).toBeGreaterThan(0);
@@ -516,6 +609,78 @@ describe.skipIf(!ENABLED)('real codex smoke test', () => {
       // §32 rule 11, on the most realistic run in the whole spike.
       expect(await runGit(repo, ['rev-parse', 'HEAD'])).toBe(headBefore);
       expect(await runGit(repo, ['reflog', 'show', '--format=%H', 'HEAD'])).toBe(headBefore);
+    },
+    FORTY_FIVE_MINUTES,
+  );
+
+  /**
+   * T06 probe S2: does each role answer with a result that passes its generated §18.3 schema, and what does a
+   * turn cost? Four separate `it`s (via `it.each`) so one role's failure does not hide the other three, and so a
+   * single role can be re-run with `-t 'probe S2: debug'`.
+   */
+  it.each(S2_ROLES)(
+    'probe S2: $role answers a schema-valid result and its cost is recorded',
+    async ({ role, planSlice, verificationEvidence }) => {
+      const paths = await spikeWorkspace(`janus-probe-s2-${role}-`);
+      const repo = isCodeWriting(role) ? 'ui-kit' : null;
+      const runner = createCodexAgentRunner({ paths });
+      const task = buildAgentTask({
+        runId: `probe-s2-${role}`,
+        role,
+        repo,
+        attempt: 1,
+        paths,
+        config,
+        profile: 'default',
+        globalPnpmStore: null,
+        context: {
+          ...CONTEXT,
+          goal: 'Upgrade ui-kit one Angular major version',
+          repository: repo === null ? null : 'ui-kit (library), base branch main, no dependencies',
+          planSlice,
+          verificationEvidence,
+          changeSummary: role === 'debug' ? [{ path: 'src/sum.js', added: 1, removed: 1, generated: false }] : [],
+        },
+        guardrails: ['files outside this repository are out of scope'],
+        budget: 'ci_fix_attempts: 0 of 5',
+      });
+      if (task.sandboxClass === 'report-writing') mkdirSync(task.cwd, { recursive: true });
+      const prompt = promptFixture(task);
+
+      const outcome = await runner.run(task, prompt);
+      const result = outcome.result;
+
+      recordProbe({
+        probe: `S2-${role}`,
+        question: 'Does this role answer with a schema-valid §18.3 result, and what does one turn cost?',
+        outcome: outcome.failure === null && result !== null ? 'pass' : 'fail',
+        detail: outcome.failure === null ? outcome.summary : `${outcome.failure.kind}: ${outcome.failure.detail}`,
+        data: {
+          role,
+          sandbox_class: task.sandboxClass,
+          sandbox: task.sandbox,
+          model: task.model.model,
+          effort: task.model.effort,
+          prompt_version: task.promptVersion,
+          prompt_bytes: prompt.bytes,
+          truncations: prompt.truncations,
+          schema_valid: outcome.failure?.kind !== 'invalid_output',
+          status: outcome.status,
+          changes_made: result?.changes_made.length ?? null,
+          findings: result?.findings.length ?? null,
+          expected_temporary_failure: result?.expected_temporary_failure ?? null,
+          handover_present: result?.handover !== undefined,
+          tokens: outcome.tokens,
+          duration_ms: outcome.durationMs,
+        },
+      });
+
+      // An `invalid_output` failure is the finding this probe exists to catch: keep the detail, which carries the
+      // exact zod messages `validateAgentResult` produced, and let the test fail loudly.
+      expect(outcome.failure, JSON.stringify(outcome.failure)).toBeNull();
+      expect(result).not.toBeNull();
+      expect(result?.handover.next_action.length).toBeGreaterThan(0);
+      expect(outcome.tokens?.total).toBeGreaterThan(0);
     },
     FORTY_FIVE_MINUTES,
   );

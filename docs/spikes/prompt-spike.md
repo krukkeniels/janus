@@ -203,6 +203,64 @@ migration touched; Task 7 should have the planning prompt tell the agent to enum
 status --porcelain` rather than reconstruct the list from memory, and any verification step that trusts
 `changes_made` alone should cross-check it against the real tree.
 
+### S2 — output-schema compliance and token cost per role (open question 3, bullets 5 and 6)
+
+Model `gpt-5.6-sol`, profile `default`, one attempt each, against a small scratch `ui-kit` repository.
+
+| Role | Class | Prompt bytes | Truncations | Schema valid | Status | Input | Cached | Output | Reasoning | Total | Wall time |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| discovery | report-writing | 3490 | 0 | yes | completed | 167229 | 141696 | 6252 | 1413 | 173481 | 141085 ms |
+| planning | report-writing | 3468 | 0 | yes | completed | 218783 | 194688 | 4369 | 1312 | 223152 | 122672 ms |
+| implementation | code-writing | 3512 | 0 | yes | completed | 85405 | 50560 | 2108 | 642 | 87513 | 52697 ms |
+| debug | code-writing | 3444 | 0 | yes | completed | 99733 | 81536 | 1288 | 236 | 101021 | 39685 ms |
+
+**For comparison, §3.3's third sandbox class (`read-only`: `checkpoint`/`review`/`triage`).** None of `tasks.md`
+T06's four named roles use it, but Task 3 flagged that this class's token cost was never captured anywhere
+observable (`task-3-report.md`, "Concerns / notes for the controller"). This task closes that gap at no extra
+real-Codex cost, by recording (probe `S2-read-only`) the pre-existing T05 smoke test's own read-only "pong" turn
+through `recordProbe`, rather than spending a fifth real-Codex call solely to observe it: role `review`, sandbox
+`read-only`, status `completed` — input 17099 / cached 0 / output 182 / reasoning 83 / total 17281 tokens; wall
+time 9223 ms. Its 0 cached-input tokens (versus the roughly 55-90% cache-hit fraction the four roles above show)
+is expected, not a defect: it is the first real-Codex turn in the whole suite invocation, run before any of that
+invocation's other turns had sent the ~16k-token Codex preamble for the server-side cache to reuse.
+
+**Input-token floor.** Even a trivial read-only turn costs roughly 14.5k input tokens before any Janus context —
+that is Codex's own instruction preamble. Every number above includes it, so the marginal cost of a §18.2 context
+package is `input - 14500`, not `input`.
+
+**Schema compliance.** All four roles produced a complete §18.3 result on the first attempt: every one of the
+thirteen base-shape fields was present, `handover.next_action` was non-empty, and `validateAgentResult` raised no
+`invalid_output` failure for any role. No schema was relaxed and no probe was retried to reach this result.
+
+**Prompt findings.**
+- **The plan slice's relative repository path was miscalibrated for the report-writing cwd, and both
+  report-writing roles routed around it silently instead of failing loudly.** `.janus/reports/<run-id>/` is three
+  directories below the workspace root, so the correct relative path to `repos/ui-kit` from there is
+  `../../../repos/ui-kit` — but this probe's `discovery` and `planning` plan slices (per this task's brief,
+  applied verbatim) say `../../repos/ui-kit`, one level too shallow. Neither role failed: `discovery` searched the
+  filesystem, found the repository at the correct depth, and explicitly surfaced the mismatch as decision item 1
+  in its report ("The approved plan's literal `../../repos/ui-kit` did not exist from the assigned report
+  directory"); `planning` also located and read the real `package.json` correctly but did not remark on the path
+  being wrong. A model silently self-correcting a bad path is good resilience here, but it is a risk in
+  production: if a work package's repository path is ever subtly wrong in a way where *something* still exists at
+  the literal (incorrect) path, a model that self-corrects by searching rather than failing could act on the
+  wrong repository without anyone noticing. Task 7 should flag this as a reason path fields in the context
+  package are worth validating (e.g., existence-checked) before the prompt is sent, not left for the model to
+  discover.
+- **`changes_made` is not a reliable self-audit in either direction.** Task 5's A2 finding was an
+  under-report (2 claimed vs 3 actual). Here `discovery` over-reported: it claimed `changes_made.length === 2`
+  but its report directory holds exactly one file, `angular-major-upgrade.md`. `planning`, `implementation` and
+  `debug` all matched the real tree exactly (`planning` wrote `plan.md` and `plan.yaml`, 2 files, claimed 2;
+  `implementation` left `src/sum.js` and `src/sum.test.js` modified, claimed 2; `debug` left only `src/sum.js`
+  modified, claimed 1). Combined with A2, this confirms Task 5's recommendation: any verification step that
+  trusts `changes_made` alone, in either direction, should cross-check it against the real tree rather than rely
+  on the agent's self-report.
+- **`implementation` and `debug` both honored their narrow scope exactly.** `implementation` added `product(a, b)`
+  and its test, changed nothing else, and explicitly noted in its summary that the full suite remains red because
+  of the pre-existing `sum` defect — it did not opportunistically fix the debug role's target bug. `debug` fixed
+  only `src/sum.js` (`a - b` -> `a + b`) and left `src/sum.test.js` untouched, honoring "fix the source, not the
+  test."
+
 ## Findings and resulting changes
 
 *(written last, from the probe sections)*
