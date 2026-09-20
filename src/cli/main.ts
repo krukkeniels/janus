@@ -1,6 +1,7 @@
 import { Command, CommanderError } from 'commander';
 import { ConfigError } from '../config/errors.js';
 import { GateError } from '../engine/gates.js';
+import { ProviderNotImplementedError } from '../providers/index.js';
 import { StateBranchDivergedError } from '../state/checkpoint.js';
 import { WorkspaceLockedError } from '../workspace/lock.js';
 import { registerCommands } from './commands/index.js';
@@ -48,6 +49,10 @@ export function exitCodeForError(error: unknown, io: CliIo): ExitCode {
   if (error instanceof GateError) {
     io.stderr(`janus: ${error.message}\n`);
     return ExitCode.UsageError;
+  }
+  if (error instanceof ProviderNotImplementedError) {
+    io.stderr(`janus: ${error.message}\n`);
+    return ExitCode.NotImplemented;
   }
   const message = error instanceof Error ? error.message : String(error);
   io.stderr(`janus: ${message}\n`);

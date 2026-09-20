@@ -1,9 +1,12 @@
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { parse, stringify } from 'yaml';
 import { ExitCode } from '../../src/cli/exit-codes.js';
 import type { Step } from '../../src/engine/steps.js';
 import { clone, commitAll, remoteHead, revParse } from '../../src/git/ops.js';
 import { runGit } from '../../src/git/run.js';
+import { CONFIG_FILE } from '../../src/state/files.js';
 import { readState } from '../../src/state/state-store.js';
 import { acquireLock, releaseLock } from '../../src/workspace/lock.js';
 import { initWorkspace, scriptedSteps } from '../helpers/engine-fixtures.js';
@@ -109,5 +112,18 @@ describe('janus run', () => {
     expect(escalated.code).toBe(ExitCode.Escalated);
     expect(escalated.stderr).toContain('janus: warning: escalated from created: cannot start');
     expect(escalated.stdout).toContain('janus escalation resolve');
+  });
+
+  it('exits 3 and names the task when config selects a provider that is not implemented yet', async () => {
+    const ws = await initWorkspace();
+    const configPath = join(ws.janusDir, CONFIG_FILE);
+    const config = parse(readFileSync(configPath, 'utf8')) as Record<string, unknown>;
+    config['workflow'] = { agent_runner: 'codex', ci_provider: 'fake', scm_provider: 'fake' };
+    writeFileSync(configPath, stringify(config));
+
+    const result = await runCli(['run'], { cwd: ws.root }, { steps: scriptedSteps() });
+    expect(result.code).toBe(ExitCode.NotImplemented);
+    expect(result.stderr).toContain('agent runner "codex" is not implemented yet (planned in T05)');
+    expect(existsSync(join(ws.root, 'janus.lock'))).toBe(false);
   });
 });
