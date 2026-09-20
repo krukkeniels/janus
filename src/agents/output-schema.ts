@@ -119,7 +119,12 @@ export interface FixAgentResult extends AgentResult {
  *
  * `runAgent` returns `AgentResult`, which is the base §18.3 shape; the fix role's schema is the one that adds
  * `no_change_needed`, so the only honest way back to it is to re-validate against that schema. Cheap, and it
- * means a fake runner that was scripted with the wrong shape is caught here rather than read as `false`.
+ * means a result that does not actually parse as a fix result is rejected here rather than cast.
+ *
+ * Note for callers: at the one call site (`src/policy/flow.ts`), a `null` return from this function is folded
+ * into `noChangeNeeded: false` via `=== true` — silently, with no warning and no event. That is a deliberate
+ * "unknown reads as false" default, not something this function itself flags; a caller that needs to tell "no"
+ * apart from "couldn't tell" must check this function's return value directly, before that coercion.
  */
 export function asFixResult(result: AgentResult | null): FixAgentResult | null {
   if (result === null) return null;

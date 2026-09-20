@@ -1,13 +1,14 @@
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parse } from 'yaml';
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { AgentOutcome, AgentTask } from '../../src/agents/types.js';
 import { outcomeSummary } from '../../src/agents/types.js';
-import { revParse } from '../../src/git/ops.js';
+import { clone, commitAll, push, revParse } from '../../src/git/ops.js';
 import { runGit } from '../../src/git/run.js';
 import { runPolicyFlow } from '../../src/policy/flow.js';
 import type { PolicyFixContext } from '../../src/policy/flow.js';
+import { policyPatchPath } from '../../src/policy/report.js';
 import type { PolicyReport } from '../../src/policy/types.js';
 import type { AgentRunner, Providers } from '../../src/providers/types.js';
 import { readEvents } from '../../src/telemetry/events.js';
@@ -15,6 +16,7 @@ import { openWorkspace } from '../../src/workspace/open-workspace.js';
 import type { Workspace } from '../../src/workspace/open-workspace.js';
 import { createGoalBranch, initWorkspace, testEngine, testProviders } from '../helpers/engine-fixtures.js';
 import type { WorkspaceFixture } from '../helpers/engine-fixtures.js';
+import { tempDir } from '../helpers/git-fixtures.js';
 
 const FIX_CONTEXT: PolicyFixContext = {
   goal: 'upgrade ui-kit to Angular 16',
@@ -28,7 +30,7 @@ const FIX_CONTEXT: PolicyFixContext = {
 };
 
 /** A runner that edits the tree the way a scripted fix agent would, then reports whatever it was told to. */
-function fixRunner(edit: (repoDir: string) => void, changesMade: string[] = []): AgentRunner {
+function fixRunner(edit: (repoDir: string) => void, changesMade: string[] = [], noChangeNeeded = false): AgentRunner {
   return {
     name: 'fake',
     run: async (task: AgentTask): Promise<AgentOutcome> => {
@@ -47,7 +49,7 @@ function fixRunner(edit: (repoDir: string) => void, changesMade: string[] = []):
         behavior_change_required: false,
         recommended_next_action: 'commit',
         handover: { current_state: 'fixed', next_action: 'commit', risks: [] },
-        no_change_needed: false,
+        no_change_needed: noChangeNeeded,
       };
       return {
         runId: task.runId,
@@ -96,9 +98,17 @@ describe('runPolicyFlow', () => {
       const { engine } = testEngine(workspace);
       seedWorkPackage(workspace, 'ui-kit');
       const before = await revParse(workspace.paths.repoDir('ui-kit'), 'HEAD');
+      let fixRuns = 0;
+      const counting: AgentRunner = {
+        name: 'fake',
+        run: async (task, prompt) => {
+          fixRuns += 1;
+          return fixRunner(() => {}).run(task, prompt);
+        },
+      };
       const outcome = await runPolicyFlow({
         engine,
-        providers: providersWith(fixRunner(() => {}), workspace),
+        providers: providersWith(counting, workspace),
         repo: 'ui-kit',
         workPackageId: 'wp-01',
         attempt: 1,
@@ -112,7 +122,61 @@ describe('runPolicyFlow', () => {
         profile: 'default',
       });
       expect(outcome.kind).toBe('clean');
+      if (outcome.kind !== 'clean') throw new Error('expected clean');
+      expect(outcome.stage).toBe('before_fix');
+      expect(outcome.fix).toBeNull();
+      // The check never ran at all — the fix agent must not have either, and nothing should have been written.
+      expect(fixRuns).toBe(0);
       expect(await revParse(workspace.paths.repoDir('ui-kit'), 'HEAD')).toBe(before);
+      const checked = readEvents(workspace.paths.janusDir).filter((event) => event['type'] === 'policy.checked');
+      expect(checked).toHaveLength(0);
+      expect(existsSync(join(workspace.paths.janusDir, 'evidence', 'policy'))).toBe(false);
+    } finally {
+      workspace.release();
+    }
+  });
+
+  it('reports a clean tree after the fix agent reverts everything, without a patch or a budget charge', async () => {
+    const workspace = await openWorkspace(ws.root);
+    try {
+      const { engine } = testEngine(workspace);
+      seedWorkPackage(workspace, 'ui-kit');
+      const dir = workspace.paths.repoDir('ui-kit');
+      const head = await revParse(dir, 'HEAD');
+      writeFileSync(join(dir, 'a.spec.ts'), "xit('skipped', () => {});\n");
+
+      const outcome = await runPolicyFlow({
+        engine,
+        providers: providersWith(
+          // A fix agent that "resolves" the violation by deleting the file outright, rather than fixing it.
+          fixRunner((repoDir) => {
+            unlinkSync(join(repoDir, 'a.spec.ts'));
+          }),
+          workspace,
+        ),
+        repo: 'ui-kit',
+        workPackageId: 'wp-01',
+        attempt: 1,
+        runId: 'run-0001',
+        fixRunId: 'run-0002',
+        allowedScope: ['**'],
+        commitType: 'feat',
+        commitSubject: 'add a spec',
+        fixContext: FIX_CONTEXT,
+        globalPnpmStore: null,
+        profile: 'default',
+      });
+
+      expect(outcome.kind).toBe('clean');
+      if (outcome.kind !== 'clean') throw new Error('expected clean');
+      expect(outcome.stage).toBe('after_fix');
+      expect(outcome.fix?.runId).toBe('run-0002');
+      // Nothing was committed, nothing was reset, no patch exported, and the counter did not move.
+      expect(await revParse(dir, 'HEAD')).toBe(head);
+      expect(await runGit(dir, ['status', '--porcelain'])).toBe('');
+      expect(existsSync(policyPatchPath(workspace.paths.janusDir, 'wp-01-ui-kit-a1'))).toBe(false);
+      expect(existsSync(policyPatchPath(workspace.paths.janusDir, 'wp-01-ui-kit-a1-recheck'))).toBe(false);
+      expect(workspace.state.execution.work_packages['wp-01']?.repos['ui-kit']?.policy_violations).toBe(0);
     } finally {
       workspace.release();
     }
@@ -156,6 +220,54 @@ describe('runPolicyFlow', () => {
       const checked = readEvents(workspace.paths.janusDir).filter((event) => event['type'] === 'policy.checked');
       expect(checked).toHaveLength(1);
       expect(checked[0]?.['passed']).toBe(true);
+    } finally {
+      workspace.release();
+    }
+  });
+
+  it('keeps the commit and does not reset when the push is rejected', async () => {
+    const workspace = await openWorkspace(ws.root);
+    try {
+      const { engine } = testEngine(workspace);
+      seedWorkPackage(workspace, 'ui-kit');
+      const dir = workspace.paths.repoDir('ui-kit');
+      const goalBranch = `ai/${ws.fixture.goalId}`;
+
+      // Diverge the remote: a second clone of the same bare repo commits and pushes to the goal branch first, so
+      // the flow's own push (after its commit lands locally) is a real non-fast-forward rejection from git.
+      const other = join(tempDir(), 'other-ui-kit');
+      await clone(ws.fixture.uiKit.bare, other, { branch: goalBranch });
+      writeFileSync(join(other, 'other.ts'), 'export const other = 1;\n');
+      await commitAll(other, 'feat(ui-kit): diverge');
+      await push(other, 'origin', goalBranch);
+
+      writeFileSync(join(dir, 'src-new.ts'), 'export const added = 1;\n');
+
+      const outcome = await runPolicyFlow({
+        engine,
+        providers: providersWith(fixRunner(() => {}), workspace),
+        repo: 'ui-kit',
+        workPackageId: 'wp-01',
+        attempt: 1,
+        runId: 'run-0001',
+        fixRunId: 'run-0002',
+        allowedScope: ['**'],
+        commitType: 'feat',
+        commitSubject: 'add a file',
+        fixContext: FIX_CONTEXT,
+        globalPnpmStore: null,
+        profile: 'default',
+      });
+
+      expect(outcome.kind).toBe('push_rejected');
+      if (outcome.kind !== 'push_rejected') throw new Error('expected push_rejected');
+      // The commit sha the flow returned must still resolve locally — it was not thrown away.
+      expect(await revParse(dir, 'HEAD')).toBe(outcome.commit);
+      expect(await runGit(dir, ['log', '-1', '--format=%s'])).toBe('feat(ui-kit): add a file');
+      // No reset: nothing was reverted, no patch was exported, and the violation counter did not move.
+      expect(await runGit(dir, ['status', '--porcelain'])).toBe('');
+      expect(existsSync(policyPatchPath(workspace.paths.janusDir, 'wp-01-ui-kit-a1'))).toBe(false);
+      expect(workspace.state.execution.work_packages['wp-01']?.repos['ui-kit']?.policy_violations).toBe(0);
     } finally {
       workspace.release();
     }
@@ -239,6 +351,41 @@ describe('runPolicyFlow', () => {
       expect(patch).toContain('a.spec.ts');
       expect(patch).toContain("xit('skipped'");
       expect(workspace.state.execution.work_packages['wp-01']?.repos['ui-kit']?.policy_violations).toBe(1);
+    } finally {
+      workspace.release();
+    }
+  });
+
+  it("records the fix agent's no_change_needed answer on the reset outcome", async () => {
+    const workspace = await openWorkspace(ws.root);
+    try {
+      const { engine } = testEngine(workspace);
+      seedWorkPackage(workspace, 'ui-kit');
+      const dir = workspace.paths.repoDir('ui-kit');
+      writeFileSync(join(dir, 'a.spec.ts'), "xit('skipped', () => {});\n");
+
+      const outcome = await runPolicyFlow({
+        engine,
+        // Makes no edit and says so; the every-runner default (`no_change_needed: false`) would mask this field
+        // never being read, so this is the one case that pins it to `true`.
+        providers: providersWith(fixRunner(() => {}, [], true), workspace),
+        repo: 'ui-kit',
+        workPackageId: 'wp-01',
+        attempt: 1,
+        runId: 'run-0001',
+        fixRunId: 'run-0002',
+        allowedScope: ['**'],
+        commitType: 'feat',
+        commitSubject: 'add a spec',
+        fixContext: FIX_CONTEXT,
+        globalPnpmStore: null,
+        profile: 'default',
+      });
+
+      expect(outcome.kind).toBe('reset');
+      if (outcome.kind !== 'reset') throw new Error('expected reset');
+      expect(outcome.fix?.runId).toBe('run-0002');
+      expect(outcome.fix?.noChangeNeeded).toBe(true);
     } finally {
       workspace.release();
     }
