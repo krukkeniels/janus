@@ -1,3 +1,4 @@
+import type { DoctorCheck } from '../doctor/types.js';
 import type { StepRegistry } from '../engine/steps.js';
 import type { Providers } from '../providers/types.js';
 import { ExitCode } from './exit-codes.js';
@@ -9,10 +10,12 @@ export interface CliIo {
   cwd: string;
 }
 
-/** Test seams. `steps` replaces the production step registry of `janus run`; `providers` replaces the provider bag. */
+/** Test seams. `steps` replaces the production step registry of `janus run`; `providers` replaces the provider bag;
+ * `doctorChecks` replaces `janus doctor`'s registry so a CLI test never shells out to codex, git or pnpm. */
 export interface CliOverrides {
   steps?: StepRegistry;
   providers?: Providers;
+  doctorChecks?: readonly DoctorCheck[];
 }
 
 export interface CliContext extends CliOverrides {

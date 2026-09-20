@@ -9,8 +9,6 @@ const stubbed: string[][] = [
   ['escalation', 'show', '--json'],
   ['escalation', 'resolve', '--direction', 'split the shell package'],
   ['review', 'sync'],
-  ['doctor'],
-  ['doctor', '--json'],
   ['ci', 'wait', '--repo', 'shell', '--build', '42'],
   ['ci', 'trigger', '--repo', 'shell'],
   ['ci', 'digest', '--repo', 'shell', '--build', '42'],
