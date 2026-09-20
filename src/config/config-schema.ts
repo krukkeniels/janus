@@ -1,12 +1,15 @@
 import { z } from 'zod';
 
+/** Spec §18.1, in the spec's order. `agents.roles.<role>` and `ROLE_CLASSES` must both cover every entry. */
 export const AGENT_ROLES = [
+  'discovery',
+  'integration_discovery',
+  'planning',
+  'replanning',
   'implementation',
   'debug',
   'fix',
   'sync_conflict',
-  'discovery',
-  'planning',
   'checkpoint',
   'review',
   'triage',
@@ -123,12 +126,14 @@ export const configSchema = z
         allow_unsandboxed: z.boolean().default(false),
         roles: z
           .object({
+            discovery: roleTimeout(30),
+            integration_discovery: roleTimeout(30),
+            planning: roleTimeout(45),
+            replanning: roleTimeout(45),
             implementation: roleTimeout(60),
             debug: roleTimeout(45),
             fix: roleTimeout(45),
             sync_conflict: roleTimeout(30),
-            discovery: roleTimeout(30),
-            planning: roleTimeout(45),
             checkpoint: roleTimeout(20),
             review: roleTimeout(60),
             triage: roleTimeout(20),

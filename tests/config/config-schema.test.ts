@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { configSchema } from '../../src/config/config-schema.js';
+import { AGENT_ROLES, configSchema } from '../../src/config/config-schema.js';
 import { formatZodIssues } from '../../src/config/errors.js';
 
 function issuesOf(input: unknown): string[] {
@@ -101,5 +101,49 @@ describe('configSchema', () => {
     });
     expect(issues).toHaveLength(1);
     expect(issues[0]?.startsWith('workflow_models.profile')).toBe(true);
+  });
+
+  it('knows the twelve §18.1 agent roles and gives each a default timeout', () => {
+    const config = configSchema.parse({ workflow: { ci_provider: 'fake', scm_provider: 'fake' } });
+    expect(AGENT_ROLES).toEqual([
+      'discovery',
+      'integration_discovery',
+      'planning',
+      'replanning',
+      'implementation',
+      'debug',
+      'fix',
+      'sync_conflict',
+      'checkpoint',
+      'review',
+      'triage',
+      'qa',
+    ]);
+    expect(config.agents.roles.integration_discovery.timeout_minutes).toBe(30);
+    expect(config.agents.roles.replanning.timeout_minutes).toBe(45);
+    for (const role of AGENT_ROLES) {
+      expect(config.agents.roles[role].timeout_minutes).toBeGreaterThan(0);
+    }
+  });
+
+  it('accepts a model profile entry for a newly added role and rejects an unknown one', () => {
+    const ok = configSchema.safeParse({
+      workflow: { ci_provider: 'fake', scm_provider: 'fake' },
+      model_profiles: { default: { '*': { model: 'm' }, replanning: { model: 'm', effort: 'low' } } },
+    });
+    expect(ok.success).toBe(true);
+    const bad = issuesOf({
+      workflow: { ci_provider: 'fake', scm_provider: 'fake' },
+      model_profiles: { default: { '*': { model: 'm' }, integration: { model: 'm' } } },
+    });
+    expect(bad.some((issue) => issue.startsWith('model_profiles.default.integration'))).toBe(true);
+  });
+
+  it('applies the runtime ceiling to the new roles too', () => {
+    const issues = issuesOf({
+      workflow: { ci_provider: 'fake', scm_provider: 'fake' },
+      agents: { roles: { replanning: { timeout_minutes: 90 } } },
+    });
+    expect(issues).toContain('agents.roles.replanning.timeout_minutes: must not exceed guardrails.max_agent_runtime_minutes (60)');
   });
 });
