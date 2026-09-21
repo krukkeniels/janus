@@ -19,7 +19,8 @@ Update this table when a task merges to `main`. A task is done when its plan's f
 | T05 | done | 01d63fe (2026-09-20) | 727 tests; agent contract, generated output schemas, prompts, Codex adapter, fake runner, `janus agent run` |
 | T06 | done | b3e81de (2026-09-20) | prompt spike; §18.4 read-only cwd ruling, real JSONL usage shape, per-role token baselines; `docs/spikes/prompt-spike.md` |
 | T07 | done | b3e81de (2026-09-20) | `janus doctor`: 13 checks, `--json` contract, every check unit-tested with a simulated failure |
-| T08 to T24 | pending | | next: T08 (policy checks and orchestrator commit/push) |
+| T08 | done | 652faf5 (2026-09-21) | 1050 tests; `src/policy/` with ten §14 checks, `-z` diff parsing, fix-in-place flow, `policy.checked`/`commit.created`/`push.completed`. Known residual: `stripComments` does not track regex literals, so a `/*`-shaped regex can blank the rest of a file (see notes) |
+| T09 to T24 | pending | | next: T09 (CI providers) and T10 (SCM providers), parallel B — bundle them |
 
 ---
 
