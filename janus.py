@@ -4,6 +4,7 @@ A flow imports the primitives with ``from janus import ...``; see janus-4.0-spec
 from __future__ import annotations
 
 import argparse
+import copy
 import datetime as dt
 import json
 import os
@@ -255,7 +256,7 @@ def run_step(key: str, kind: str, execute: Callable[[int], Any]) -> Any:
     entry = JOURNAL["steps"].get(key)
     REPLAYING = entry is not None and entry.get("status") == "done"
     if REPLAYING:
-        return entry["result"]
+        return copy.deepcopy(entry["result"])  # a flow must never be able to rewrite journal history
     attempt = 1 if entry is None else int(entry.get("attempt", 0)) + 1
     entry = JOURNAL["steps"][key] = {"kind": kind, "status": "running", "attempt": attempt, "started": now()}
     save_journal(key, "running")
@@ -267,9 +268,9 @@ def run_step(key: str, kind: str, execute: Callable[[int], Any]) -> Any:
         entry.update(status="failed", finished=now(), error=error)
         save_journal(key, "failed")
         raise
-    entry.update(status="done", finished=now(), result=result)
+    entry.update(status="done", finished=now(), result=copy.deepcopy(result))
     save_journal(key, "done")
-    return result
+    return copy.deepcopy(result)
 
 
 def step(key: str, fn: Callable[[], Any]) -> Any:

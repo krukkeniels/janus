@@ -68,6 +68,25 @@ def test_step_result_must_be_yaml_serialisable(root):
     assert entry["status"] == "failed" and entry["error"].startswith("RepresenterError: ")
 
 
+def test_result_returned_from_execution_is_isolated_from_the_journal(root):
+    result = janus.step("push", lambda: {"tasks": ["a"]})
+    result["tasks"].append("b")
+    result["extra"] = 1
+    janus.step("other", lambda: 1)  # any later journal write re-serialises every entry
+    entry = read_journal(root)["steps"]["push"]
+    assert entry["result"] == {"tasks": ["a"]}
+
+
+def test_result_returned_from_replay_is_isolated_from_the_journal(root):
+    janus.step("push", lambda: {"tasks": ["a"]})
+    janus.begin(root)
+    result = janus.step("push", lambda: {"tasks": ["a"]})
+    result["tasks"].append("b")
+    janus.step("other", lambda: 1)
+    entry = read_journal(root)["steps"]["push"]
+    assert entry["result"] == {"tasks": ["a"]}
+
+
 def test_duplicate_live_key_in_one_run_raises_janus_error(root):
     janus.step("push", lambda: 1)
     with pytest.raises(janus.JanusError, match="duplicate step key in one run: push"):
