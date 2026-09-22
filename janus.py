@@ -133,3 +133,40 @@ def log(text: str) -> None:
     lines = text.splitlines() or [""]
     if not REPLAYING:  # a replayed run repeats the print, not the Progress line
         append_to_section("## Progress", [f"- {now()} {lines[0]}"] + [f"  {line}" for line in lines[1:]])
+
+
+# --- rendering -------------------------------------------------------------
+
+PLACEHOLDER = re.compile(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)*)\s*\}\}")
+
+
+def lookup(path: str, variables: Dict[str, Any]) -> Any:
+    """Dotted access into dicts and lists by index; a missing or None value is undefined."""
+    value: Any = variables
+    for part in path.split("."):
+        if isinstance(value, dict) and value.get(part) is not None:
+            value = value[part]
+        elif isinstance(value, list) and part.isdigit() and int(part) < len(value):
+            value = value[int(part)]
+        else:
+            raise JanusError(f"undefined placeholder {{{{{path}}}}}")
+    return value
+
+
+def as_text(value: Any) -> str:
+    """Strings as they are; everything else as YAML without the trailing document marker."""
+    if isinstance(value, str):
+        return value
+    text = yaml.safe_dump(value, sort_keys=False, allow_unicode=True).rstrip("\n")
+    return text[:-4] if text.endswith("\n...") else text
+
+
+def render(text: str, variables: Dict[str, Any]) -> str:
+    return PLACEHOLDER.sub(lambda m: as_text(lookup(m.group(1), variables)), text)
+
+
+def load_prompt(path: str) -> Tuple[Optional[Dict[str, Any]], str]:
+    """The front matter ``output`` mapping (None if absent) and the body of a prompt file."""
+    text = (ROOT / path).read_text(encoding="utf-8")
+    m = re.match(r"---\n(.*?)\n---\n?(.*)", text, re.S)
+    return ((yaml.safe_load(m.group(1)) or {}).get("output"), m.group(2)) if m else (None, text)
