@@ -51,6 +51,18 @@ def test_begin_loads_an_existing_journal(root):
     assert janus.JOURNAL["steps"]["a#1"]["result"] == {"x": 1}
 
 
+def test_begin_raises_janus_error_for_an_empty_journal(root):
+    (root / "journal.yaml").write_text("", encoding="utf-8")
+    with pytest.raises(janus.JanusError, match="journal.yaml is not a valid journal"):
+        janus.begin(root)
+
+
+def test_begin_raises_janus_error_for_malformed_yaml(root):
+    (root / "journal.yaml").write_text("steps: [this: is not, closed\n", encoding="utf-8")
+    with pytest.raises(janus.JanusError, match="journal.yaml is not a valid journal"):
+        janus.begin(root)
+
+
 def test_save_journal_writes_yaml_and_leaves_no_temporary_file(root):
     janus.JOURNAL["steps"]["a#1"] = {"kind": "step", "status": "done", "result": 1}
     janus.save_journal("a#1", "done")

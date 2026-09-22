@@ -54,6 +54,26 @@ def test_status_without_a_journal_points_at_run(root, monkeypatch, capsys):
     assert capsys.readouterr().out == "no journal; nothing has run yet\nnext: python janus.py run\n"
 
 
+def test_status_with_a_corrupt_journal_returns_1_with_a_clean_message(root, monkeypatch, capsys):
+    """finding 6: an empty or malformed journal.yaml must not crash with a raw traceback."""
+    (root / "journal.yaml").write_text("", encoding="utf-8")
+    assert run(root, monkeypatch, "status") == 1
+    assert capsys.readouterr().err == "janus: journal.yaml is not a valid journal: empty\n"
+
+
+def test_missing_command_returns_1_not_2(root, monkeypatch, capsys):
+    """finding 7: argparse's usual exit 2 for a usage error collides with '2 = a gate is open'."""
+    monkeypatch.chdir(root)
+    assert janus.main([]) == 1
+    capsys.readouterr()
+
+
+def test_unknown_command_returns_1_not_2(root, monkeypatch, capsys):
+    monkeypatch.chdir(root)
+    assert janus.main(["bogus"]) == 1
+    capsys.readouterr()
+
+
 def test_reset_archives_the_journal_and_removes_open_gates(root, monkeypatch):
     (root / "journal.yaml").write_text(yaml.safe_dump(JOURNAL, sort_keys=False), encoding="utf-8")
     (root / "JANUS.md").write_text(JANUS_MD, encoding="utf-8")

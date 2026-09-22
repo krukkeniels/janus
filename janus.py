@@ -66,7 +66,17 @@ def begin(root: Path) -> None:
     global ROOT, JOURNAL, CONTEXT, COUNTERS, LIVE, CURRENT, REPLAYING
     ROOT = Path(root)
     path, fresh = ROOT / JOURNAL_FILE, {"flow": FLOW_FILE, "started": now(), "steps": {}}
-    JOURNAL = yaml.safe_load(path.read_text(encoding="utf-8")) if path.exists() else fresh
+    if path.exists():
+        try:
+            loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
+        except yaml.YAMLError as exc:
+            raise JanusError(f"{JOURNAL_FILE} is not a valid journal: {exc}")
+        if not isinstance(loaded, dict):
+            raise JanusError(f"{JOURNAL_FILE} is not a valid journal: empty" if loaded is None else
+                              f"{JOURNAL_FILE} is not a valid journal: not a mapping")
+        JOURNAL = loaded
+    else:
+        JOURNAL = fresh
     JOURNAL.setdefault("steps", {})
     CONTEXT, COUNTERS, LIVE, CURRENT = {}, {}, set(), None
     REPLAYING = bool(JOURNAL["steps"])
@@ -519,7 +529,15 @@ COMMANDS = {"run": cmd_run, "status": cmd_status, "reset": cmd_reset}
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(prog="janus.py", description="Janus 4.0: a small durable flow engine for Codex")
     parser.add_argument("command", choices=sorted(COMMANDS))
-    return COMMANDS[parser.parse_args(argv).command]()
+    try:
+        args = parser.parse_args(argv)
+    except SystemExit as exc:  # argparse's usual exit 2 collides with "2 = a gate is open" (finding 7)
+        return 0 if exc.code in (0, None) else 1
+    try:
+        return COMMANDS[args.command]()
+    except JanusError as exc:  # e.g. begin() found a corrupt journal.yaml (finding 6)
+        print(f"janus: {exc}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":
