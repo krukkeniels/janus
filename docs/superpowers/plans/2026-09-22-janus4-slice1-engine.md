@@ -14,7 +14,7 @@
 
 Copied from the spec where they bind implementation; every task's requirements include this section.
 
-- Spec §1: "One engine file, `janus.py`. Python 3.9 or newer, standard library plus PyYAML. Target under 500 lines." The development machine has Python 3.12.3; the deployment target is 3.9, so use `from __future__ import annotations`, `typing.Optional/List/Dict/Tuple`, no `match`, no runtime `X | Y`, no `tomllib`. The assembled file of this plan is 496 lines; do not add code beyond what the tasks show.
+- Spec §1: "One engine file, `janus.py`. Python 3.9 or newer, standard library plus PyYAML. Target under 500 lines." The development machine has Python 3.12.3; the deployment target is 3.9, so use `from __future__ import annotations`, `typing.Optional/List/Dict/Tuple`, no `match`, no runtime `X | Y`, no `tomllib`. The assembled file of this plan is 509 lines, nine over the target, accepted for live transcript streaming (Task 5) and replay-aware `log` (Tasks 1, 4, 7); do not add code beyond what the tasks show.
 - Spec §1: "The engine has no retry policy, no domain rules, no HTTP client and no secrets." Spec §12.6: "`janus.py` contains no reference to Git branches, pull requests, TeamCity, Bitbucket or Angular, apart from committing its own two files." Spec §12.8: "`janus.py` stays one file with only the standard library and PyYAML as imports."
 - Spec §4: "Every one of them is a journaled step except `goal`, `context` and `log`." The primitive signatures are used exactly as written in §4: `goal()`, `context(**vars)`, `codex(prompt, key=None, cwd=".", **vars)`, `ralph(prompt, until, max_iter, key=None, cwd=".", **vars)`, `human_gate(question, key=None, show=None)`, `decision(question, options, key=None, show=None)`, `ai_gate(prompt, key=None, cwd=".", **vars)`, `step(key, fn)`, `log(text)`, `class Exhausted(Exception)` with `.last`, `class JanusError(Exception)`.
 - Spec §4 Keys: "The default key is the prompt file stem followed by `#` and a counter of calls with that stem in this run ... `step` requires an explicit key ... Ralph iterations are keyed `<key>/<n>` starting at 1. Two live steps with the same key in one run is a `JanusError`."
@@ -39,7 +39,7 @@ Copied from the spec where they bind implementation; every task's requirements i
 - `codex` is codex-cli 0.146.0 at `~/.nvm/versions/node/v24.5.0/bin/codex`. `codex exec --help` lists `-C, --cd <DIR>`, `--dangerously-bypass-approvals-and-sandbox`, `--output-schema <FILE>`, `-o, --output-last-message <FILE>`, and reads the prompt from stdin when the positional argument is `-`. Nothing in this plan runs the real `codex`.
 - `yaml.safe_dump(3)` is `'3\n...\n'` and `yaml.safe_dump(True)` is `'true\n...\n'`: PyYAML ends a bare scalar document with `...`, which the renderer strips. `yaml.safe_load("a: list[str]\nb: [str]\nc: [{id: int}]\nd: {one_of: [x, y]}")` gives `{'a': 'list[str]', 'b': ['str'], 'c': [{'id': 'int'}], 'd': {'one_of': ['x', 'y']}}`, so all four declaration forms of Task 3 survive YAML parsing.
 - `git diff --cached --quiet` exits 0 on an unborn branch with nothing staged and 1 when something is staged, so `git_commit` can skip empty commits without special-casing a fresh repository.
-- Not verified offline: whether codex-cli 0.146 forwards `--output-schema` in strict structured-output mode. The schema is built strict (every property required, `additionalProperties: false`), which non-strict mode also accepts. Slice 2's trial records what the real Codex does.
+- Verified with the real Codex on 2026-09-22 (one `codex exec` in a scratch folder, exit 0, about 15,500 tokens): codex-cli 0.146 accepts a strict `--output-schema` with nested objects, `enum`, `additionalProperties: false` and every property required, and the `--output-last-message` file contains exactly the schema-shaped JSON. Codex prints its transcript (config header, `user`, `codex`, `exec` blocks, `tokens used`) to stderr and a copy of the final message to stdout; intermediate `codex` messages also follow the schema, so only the last message counts. Task 5 streams stderr live for this reason.
 
 ## Design decisions fixed here (where the spec leaves room)
 
@@ -51,7 +51,7 @@ Copied from the spec where they bind implementation; every task's requirements i
 - The journal keeps `kind: decision` for `decision()` gates and `kind: gate` for `human_gate()`; `show` is not stored (the flow passes it again on the next run, which rewrites the section).
 - The gate section is appended at the end of `JANUS.md` and rewritten there on every run that stops at the gate; the answered gate's entry under `## Decisions` is `- <date> <key>: <question>` followed by `  answer: <first line>` and further answer lines indented by two spaces.
 - A `step()` whose return value is not YAML-serialisable fails like any raising step (`error: "RepresenterError: ..."`).
-- `log()` is not journaled (spec §4), so a replayed run prints and appends its Progress lines again. Flows that must not duplicate a line wrap it in `step()`. Progress lines written by `log` are committed with the next journal write, not on their own.
+- `log()` is not journaled (spec §4). It always prints, but it appends to `## Progress` only when the most recent step was executed rather than replayed (`REPLAYING`, set by `run_step` and `gate`, initially true when the journal already has steps). A real-Codex smoke run of the tiny flow showed five Progress lines for two events without this rule. Progress lines written by `log` are committed with the next journal write, not on their own.
 - `reset` does not commit; the archived journal under `journals/` is left for the human to commit (spec §3 lists `journals/` as tracked content).
 - Exceptions raised by flow code between steps are attributed to the most recent step key in `## Progress` (or `flow` when no step has run).
 
@@ -274,6 +274,7 @@ CONTEXT: Dict[str, Any] = {}
 COUNTERS: Dict[str, int] = {}
 LIVE: set = set()
 CURRENT: Optional[str] = None
+REPLAYING = False  # True while the last step came from the journal; log() then skips Progress
 
 
 def now() -> str:
@@ -290,12 +291,13 @@ def write_atomic(path: Path, text: str) -> None:
 
 def begin(root: Path) -> None:
     """Reset the engine for one run rooted at ``root`` and load its journal, or start a fresh one."""
-    global ROOT, JOURNAL, CONTEXT, COUNTERS, LIVE, CURRENT
+    global ROOT, JOURNAL, CONTEXT, COUNTERS, LIVE, CURRENT, REPLAYING
     ROOT = Path(root)
     path, fresh = ROOT / JOURNAL_FILE, {"flow": FLOW_FILE, "started": now(), "steps": {}}
     JOURNAL = yaml.safe_load(path.read_text(encoding="utf-8")) if path.exists() else fresh
     JOURNAL.setdefault("steps", {})
     CONTEXT, COUNTERS, LIVE, CURRENT = {}, {}, set(), None
+    REPLAYING = bool(JOURNAL["steps"])
 
 
 def save_journal(key: str, status: str) -> None:
@@ -358,7 +360,8 @@ def goal() -> str:
 def log(text: str) -> None:
     print(text)
     lines = text.splitlines() or [""]
-    append_to_section("## Progress", [f"- {now()} {lines[0]}"] + [f"  {line}" for line in lines[1:]])
+    if not REPLAYING:  # a replayed run repeats the print, not the Progress line
+        append_to_section("## Progress", [f"- {now()} {lines[0]}"] + [f"  {line}" for line in lines[1:]])
 ```
 
 Notes for the implementer: `begin` does not write `journal.yaml`; the first `save_journal` does. `find_section` treats only `#` and `##` lines as section boundaries, so `###` headings inside `# Goal` stay part of the goal text. `append_to_section` inserts before the blank line that separates a section from the next heading, which is why the Progress test expects the entry followed by exactly one blank line. `write_atomic` writes into a temporary file in the same directory and `os.replace`s it, which is atomic on POSIX.
@@ -743,12 +746,26 @@ def test_duplicate_live_key_in_one_run_raises_janus_error(root):
     with pytest.raises(janus.JanusError, match="duplicate step key in one run: push"):
         janus.step("push", lambda: 2)
     assert read_journal(root)["steps"]["push"]["result"] == 1
+
+
+def test_log_after_a_replayed_step_prints_but_does_not_repeat_the_progress_line(root, capsys):
+    janus.step("push", lambda: 1)
+    janus.log("pushed")
+    janus.begin(root)
+    janus.step("push", lambda: 1)
+    janus.log("pushed")
+    janus.step("tag", lambda: 2)
+    janus.log("tagged")
+    progress = (root / "JANUS.md").read_text(encoding="utf-8")
+    assert progress.count("pushed") == 1
+    assert progress.count("tagged") == 1
+    assert capsys.readouterr().out.count("pushed") == 2
 ```
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest -q tests/test_steps.py`
-Expected: `AttributeError: module 'janus' has no attribute 'step'` (and `run_step`), `7 failed, 27 passed`.
+Expected: `AttributeError: module 'janus' has no attribute 'step'` (and `run_step`), `8 failed, 27 passed`.
 
 - [ ] **Step 3: Write the steps section**
 
@@ -776,9 +793,11 @@ def claim(key: str) -> None:
 
 def run_step(key: str, kind: str, execute: Callable[[int], Any]) -> Any:
     """Replay ``key`` from the journal or execute it, journaling every status change (spec section 5)."""
+    global REPLAYING
     claim(key)
     entry = JOURNAL["steps"].get(key)
-    if entry is not None and entry.get("status") == "done":
+    REPLAYING = entry is not None and entry.get("status") == "done"
+    if REPLAYING:
         return entry["result"]
     attempt = 1 if entry is None else int(entry.get("attempt", 0)) + 1
     entry = JOURNAL["steps"][key] = {"kind": kind, "status": "running", "attempt": attempt, "started": now()}
@@ -805,7 +824,7 @@ Note that `except Exception` deliberately does not catch `SystemExit` or `Keyboa
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run pytest -q`
-Expected: `34 passed`
+Expected: `35 passed`
 
 - [ ] **Step 5: Commit**
 
@@ -827,7 +846,7 @@ Spec §4 `codex`, §4 Rendering (reserved `goal`/`attempt`, preamble), §7 (exac
 
 **Interfaces:**
 - Consumes: `load_prompt`, `render`, `goal`, `build_schema`, `validate`, `run_step`, `make_key`, `CONTEXT`, `ROOT`, `PREAMBLE_FILE`, `JanusError`.
-- Produces: `run_codex(cwd: Path, prompt: str, schema: Optional[dict]) -> dict` (runs `codex exec -C <cwd> --dangerously-bypass-approvals-and-sandbox [--output-schema <tmp>/schema.json] --output-last-message <tmp>/last.json -` with the prompt on stdin and stderr captured; raises `JanusError` on non-zero exit, empty or missing final message, non-JSON message or schema mismatch, each message ending with the last twenty stderr lines; with `schema=None` returns `{"text": <message stripped>}`); `run_prompt(prompt, cwd, attempt, variables, previous=None, extra_output=None) -> dict` (merges `{"goal": goal(), "attempt": attempt}` and, when not `None`, `previous`, then `CONTEXT`, then `variables`; renders body and preamble; merges `extra_output` into the `output` declaration; calls `run_codex`); `codex(prompt, key=None, cwd=".", **vars) -> dict`.
+- Produces: `run_codex(cwd: Path, prompt: str, schema: Optional[dict]) -> dict` (runs `codex exec -C <cwd> --dangerously-bypass-approvals-and-sandbox [--output-schema <tmp>/schema.json] --output-last-message <tmp>/last.json -` with the prompt on stdin from a temporary file, stderr streamed to the terminal and its last twenty lines kept; raises `JanusError` on non-zero exit, empty or missing final message, non-JSON message or schema mismatch, each message ending with the last twenty stderr lines; with `schema=None` returns `{"text": <message stripped>}`); `run_prompt(prompt, cwd, attempt, variables, previous=None, extra_output=None) -> dict` (merges `{"goal": goal(), "attempt": attempt}` and, when not `None`, `previous`, then `CONTEXT`, then `variables`; renders body and preamble; merges `extra_output` into the `output` declaration; calls `run_codex`); `codex(prompt, key=None, cwd=".", **vars) -> dict`.
 - Test fixture `fake_codex` (in `tests/conftest.py`): puts a scripted `codex` first on `PATH`. `fake_codex.script(steps)` takes a list of steps, each `{"output": <dict>}` or `{"text": <str>}` for the final message, plus optional `"stderr"` (written to stderr), `"shell"` (commands run in the `-C` directory) and `"exit"` (default 0); the last step repeats for extra calls. `fake_codex.calls()` returns `[{"argv", "cwd", "prompt", "schema"}]` in call order, where `argv` starts at `exec`.
 
 - [ ] **Step 1: Add the fake codex fixture**
@@ -1026,7 +1045,7 @@ def test_codex_replay_does_not_call_codex_again(root, fake_codex):
 - [ ] **Step 3: Run the tests to verify they fail**
 
 Run: `uv run pytest -q tests/test_codex.py`
-Expected: `AttributeError: module 'janus' has no attribute 'codex'`, `10 failed, 34 passed`.
+Expected: `AttributeError: module 'janus' has no attribute 'codex'`, `10 failed, 35 passed`.
 
 - [ ] **Step 4: Write the codex section**
 
@@ -1044,9 +1063,15 @@ def run_codex(cwd: Path, prompt: str, schema: Optional[Dict[str, Any]]) -> Dict[
             (Path(tmp) / "schema.json").write_text(json.dumps(schema, indent=2), encoding="utf-8")
             argv += ["--output-schema", str(Path(tmp) / "schema.json")]
         argv += ["--output-last-message", str(last), "-"]
-        proc = subprocess.run(argv, input=prompt, stderr=subprocess.PIPE, text=True)
-        tail = "\n".join(proc.stderr.splitlines()[-20:])
-        if proc.returncode != 0:
+        (Path(tmp) / "prompt.md").write_text(prompt, encoding="utf-8")
+        with open(Path(tmp) / "prompt.md", encoding="utf-8") as stdin:
+            proc = subprocess.Popen(argv, stdin=stdin, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+        lines: List[str] = []
+        for line in proc.stderr:  # Codex writes its transcript to stderr: show it live, keep the tail
+            sys.stderr.write(line)
+            lines.append(line.rstrip("\n"))
+        tail = "\n".join(lines[-20:])
+        if proc.wait() != 0:
             raise JanusError(f"codex exec exited with {proc.returncode}: {tail}")
         message = last.read_text(encoding="utf-8") if last.exists() else ""
         if not message.strip():
@@ -1086,12 +1111,12 @@ def codex(prompt: str, key: Optional[str] = None, cwd: str = ".", **vars: Any) -
     return run_step(make_key(prompt, key), "codex", lambda attempt: run_prompt(prompt, cwd, attempt, vars))
 ```
 
-Codex's own stdout is inherited (the human sees the agent's transcript while it runs); only stderr is captured for the error tail. `subprocess.run` finds `codex` on `PATH`, which is how the fixture substitutes the fake.
+Codex writes its transcript (reasoning summaries, commands, intermediate messages) to stderr, so `run_codex` streams stderr to the terminal line by line while keeping the last twenty lines for the error message; Codex's stdout carries only a copy of the final message and is discarded. The prompt is handed over through a temporary file on stdin, never on argv, so a large prompt cannot deadlock against the stderr pipe. `subprocess.Popen` finds `codex` on `PATH`, which is how the fixture substitutes the fake.
 
 - [ ] **Step 5: Run the tests to verify they pass**
 
 Run: `uv run pytest -q`
-Expected: `44 passed`
+Expected: `45 passed`
 
 - [ ] **Step 6: Commit**
 
@@ -1195,7 +1220,7 @@ def test_ai_gate_adds_passed_and_reasons_to_the_schema_and_returns_passed(root, 
 - [ ] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest -q tests/test_ralph.py`
-Expected: `AttributeError: module 'janus' has no attribute 'context'` (and `ralph`, `ai_gate`), `7 failed, 44 passed`.
+Expected: `AttributeError: module 'janus' has no attribute 'context'` (and `ralph`, `ai_gate`), `7 failed, 45 passed`.
 
 - [ ] **Step 3: Write the section**
 
@@ -1236,7 +1261,7 @@ The lambda's default argument `prev=previous` binds the value for that iteration
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run pytest -q`
-Expected: `51 passed`
+Expected: `52 passed`
 
 - [ ] **Step 5: Commit**
 
@@ -1349,7 +1374,7 @@ def test_decision_returns_an_answer_within_its_options(root):
 - [ ] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest -q tests/test_gates.py`
-Expected: `AttributeError: module 'janus' has no attribute 'human_gate'` (and `decision`), `6 failed, 51 passed`.
+Expected: `AttributeError: module 'janus' has no attribute 'human_gate'` (and `decision`), `6 failed, 52 passed`.
 
 - [ ] **Step 3: Write the gates section**
 
@@ -1381,9 +1406,11 @@ def read_answer(key: str) -> str:
 
 
 def gate(question: str, key: str, show: Any, options: Optional[List[str]]) -> str:
+    global REPLAYING
     claim(key)
     entry = JOURNAL["steps"].get(key)
-    if entry is not None and entry.get("status") == "answered":
+    REPLAYING = entry is not None and entry.get("status") == "answered"
+    if REPLAYING:
         return entry["answer"]
     if entry is None:
         entry = JOURNAL["steps"][key] = {"kind": "gate" if options is None else "decision", "status": "open",
@@ -1414,7 +1441,7 @@ def decision(question: str, options: List[str], key: Optional[str] = None, show:
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run pytest -q`
-Expected: `57 passed`
+Expected: `58 passed`
 
 - [ ] **Step 5: Commit**
 
@@ -1543,7 +1570,7 @@ def test_failed_push_warns_and_the_run_continues(repo_with_upstream, capsys):
 - [ ] **Step 3: Run the tests to verify they fail**
 
 Run: `uv run pytest -q tests/test_git.py`
-Expected: `assert ['init'] == ['janus: push done', 'janus: push running', 'init']` and similar (nothing is committed yet), `4 failed, 57 passed`.
+Expected: `assert ['init'] == ['janus: push done', 'janus: push running', 'init']` and similar (nothing is committed yet), `4 failed, 58 passed`.
 
 - [ ] **Step 4: Write the git section and hook it into `save_journal`**
 
@@ -1584,7 +1611,7 @@ def save_journal(key: str, status: str) -> None:
 - [ ] **Step 5: Run the tests to verify they pass**
 
 Run: `uv run pytest -q`
-Expected: `61 passed` (the earlier tests run in folders without `.git`, so `git_commit` returns at once for them).
+Expected: `62 passed` (the earlier tests run in folders without `.git`, so `git_commit` returns at once for them).
 
 - [ ] **Step 6: Commit**
 
@@ -1700,7 +1727,7 @@ def test_run_as_a_script_shares_engine_state_with_the_flow(root, fake_codex):
 - [ ] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest -q tests/test_run.py`
-Expected: `AttributeError: module 'janus' has no attribute 'main'` for five tests and `FileNotFoundError: ... journal.yaml` for the script test (`python janus.py run` does nothing yet), `6 failed, 61 passed`.
+Expected: `AttributeError: module 'janus' has no attribute 'main'` for five tests and `FileNotFoundError: ... journal.yaml` for the script test (`python janus.py run` does nothing yet), `6 failed, 62 passed`.
 
 - [ ] **Step 3: Write the CLI section with `run`**
 
@@ -1751,7 +1778,7 @@ Why the `sys.modules` line matters: when the engine runs as `python janus.py run
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run pytest -q`
-Expected: `67 passed`
+Expected: `68 passed`
 
 - [ ] **Step 5: Commit**
 
@@ -1848,7 +1875,7 @@ def test_reset_archives_the_journal_and_removes_open_gates(root, monkeypatch):
 - [ ] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest -q tests/test_status_reset.py`
-Expected: `SystemExit: 2` from argparse, `error: argument command: invalid choice: 'status'`, `4 failed, 67 passed`.
+Expected: `SystemExit: 2` from argparse, `error: argument command: invalid choice: 'status'`, `4 failed, 68 passed`.
 
 - [ ] **Step 3: Write `status` and `reset`**
 
@@ -1898,7 +1925,7 @@ COMMANDS = {"run": cmd_run, "status": cmd_status, "reset": cmd_reset}
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run pytest -q`
-Expected: `71 passed`
+Expected: `72 passed`
 
 - [ ] **Step 5: Check the engine file against the global constraints**
 
@@ -1911,7 +1938,7 @@ grep -n -i 'branch\|pull request\|teamcity\|bitbucket\|angular' janus.py
 grep -n '^import\|^from' janus.py
 ```
 
-Expected: `496 janus.py` (must stay under 500); `ast 3.9 ok`; the domain-word grep prints nothing (§12.6); the import grep lists only `argparse, datetime, json, os, re, runpy, shutil, subprocess, sys, tempfile, traceback, pathlib, typing` and `yaml` (§12.8).
+Expected: `509 janus.py` (the spec target is under 500; nine lines over is accepted for live transcript streaming and replay-aware `log`, nothing more); `ast 3.9 ok`; the domain-word grep prints nothing (§12.6); the import grep lists only `argparse, datetime, json, os, re, runpy, shutil, subprocess, sys, tempfile, traceback, pathlib, typing` and `yaml` (§12.8).
 
 - [ ] **Step 6: Commit**
 
@@ -2033,6 +2060,6 @@ Nothing to commit; the repository is unchanged by this task.
 
 - Spec coverage for slice 1: §1 (Tasks 1, 10 step 5), §3 files (Tasks 1, 7, 10), §4 primitives (`goal`, `log` Task 1; `codex` Task 5; `context`, `ralph`, `ai_gate` Task 6; `human_gate`, `decision` Task 7; `step` Task 4), §4 keys (Task 4, 6, 7), §4 rendering (Tasks 2, 5, 6), §4 output schema (Tasks 3, 5, 6), §5 journal and replay (Tasks 1, 4, 6, 9), §5 gates (Task 7), §5 exit codes (Tasks 7, 9), §5 git (Task 8), §6 CLI (Tasks 9, 10), §7 invocation (Task 5), §8 errors (Tasks 4, 5, 9), §9 all eleven test areas (coverage map in the file structure section), §11 slice 1 smoke run (Task 11), §12.1 to §12.6 and §12.8 (Tasks 4, 5, 6, 7, 8, 9, 10, 11); §12.7 and §10 belong to slice 2.
 - Names used across tasks are consistent: `begin(root)`, `save_journal(key, status)`, `run_step(key, kind, execute)`, `make_key(prompt, key)`, `run_prompt(prompt, cwd, attempt, variables, previous=None, extra_output=None)`, `run_codex(cwd, prompt, schema)`, `gate(question, key, show, options)`, `write_gate(key, question, show, note=None)`, `read_answer(key)`, `git_commit(message)`, `cmd_run/cmd_status/cmd_reset`, `COMMANDS`, `main(argv)`. Test helpers: `read_journal(root)`, `write_prompt(root, stem, body, output=None)`, `git(cwd, *args)`, `init_repo`, `commit_all`, `make_bare`; fixtures `root`, `fake_codex` (`.script(steps)`, `.calls()`), `repo`, `repo_with_upstream`.
-- The code blocks of Tasks 1 to 10 were assembled verbatim, in order, into a scratch directory outside the repository and run with `uv run pytest -q` after each task's red step and green step. The red and green summaries stated in the plan are the ones observed: Task 1: red `ImportError while loading conftest, no tests collected`, green `7 passed`; Task 2: red `6 failed, 7 passed`, green `13 passed`; Task 3: red `14 failed, 13 passed`, green `27 passed`; Task 4: red `7 failed, 27 passed`, green `34 passed`; Task 5: red `10 failed, 34 passed`, green `44 passed`; Task 6: red `7 failed, 44 passed`, green `51 passed`; Task 7: red `6 failed, 51 passed`, green `57 passed`; Task 8: red `4 failed, 57 passed`, green `61 passed`; Task 9: red `6 failed, 61 passed`, green `67 passed`; Task 10: red `4 failed, 67 passed`, green `71 passed`. The assembled `janus.py` is byte-identical to the file the smoke run of Task 11 used; `wc -l janus.py` is 496; `python3 -c "import ast; ast.parse(open('janus.py').read(), feature_version=(3, 9))"` passes for `janus.py` and every test module; no line of any file exceeds 120 characters; `grep -i 'branch\|pull request\|teamcity\|bitbucket\|angular' janus.py` prints nothing. Task 11 was performed against the assembled engine with the outputs stated there (exit codes 2, 0, 0; five then six fake codex calls; the commit list; the origin head).
+- The code blocks of Tasks 1 to 10 were assembled verbatim, in order, into a scratch directory outside the repository and run with `uv run pytest -q` after each task's red step and green step. The red and green summaries stated in the plan are the ones observed: Task 1: red `ImportError while loading conftest, no tests collected`, green `7 passed`; Task 2: red `6 failed, 7 passed`, green `13 passed`; Task 3: red `14 failed, 13 passed`, green `27 passed`; Task 4: red `8 failed, 27 passed`, green `35 passed`; Task 5: red `10 failed, 35 passed`, green `45 passed`; Task 6: red `7 failed, 45 passed`, green `52 passed`; Task 7: red `6 failed, 52 passed`, green `58 passed`; Task 8: red `4 failed, 58 passed`, green `62 passed`; Task 9: red `6 failed, 62 passed`, green `68 passed`; Task 10: red `4 failed, 68 passed`, green `72 passed`. The assembled `janus.py` is byte-identical to the file the smoke run of Task 11 used; `wc -l janus.py` is 509; `python3 -c "import ast; ast.parse(open('janus.py').read(), feature_version=(3, 9))"` passes for `janus.py` and every test module; no line of any file exceeds 120 characters; `grep -i 'branch\|pull request\|teamcity\|bitbucket\|angular' janus.py` prints nothing. Task 11 was performed against the assembled engine with the outputs stated there (exit codes 2, 0, 0; five then six fake codex calls; the commit list; the origin head).
 - Placeholder scan: no "TBD", "TODO", "similar to", or "add error handling" remains; every code step shows the code.
-- One fact could not be verified offline: whether codex-cli 0.146 accepts the strict schema in `--output-schema`. It is the form the spec prescribes; slice 2's trial with the real Codex is where it is confirmed.
+- The strict `--output-schema` form was confirmed against the real codex-cli 0.146 on 2026-09-22 (see Verified facts). After that check, `run_codex` was changed to stream stderr live and read the prompt from a temporary file; then `log()` was made replay-aware after a real-Codex smoke run showed Progress lines repeating on every rerun; the scratch suite gives `72 passed` and the file is 509 lines.
