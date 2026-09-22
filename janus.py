@@ -291,6 +291,8 @@ def step(key: str, fn: Callable[[], Any]) -> Any:
 
 def run_codex(cwd: Path, prompt: str, schema: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     """One fresh ``codex exec`` (spec section 7). Returns the parsed final message."""
+    if not cwd.is_dir():  # fail before Popen instead of surfacing as an opaque codex exit (finding 11)
+        raise JanusError(f"cwd not found: {cwd}")
     with tempfile.TemporaryDirectory(prefix="janus-") as tmp:
         last = Path(tmp) / "last.json"
         argv = ["codex", "exec", "-C", str(cwd), "--dangerously-bypass-approvals-and-sandbox"]

@@ -115,6 +115,15 @@ def test_codex_re_executed_after_failed_renders_attempt_as_2(root, fake_codex):
     assert fake_codex.calls()[0]["prompt"] == "Attempt 2"
 
 
+def test_codex_with_a_nonexistent_cwd_fails_before_codex_starts(root, fake_codex):
+    """finding 11: a non-existent cwd must raise JanusError before Popen, not an opaque codex exit."""
+    write_prompt(root, "plan", "x", output={"summary": "str"})
+    with pytest.raises(janus.JanusError, match=f"cwd not found: {root / 'missing'}"):
+        janus.codex("prompts/plan.md", cwd="missing")
+    assert fake_codex.calls() == []
+    assert read_journal(root)["steps"]["plan#1"]["status"] == "failed"
+
+
 def test_codex_replay_does_not_call_codex_again(root, fake_codex):
     write_prompt(root, "plan", "x", output={"summary": "str"})
     fake_codex.script([{"output": {"summary": "ok"}}])
