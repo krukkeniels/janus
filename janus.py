@@ -170,3 +170,52 @@ def load_prompt(path: str) -> Tuple[Optional[Dict[str, Any]], str]:
     text = (ROOT / path).read_text(encoding="utf-8")
     m = re.match(r"---\n(.*?)\n---\n?(.*)", text, re.S)
     return ((yaml.safe_load(m.group(1)) or {}).get("output"), m.group(2)) if m else (None, text)
+
+
+# --- output schema ---------------------------------------------------------
+
+def field_schema(decl: Any) -> Dict[str, Any]:
+    """JSON schema for one ``output`` field declaration (spec section 4, Output schema)."""
+    scalars = {"str": "string", "int": "integer", "float": "number", "bool": "boolean"}
+    if isinstance(decl, str) and decl in scalars:
+        return {"type": scalars[decl]}
+    if isinstance(decl, str) and re.fullmatch(r"list\[\w+\]", decl):
+        return {"type": "array", "items": field_schema(decl[5:-1])}
+    if isinstance(decl, list) and len(decl) == 1:
+        return {"type": "array", "items": field_schema(decl[0])}
+    if isinstance(decl, dict) and list(decl) == ["one_of"]:
+        if isinstance(decl["one_of"], list) and decl["one_of"] and all(isinstance(o, str) for o in decl["one_of"]):
+            return {"type": "string", "enum": list(decl["one_of"])}
+    elif isinstance(decl, dict) and decl:
+        return build_schema(decl)
+    raise JanusError(f"invalid output declaration: {decl!r}")
+
+
+def build_schema(output: Any) -> Dict[str, Any]:
+    if not isinstance(output, dict) or not output:
+        raise JanusError(f"invalid output declaration: {output!r}")
+    return {"type": "object", "properties": {name: field_schema(decl) for name, decl in output.items()},
+            "required": list(output), "additionalProperties": False}
+
+
+def validate(value: Any, schema: Dict[str, Any], where: str = "$") -> Optional[str]:
+    """The first mismatch between value and a build_schema() schema, or None."""
+    kind = schema["type"]
+    if kind == "object":
+        if not isinstance(value, dict):
+            return f"{where}: expected object"
+        if sorted(value) != sorted(schema["required"]):
+            return f"{where}: expected exactly the keys {schema['required']}, got {sorted(value)}"
+        items = [(value[k], sub, f"{where}.{k}") for k, sub in schema["properties"].items()]
+    elif kind == "array":
+        if not isinstance(value, list):
+            return f"{where}: expected array"
+        items = [(item, schema["items"], f"{where}[{i}]") for i, item in enumerate(value)]
+    else:
+        is_bool = isinstance(value, bool)
+        ok = {"string": isinstance(value, str), "boolean": is_bool, "integer": isinstance(value, int) and not is_bool,
+              "number": isinstance(value, (int, float)) and not is_bool}[kind]
+        if not ok or ("enum" in schema and value not in schema["enum"]):
+            return f"{where}: expected {kind}" + (f" in {schema['enum']}" if "enum" in schema else "")
+        return None
+    return next((p for p in (validate(*item) for item in items) if p), None)
