@@ -265,3 +265,62 @@ def run_step(key: str, kind: str, execute: Callable[[int], Any]) -> Any:
 
 def step(key: str, fn: Callable[[], Any]) -> Any:
     return run_step(key, "step", lambda attempt: fn())
+
+
+# --- codex -----------------------------------------------------------------
+
+def run_codex(cwd: Path, prompt: str, schema: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """One fresh ``codex exec`` (spec section 7). Returns the parsed final message."""
+    with tempfile.TemporaryDirectory(prefix="janus-") as tmp:
+        last = Path(tmp) / "last.json"
+        argv = ["codex", "exec", "-C", str(cwd), "--dangerously-bypass-approvals-and-sandbox"]
+        if schema is not None:
+            (Path(tmp) / "schema.json").write_text(json.dumps(schema, indent=2), encoding="utf-8")
+            argv += ["--output-schema", str(Path(tmp) / "schema.json")]
+        argv += ["--output-last-message", str(last), "-"]
+        (Path(tmp) / "prompt.md").write_text(prompt, encoding="utf-8")
+        with open(Path(tmp) / "prompt.md", encoding="utf-8") as stdin:
+            proc = subprocess.Popen(argv, stdin=stdin, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+        lines: List[str] = []
+        for line in proc.stderr:  # Codex writes its transcript to stderr: show it live, keep the tail
+            sys.stderr.write(line)
+            lines.append(line.rstrip("\n"))
+        tail = "\n".join(lines[-20:])
+        if proc.wait() != 0:
+            raise JanusError(f"codex exec exited with {proc.returncode}: {tail}")
+        message = last.read_text(encoding="utf-8") if last.exists() else ""
+        if not message.strip():
+            raise JanusError(f"codex exec ended without a final message: {tail}")
+    if schema is None:
+        return {"text": message.strip()}
+    try:
+        data = json.loads(message)
+    except ValueError as exc:
+        raise JanusError(f"codex final message is not JSON ({exc}): {tail}")
+    problem = validate(data, schema)
+    if problem:
+        raise JanusError(f"codex final message does not match the output schema ({problem}): {tail}")
+    return data
+
+
+def run_prompt(prompt: str, cwd: str, attempt: int, variables: Dict[str, Any], previous: Optional[Any] = None,
+               extra_output: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Render with reserved values < context() < call arguments, preamble first; build the schema; run Codex.
+    Rendering and schema errors are raised before Codex starts."""
+    output, body = load_prompt(prompt)
+    merged: Dict[str, Any] = {"goal": goal(), "attempt": attempt}
+    if previous is not None:
+        merged["previous"] = previous
+    merged.update(CONTEXT)
+    merged.update(variables)
+    text = render(body, merged)
+    preamble = ROOT / PREAMBLE_FILE
+    if preamble.exists():
+        text = render(preamble.read_text(encoding="utf-8"), merged).rstrip("\n") + "\n\n" + text
+    if extra_output:
+        output = dict(output or {}, **extra_output)
+    return run_codex(ROOT / cwd, text, None if output is None else build_schema(output))
+
+
+def codex(prompt: str, key: Optional[str] = None, cwd: str = ".", **vars: Any) -> Dict[str, Any]:
+    return run_step(make_key(prompt, key), "codex", lambda attempt: run_prompt(prompt, cwd, attempt, vars))
