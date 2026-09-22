@@ -433,3 +433,41 @@ def git_commit(message: str) -> None:
         push = git("push", "-q")
         if push.returncode != 0:
             print(f"janus: warning: git push failed: {push.stderr.strip()}", file=sys.stderr)
+
+# --- CLI -------------------------------------------------------------------
+
+def cmd_run() -> int:
+    begin(Path.cwd())
+    if not (ROOT / FLOW_FILE).exists():
+        print(f"janus: {FLOW_FILE} not found in {ROOT}", file=sys.stderr)
+        return 1
+    # flow.py says `from janus import ...`; that must resolve to this module, not to a second copy of the file.
+    sys.modules.setdefault("janus", sys.modules[__name__])
+    sys.path.insert(0, str(ROOT))  # so flow.py can import helper modules from the goal folder
+    try:
+        runpy.run_path(str(ROOT / FLOW_FILE), run_name="flow")
+    except SystemExit as exc:
+        return exc.code if isinstance(exc.code, int) else (0 if exc.code is None else 1)
+    except Exhausted as exc:
+        traceback.print_exc()
+        log(f"{CURRENT}: ralph exhausted; last result:\n{as_text(exc.last)}")
+        return 1
+    except Exception as exc:
+        traceback.print_exc()
+        log(f"{CURRENT or 'flow'}: {type(exc).__name__}: {exc}")
+        return 1
+    print("flow ended")
+    return 0
+
+
+COMMANDS = {"run": cmd_run}
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    parser = argparse.ArgumentParser(prog="janus.py", description="Janus 4.0: a small durable flow engine for Codex")
+    parser.add_argument("command", choices=sorted(COMMANDS))
+    return COMMANDS[parser.parse_args(argv).command]()
+
+
+if __name__ == "__main__":
+    sys.exit(main())
