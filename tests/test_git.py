@@ -3,7 +3,7 @@ import shutil
 import pytest
 
 import janus
-from helpers import commit_all, git, init_repo, make_bare
+from helpers import commit_all, git, init_repo, make_bare, read_journal
 
 
 @pytest.fixture
@@ -46,6 +46,17 @@ def test_failed_push_warns_and_the_run_continues(repo_with_upstream, capsys):
     assert janus.step("push", lambda: 1) == 1
     assert "janus: warning: git push failed" in capsys.readouterr().err
     assert git(repo, "log", "-1", "--format=%s") == "janus: push done"
+
+
+def test_failed_git_commit_warns_and_the_step_still_returns(repo, capsys):
+    """spec section 5, Git: a failed commit is logged as a warning and does not stop the run
+    (finding 5a). A pre-commit hook that always fails forces this deterministically."""
+    hook = repo / ".git" / "hooks" / "pre-commit"
+    hook.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+    hook.chmod(0o755)
+    assert janus.step("push", lambda: 1) == 1
+    assert "janus: warning: git commit failed:" in capsys.readouterr().err
+    assert read_journal(repo)["steps"]["push"]["result"] == 1
 
 
 def test_janus_commit_does_not_sweep_up_a_pre_staged_unrelated_file(repo):

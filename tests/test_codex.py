@@ -88,6 +88,33 @@ def test_codex_answer_that_does_not_match_the_schema_fails_the_step(root, fake_c
     assert read_journal(root)["steps"]["plan#1"]["status"] == "failed"
 
 
+def test_codex_re_executed_after_running_renders_attempt_as_2(root, fake_codex):
+    """spec section 5, Replay: a 'running' step is executed again with attempt incremented, and
+    prompts see the new {{attempt}} (finding 5b)."""
+    write_prompt(root, "plan", "Attempt {{attempt}}", output={"summary": "str"})
+    (root / "journal.yaml").write_text(
+        "flow: flow.py\nstarted: x\nsteps:\n  plan#1: {kind: codex, status: running, attempt: 1, started: x}\n",
+        encoding="utf-8")
+    janus.begin(root)
+    fake_codex.script([{"output": {"summary": "ok"}}])
+    assert janus.codex("prompts/plan.md") == {"summary": "ok"}
+    assert fake_codex.calls()[0]["prompt"] == "Attempt 2"
+    assert read_journal(root)["steps"]["plan#1"]["attempt"] == 2
+
+
+def test_codex_re_executed_after_failed_renders_attempt_as_2(root, fake_codex):
+    """spec section 5, Replay: a 'failed' step is likewise executed again with attempt incremented
+    (finding 5b)."""
+    write_prompt(root, "plan", "Attempt {{attempt}}", output={"summary": "str"})
+    (root / "journal.yaml").write_text(
+        "flow: flow.py\nstarted: x\nsteps:\n  plan#1: {kind: codex, status: failed, attempt: 1, error: boom}\n",
+        encoding="utf-8")
+    janus.begin(root)
+    fake_codex.script([{"output": {"summary": "ok"}}])
+    assert janus.codex("prompts/plan.md") == {"summary": "ok"}
+    assert fake_codex.calls()[0]["prompt"] == "Attempt 2"
+
+
 def test_codex_replay_does_not_call_codex_again(root, fake_codex):
     write_prompt(root, "plan", "x", output={"summary": "str"})
     fake_codex.script([{"output": {"summary": "ok"}}])

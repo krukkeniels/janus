@@ -69,3 +69,15 @@ def test_ai_gate_adds_passed_and_reasons_to_the_schema_and_returns_passed(root, 
     assert schema["required"] == ["summary", "passed", "reasons"]
     entry = read_journal(root)["steps"]["review"]
     assert entry["kind"] == "ai_gate" and entry["result"]["reasons"] == ["tests skipped"]
+
+
+def test_ai_gate_on_a_prompt_with_no_front_matter_still_gets_the_schema(root, fake_codex):
+    """finding 5e: a prompt without an output declaration still gets {passed, reasons} in the
+    schema, and ai_gate still returns the bool."""
+    write_prompt(root, "review", "Review it")  # no output= means no front matter at all
+    fake_codex.script([{"output": {"passed": True, "reasons": []}}])
+    assert janus.ai_gate("prompts/review.md", key="review") is True
+    schema = fake_codex.calls()[0]["schema"]
+    assert schema["properties"]["passed"] == {"type": "boolean"}
+    assert schema["properties"]["reasons"] == {"type": "array", "items": {"type": "string"}}
+    assert schema["required"] == ["passed", "reasons"]

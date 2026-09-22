@@ -77,6 +77,12 @@ def test_progress_line_is_written_for_an_exception_that_follows_a_replayed_step(
     assert text.count("a: ValueError: kaboom") == 2
 
 
+def test_run_returns_1_when_the_flow_raises_system_exit_1(root, monkeypatch):
+    """finding 5c: a flow calling raise SystemExit(1) makes main(['run']) return 1."""
+    (root / "flow.py").write_text("raise SystemExit(1)\n", encoding="utf-8")
+    assert run(root, monkeypatch) == 1
+
+
 def test_run_without_flow_py_exits_1(root, monkeypatch, capsys):
     assert run(root, monkeypatch) == 1
     assert "flow.py not found" in capsys.readouterr().err

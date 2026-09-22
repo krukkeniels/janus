@@ -80,6 +80,15 @@ def test_decision_returns_an_answer_within_its_options(root):
     assert read_journal(root)["steps"]["d"]["status"] == "answered"
 
 
+def test_human_gate_and_decision_without_a_key_default_to_gate1_and_decision1(root):
+    """spec section 4, Keys: the default key rule applies to gates too (finding 5d)."""
+    with pytest.raises(SystemExit):
+        janus.human_gate("Approve?")
+    with pytest.raises(SystemExit):
+        janus.decision("Continue?", ["retry", "skip"])
+    assert set(read_journal(root)["steps"]) == {"gate#1", "decision#1"}
+
+
 def test_multiline_question_with_a_heading_line_is_still_answerable(root):
     """A '## x'-shaped line inside a multi-line question must not fool find_section into ending
     the gate section early (finding 1, question case)."""
