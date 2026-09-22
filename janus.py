@@ -353,3 +353,60 @@ def ai_gate(prompt: str, key: Optional[str] = None, cwd: str = ".", **vars: Any)
     result = run_step(make_key(prompt, key), "ai_gate", lambda attempt: run_prompt(
         prompt, cwd, attempt, vars, extra_output={"passed": "bool", "reasons": "list[str]"}))
     return bool(result["passed"])
+
+
+# --- gates -----------------------------------------------------------------
+
+def write_gate(key: str, question: str, show: Any, note: Optional[str] = None) -> None:
+    """(Re)write the gate section at the end of JANUS.md with an empty ``answer:`` line."""
+    remove_section(f"## Gate: {key}")
+    lines = read_goal_file()
+    section = [f"## Gate: {key}", question, ""]
+    if show is not None:
+        section += ["    " + line for line in as_text(show).splitlines()] + [""]
+    section += ([note, ""] if note else []) + ["answer:", ""]
+    write_goal_file(lines + ([""] if lines and lines[-1].strip() else []) + section)
+
+
+def read_answer(key: str) -> str:
+    """Text after ``answer:`` up to the end of the gate section; empty when there is none."""
+    lines = read_goal_file()
+    span = find_section(lines, f"## Gate: {key}")
+    body = [] if span is None else lines[span[0] + 1:span[1]]
+    for i, line in enumerate(body):
+        if line.startswith("answer:"):
+            return "\n".join([line[len("answer:"):]] + body[i + 1:]).strip()
+    return ""
+
+
+def gate(question: str, key: str, show: Any, options: Optional[List[str]]) -> str:
+    global REPLAYING
+    claim(key)
+    entry = JOURNAL["steps"].get(key)
+    REPLAYING = entry is not None and entry.get("status") == "answered"
+    if REPLAYING:
+        return entry["answer"]
+    if entry is None:
+        entry = JOURNAL["steps"][key] = {"kind": "gate" if options is None else "decision", "status": "open",
+                                         "question": question, "started": now()}
+    answer = read_answer(key)
+    rejected = bool(answer) and options is not None and answer not in options
+    if answer and not rejected:
+        entry.update(status="answered", answer=answer, finished=now())
+        remove_section(f"## Gate: {key}")
+        append_to_section("## Decisions", [f"- {dt.date.today().isoformat()} {key}: {question}"]
+                          + [("  answer: " if i == 0 else "  ") + line for i, line in enumerate(answer.splitlines())])
+        save_journal(key, "answered")
+        return answer
+    write_gate(key, question, show, f'Note: "{answer}" is not one of: {", ".join(options)}.' if rejected else None)
+    save_journal(key, "open")
+    print(f"gate open: {key}. Answer it in {GOAL_FILE} and run again.")
+    raise SystemExit(2)
+
+
+def human_gate(question: str, key: Optional[str] = None, show: Any = None) -> str:
+    return gate(question, make_key("gate", key), show, None)
+
+
+def decision(question: str, options: List[str], key: Optional[str] = None, show: Any = None) -> str:
+    return gate(question, make_key("decision", key), show, list(options))
