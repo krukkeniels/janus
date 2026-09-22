@@ -66,17 +66,16 @@ def begin(root: Path) -> None:
     global ROOT, JOURNAL, CONTEXT, COUNTERS, LIVE, CURRENT, REPLAYING
     ROOT = Path(root)
     path, fresh = ROOT / JOURNAL_FILE, {"flow": FLOW_FILE, "started": now(), "steps": {}}
+    JOURNAL = fresh
     if path.exists():
         try:
             loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
         except yaml.YAMLError as exc:
             raise JanusError(f"{JOURNAL_FILE} is not a valid journal: {exc}")
         if not isinstance(loaded, dict):
-            raise JanusError(f"{JOURNAL_FILE} is not a valid journal: empty" if loaded is None else
-                              f"{JOURNAL_FILE} is not a valid journal: not a mapping")
+            raise JanusError(f"{JOURNAL_FILE} is not a valid journal: "
+                              + ("empty" if loaded is None else "not a mapping"))
         JOURNAL = loaded
-    else:
-        JOURNAL = fresh
     JOURNAL.setdefault("steps", {})
     CONTEXT, COUNTERS, LIVE, CURRENT = {}, {}, set(), None
     REPLAYING = bool(JOURNAL["steps"])
@@ -99,20 +98,16 @@ def write_goal_file(lines: List[str]) -> None:
     write_atomic(ROOT / GOAL_FILE, "\n".join(lines).rstrip("\n") + "\n")
 
 
-def is_reserved_heading(line: str) -> bool:
-    """True for a heading line the engine itself writes; free text (a question, an answer, a note)
-    may contain a '#'-prefixed line without ending the section it lives in (finding 1)."""
-    line = line.rstrip()
-    return line in ("# Goal", "## Progress", "## Decisions") or line.startswith("## Gate: ")
+RESERVED_HEADING = re.compile(r"\A(?:# Goal|## Progress|## Decisions)\Z|\A## Gate: ")
 
 
 def find_section(lines: List[str], heading: str) -> Optional[Tuple[int, int]]:
-    """Line range [start, end) of the section with exactly this heading line; only another heading
-    the engine itself writes ends it, so free text within the section may contain '#' lines."""
+    """Line range [start, end) of the section with exactly this heading line; only a heading the
+    engine itself writes ends it, so free text within (a question, an answer) may contain '#' lines."""
     for i, line in enumerate(lines):
         if line.rstrip() == heading:
             j = i + 1
-            while j < len(lines) and not is_reserved_heading(lines[j]):
+            while j < len(lines) and not RESERVED_HEADING.match(lines[j].rstrip()):
                 j += 1
             return i, j
     return None
@@ -380,9 +375,8 @@ def ai_gate(prompt: str, key: Optional[str] = None, cwd: str = ".", **vars: Any)
 # --- gates -----------------------------------------------------------------
 
 def write_gate(key: str, question: str, show: Any, note: Optional[str] = None) -> None:
-    """(Re)write the gate section at the end of JANUS.md with an empty ``answer:`` line.
-    Only the question's first line sits at column 0 (matching the spec's example); continuation
-    lines are indented so a '## x'-shaped question line can never be mistaken for a heading."""
+    """(Re)write the gate section with an empty ``answer:`` line. Only the question's first line
+    sits at column 0 (as the spec's example shows); continuation lines are indented."""
     remove_section(f"## Gate: {key}")
     lines = read_goal_file()
     qlines = question.splitlines() or [""]
@@ -394,10 +388,9 @@ def write_gate(key: str, question: str, show: Any, note: Optional[str] = None) -
 
 
 def read_answer(key: str) -> str:
-    """Text after ``answer:`` up to the end of the gate section; empty when there is none.
-    Line 0 of the body is always the question's own first line (never the engine's marker, which
-    is always preceded by a blank line), so a question starting with 'answer:' cannot be mistaken
-    for it (finding 1, Task 7 deferred minor)."""
+    """Text after ``answer:`` up to the end of the gate section; empty when there is none. Line 0
+    is always the question's own first line, never the engine's marker, so a question starting
+    with 'answer:' is not mistaken for it."""
     lines = read_goal_file()
     span = find_section(lines, f"## Gate: {key}")
     body = [] if span is None else lines[span[0] + 1:span[1]]
