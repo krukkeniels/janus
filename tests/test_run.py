@@ -64,6 +64,19 @@ def test_run_writes_the_last_result_of_an_uncaught_exhausted_to_progress(root, f
     assert " fix/1: ralph exhausted; last result:\n  done: false\n  note: flaky\n" in text
 
 
+def test_progress_line_is_written_for_an_exception_that_follows_a_replayed_step(root, monkeypatch):
+    """cmd_run's exception handler must log unconditionally, even though the last replayed step left
+    REPLAYING True (finding 4); log() itself must keep skipping the Progress line for a plain replay."""
+    (root / "flow.py").write_text(
+        "from janus import step\n\nstep('a', lambda: 1)\nraise ValueError('kaboom')\n", encoding="utf-8")
+    assert run(root, monkeypatch) == 1  # first run: 'a' executes fresh, then the flow raises
+    text = (root / "JANUS.md").read_text(encoding="utf-8")
+    assert text.count("a: ValueError: kaboom") == 1
+    assert run(root, monkeypatch) == 1  # second run: 'a' is a full replay, then the flow raises again
+    text = (root / "JANUS.md").read_text(encoding="utf-8")
+    assert text.count("a: ValueError: kaboom") == 2
+
+
 def test_run_without_flow_py_exits_1(root, monkeypatch, capsys):
     assert run(root, monkeypatch) == 1
     assert "flow.py not found" in capsys.readouterr().err
