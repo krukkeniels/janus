@@ -463,6 +463,8 @@ def git_commit(message: str) -> None:
     if not (ROOT / ".git").exists():
         return
     existing = [f for f in (GOAL_FILE, JOURNAL_FILE) if (ROOT / f).exists()]
+    if not existing:
+        return  # nothing of ours to add; never fall back to a whole-index commit (NB4)
     git("add", "--", *existing)
     if git("diff", "--cached", "--quiet", "--", *existing).returncode == 0:
         return  # nothing staged for JANUS.md/journal.yaml; leave any other staged file alone

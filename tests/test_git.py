@@ -65,3 +65,14 @@ def test_janus_commit_does_not_sweep_up_a_pre_staged_unrelated_file(repo):
     janus.step("push", lambda: 1)
     assert git(repo, "show", "--name-only", "--format=", "HEAD").splitlines() == ["journal.yaml"]
     assert git(repo, "status", "--porcelain").splitlines() == ["A  secret-wip.txt"]
+
+
+def test_git_commit_with_neither_file_present_does_nothing(repo):
+    """NB4: an empty ``existing`` list must not degrade to a whole-index commit."""
+    (repo / "JANUS.md").unlink()  # neither JANUS.md nor journal.yaml exists at this point
+    (repo / "secret-wip.txt").write_text("keep me staged\n", encoding="utf-8")
+    git(repo, "add", "-A")
+    before = git(repo, "status", "--porcelain")
+    janus.git_commit("janus: nothing done")
+    assert git(repo, "log", "--format=%s").splitlines() == ["init"]
+    assert git(repo, "status", "--porcelain") == before  # untouched: no commit, nothing unstaged
