@@ -324,3 +324,32 @@ def run_prompt(prompt: str, cwd: str, attempt: int, variables: Dict[str, Any], p
 
 def codex(prompt: str, key: Optional[str] = None, cwd: str = ".", **vars: Any) -> Dict[str, Any]:
     return run_step(make_key(prompt, key), "codex", lambda attempt: run_prompt(prompt, cwd, attempt, vars))
+
+
+# --- context, ralph and ai_gate --------------------------------------------
+
+def context(**vars: Any) -> None:
+    CONTEXT.update(vars)
+
+
+def ralph(prompt: str, until: Callable[[Dict[str, Any]], bool], max_iter: int, key: Optional[str] = None,
+          cwd: str = ".", **vars: Any) -> Dict[str, Any]:
+    """codex() repeated until ``until(result)``; iterations are keyed <key>/<n> and see {{previous}}."""
+    global CURRENT
+    key = make_key(prompt, key)
+    previous: Any = ""
+    last: Any = None
+    for n in range(1, max_iter + 1):
+        last = run_step(f"{key}/{n}", "codex",
+                        lambda attempt, prev=previous: run_prompt(prompt, cwd, attempt, vars, previous=prev))
+        if until(last):
+            return last
+        previous = last
+    CURRENT = key
+    raise Exhausted(last)
+
+
+def ai_gate(prompt: str, key: Optional[str] = None, cwd: str = ".", **vars: Any) -> bool:
+    result = run_step(make_key(prompt, key), "ai_gate", lambda attempt: run_prompt(
+        prompt, cwd, attempt, vars, extra_output={"passed": "bool", "reasons": "list[str]"}))
+    return bool(result["passed"])
