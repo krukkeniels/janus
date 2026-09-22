@@ -219,3 +219,49 @@ def validate(value: Any, schema: Dict[str, Any], where: str = "$") -> Optional[s
             return f"{where}: expected {kind}" + (f" in {schema['enum']}" if "enum" in schema else "")
         return None
     return next((p for p in (validate(*item) for item in items) if p), None)
+
+# --- steps and keys --------------------------------------------------------
+
+def make_key(prompt: str, key: Optional[str]) -> str:
+    """Explicit key, or ``<stem>#<n>`` counting calls with that prompt stem in this run."""
+    if key is not None:
+        return key
+    stem = Path(prompt).stem
+    COUNTERS[stem] = COUNTERS.get(stem, 0) + 1
+    return f"{stem}#{COUNTERS[stem]}"
+
+
+def claim(key: str) -> None:
+    global CURRENT
+    if key in LIVE:
+        raise JanusError(f"duplicate step key in one run: {key}")
+    LIVE.add(key)
+    CURRENT = key
+
+
+def run_step(key: str, kind: str, execute: Callable[[int], Any]) -> Any:
+    """Replay ``key`` from the journal or execute it, journaling every status change (spec section 5)."""
+    global REPLAYING
+    claim(key)
+    entry = JOURNAL["steps"].get(key)
+    REPLAYING = entry is not None and entry.get("status") == "done"
+    if REPLAYING:
+        return entry["result"]
+    attempt = 1 if entry is None else int(entry.get("attempt", 0)) + 1
+    entry = JOURNAL["steps"][key] = {"kind": kind, "status": "running", "attempt": attempt, "started": now()}
+    save_journal(key, "running")
+    try:
+        result = execute(attempt)
+        yaml.safe_dump(result)  # a result that is not YAML-serialisable fails the step here
+    except Exception as exc:
+        error = str(exc) if isinstance(exc, JanusError) else f"{type(exc).__name__}: {exc}"
+        entry.update(status="failed", finished=now(), error=error)
+        save_journal(key, "failed")
+        raise
+    entry.update(status="done", finished=now(), result=result)
+    save_journal(key, "done")
+    return result
+
+
+def step(key: str, fn: Callable[[], Any]) -> Any:
+    return run_step(key, "step", lambda attempt: fn())
