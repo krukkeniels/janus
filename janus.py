@@ -437,10 +437,11 @@ def git_commit(message: str) -> None:
     """Commit JANUS.md and journal.yaml and push if there is an upstream. Failures warn only."""
     if not (ROOT / ".git").exists():
         return
-    git("add", "--", *[f for f in (GOAL_FILE, JOURNAL_FILE) if (ROOT / f).exists()])
-    if git("diff", "--cached", "--quiet").returncode == 0:
-        return  # nothing staged
-    commit = git("commit", "-q", "-m", message)
+    existing = [f for f in (GOAL_FILE, JOURNAL_FILE) if (ROOT / f).exists()]
+    git("add", "--", *existing)
+    if git("diff", "--cached", "--quiet", "--", *existing).returncode == 0:
+        return  # nothing staged for JANUS.md/journal.yaml; leave any other staged file alone
+    commit = git("commit", "-q", "-m", message, "--", *existing)
     if commit.returncode != 0:
         print(f"janus: warning: git commit failed: {commit.stderr.strip()}", file=sys.stderr)
     elif git("rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}").returncode == 0:

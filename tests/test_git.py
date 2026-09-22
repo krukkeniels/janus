@@ -46,3 +46,11 @@ def test_failed_push_warns_and_the_run_continues(repo_with_upstream, capsys):
     assert janus.step("push", lambda: 1) == 1
     assert "janus: warning: git push failed" in capsys.readouterr().err
     assert git(repo, "log", "-1", "--format=%s") == "janus: push done"
+
+
+def test_janus_commit_does_not_sweep_up_a_pre_staged_unrelated_file(repo):
+    (repo / "secret-wip.txt").write_text("do not commit me\n", encoding="utf-8")
+    git(repo, "add", "secret-wip.txt")
+    janus.step("push", lambda: 1)
+    assert git(repo, "show", "--name-only", "--format=", "HEAD").splitlines() == ["journal.yaml"]
+    assert git(repo, "status", "--porcelain").splitlines() == ["A  secret-wip.txt"]
