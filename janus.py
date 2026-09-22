@@ -460,7 +460,41 @@ def cmd_run() -> int:
     return 0
 
 
-COMMANDS = {"run": cmd_run}
+def cmd_status() -> int:
+    begin(Path.cwd())
+    if not (ROOT / JOURNAL_FILE).exists():
+        print("no journal; nothing has run yet\nnext: python janus.py run")
+        return 0
+    steps: Dict[str, Any] = JOURNAL["steps"]
+    gates = [k for k, e in steps.items() if e.get("status") == "open"]
+    unfinished = [k for k, e in steps.items() if e.get("status") in ("running", "failed")]
+    print(f"open gate: {gates[0]}\n  {steps[gates[0]].get('question', '')}" if gates else "no open gate")
+    print("last steps:")
+    for k in list(steps)[-5:]:
+        print(f"  {k}: {steps[k].get('kind')} {steps[k].get('status')} (attempt {steps[k].get('attempt', '-')})")
+    if gates:
+        print(f"next: answer '{gates[0]}' in {GOAL_FILE}, then python janus.py run")
+    else:
+        print("next: python janus.py run" + (f" (re-executes {unfinished[0]})" if unfinished else ""))
+    return 0
+
+
+def cmd_reset() -> int:
+    begin(Path.cwd())
+    path = ROOT / JOURNAL_FILE
+    if path.exists():
+        archive = ROOT / "journals" / (dt.datetime.now().strftime("%Y%m%dT%H%M%S") + ".yaml")
+        archive.parent.mkdir(exist_ok=True)
+        shutil.move(str(path), str(archive))
+        print(f"archived {JOURNAL_FILE} to {archive.relative_to(ROOT)}")
+    gates = [line.rstrip() for line in read_goal_file() if line.startswith("## Gate: ")]
+    for heading in gates:
+        remove_section(heading)
+    print(f"removed {len(gates)} open gate(s) from {GOAL_FILE}")
+    return 0
+
+
+COMMANDS = {"run": cmd_run, "status": cmd_status, "reset": cmd_reset}
 
 
 def main(argv: Optional[List[str]] = None) -> int:
