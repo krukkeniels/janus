@@ -104,11 +104,10 @@ HEADING = re.compile(r"#{1,2} ")
 
 def find_section(lines: List[str], heading: str) -> Optional[Tuple[int, int]]:
     """Line range [start, end) of the section with exactly this heading line. Every section ends at
-    any '#'/'##' heading, as a human's own subsections would expect -- except a '## Gate: ' section:
-    it ends only at a heading the engine itself writes (# Goal, ## Progress, ## Decisions or another
-    ## Gate: ) or at a blank line immediately followed by any heading, so an indented question or an
-    answer that itself starts with a '#' line stays inside, while a human's own section placed after
-    the gate (separated by a blank line) is left alone."""
+    any '#'/'##' heading, as a human's own subsections would expect -- except '## Gate: ', which ends
+    only at a heading the engine writes (# Goal, ## Progress, ## Decisions, another ## Gate: ) or at
+    a blank line before any heading, so an indented question or answer keeps a '#' line, while a
+    human's own section after the gate (past a blank line) is left alone."""
     loose = heading.startswith("## Gate: ")
 
     def ends_at(j: int) -> bool:
@@ -391,9 +390,8 @@ def ai_gate(prompt: str, key: Optional[str] = None, cwd: str = ".", **vars: Any)
 def write_gate(key: str, question: str, show: Any, note: Optional[str] = None) -> None:
     """(Re)write the gate section with an empty ``answer:`` line. Only the question's first line
     sits at column 0 (as the spec's example shows); continuation lines are indented. A human note
-    placed after the gate, separated from it by a blank line, is left alone (find_section's rule
-    for '## Gate: ' sections); anything typed right after ``answer:`` with no blank line is answer
-    text, however it starts."""
+    after the gate, past a blank line, is left alone (find_section's rule); text right after
+    ``answer:`` with no blank line is answer text however it starts."""
     remove_section(f"## Gate: {key}")
     lines = read_goal_file()
     qlines = question.splitlines() or [""]
@@ -407,9 +405,9 @@ def write_gate(key: str, question: str, show: Any, note: Optional[str] = None) -
 def read_answer(key: str) -> str:
     """Text after ``answer:`` up to the end of the gate section; empty when there is none. Line 0
     is always the question's own first line, never the engine's marker, so a question starting
-    with 'answer:' is not mistaken for it. A human note the engine's own blank-line-before-a-
-    heading rule cannot see -- an answer that itself contains a literal reserved heading line such
-    as '## Decisions' at column 0 -- is still truncated there (documented limitation, not fixed)."""
+    with 'answer:' is not mistaken for it. Known limitation, not fixed: an answer that itself
+    contains a literal reserved heading line such as '## Decisions' at column 0 still truncates
+    there."""
     lines = read_goal_file()
     span = find_section(lines, f"## Gate: {key}")
     body = [] if span is None else lines[span[0] + 1:span[1]]
