@@ -23,7 +23,7 @@ Decisions made in that session, all binding here:
 
 **The human defines the flow, the goal and the prompts. Codex does the work. Janus runs the steps, keeps the journal and stops at gates.**
 
-- One engine file, `janus.py`. Python 3.9 or newer, standard library plus PyYAML. Target under 500 lines.
+- One engine file, `janus.py`. Python 3.9 or newer, standard library plus PyYAML. Target under 500 lines; slice 1 landed at 560 after the review fixes, and trimming is welcome but not at the cost of the rules below.
 - Every primitive call is a journaled step. Rerunning a flow replays finished steps from the journal and executes only what is not finished. That single mechanism gives crash resume, gate resume and resume on another machine.
 - The engine has no retry policy, no domain rules, no HTTP client and no secrets. Those belong to the flow and its prompts, where they are visible and editable.
 - Janus is not a daemon. `run` is a process that ends when the flow ends, a gate opens or a step fails.
@@ -173,7 +173,7 @@ Approve this plan?
 answer:
 ```
 
-The human writes the answer after `answer:` on the same line or on the following lines, and runs again. The engine reads it, journals the gate as `answered`, removes the section and appends `question`, `answer` and date under `## Decisions`. An empty answer leaves the gate open. A `decision` answer outside its options appends a note under the gate and keeps it open.
+The human writes the answer after `answer:` on the same line or on the following lines, and runs again. Answer text may contain `##` lines; it ends at the next engine-owned heading (`# Goal`, `## Progress`, `## Decisions`, `## Gate:`) or at a blank line that is followed by a heading, so a human section placed below a gate is neither consumed nor deleted. The engine indents the question's continuation lines so a question may also contain `##` lines. The engine reads it, journals the gate as `answered`, removes the section and appends `question`, `answer` and date under `## Decisions`. An empty answer leaves the gate open. A `decision` answer outside its options appends a note under the gate and keeps it open.
 
 **Exit codes.** `0` the flow ended. `2` a gate is open. `1` a step failed or the flow raised.
 
