@@ -82,3 +82,13 @@ def test_reset_archives_the_journal_and_removes_open_gates(root, monkeypatch):
     [archive] = list((root / "journals").iterdir())
     assert archive.suffix == ".yaml" and yaml.safe_load(archive.read_text(encoding="utf-8")) == JOURNAL
     assert (root / "JANUS.md").read_text(encoding="utf-8") == DECISIONS
+
+
+def test_reset_archives_a_corrupt_journal_without_crashing(root, monkeypatch):
+    """NB2: reset must archive journal.yaml without parsing it, so a corrupt journal does not
+    make reset fail instead of clearing the way for a fresh run."""
+    (root / "journal.yaml").write_text("", encoding="utf-8")
+    assert run(root, monkeypatch, "reset") == 0
+    assert not (root / "journal.yaml").exists()
+    [archive] = list((root / "journals").iterdir())
+    assert archive.read_text(encoding="utf-8") == ""

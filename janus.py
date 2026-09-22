@@ -523,13 +523,15 @@ def cmd_status() -> int:
 
 
 def cmd_reset() -> int:
-    begin(Path.cwd())
+    global ROOT
+    ROOT = Path.cwd()  # archive before begin(): a corrupt journal.yaml must not block reset (NB2)
     path = ROOT / JOURNAL_FILE
     if path.exists():
         archive = ROOT / "journals" / (dt.datetime.now().strftime("%Y%m%dT%H%M%S") + ".yaml")
         archive.parent.mkdir(exist_ok=True)
         shutil.move(str(path), str(archive))
         print(f"archived {JOURNAL_FILE} to {archive.relative_to(ROOT)}")
+    begin(ROOT)  # journal.yaml is gone now (or never existed), so this always succeeds
     gates = [line.rstrip() for line in read_goal_file() if line.startswith("## Gate: ")]
     for heading in gates:
         remove_section(heading)
