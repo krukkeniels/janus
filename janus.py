@@ -72,8 +72,9 @@ def begin(root: Path) -> None:
 
 
 def save_journal(key: str, status: str) -> None:
-    """Write journal.yaml atomically at every status change of ``key``."""
+    """Write journal.yaml atomically at every status change of ``key``, then commit (section 5, Git)."""
     write_atomic(ROOT / JOURNAL_FILE, yaml.safe_dump(JOURNAL, sort_keys=False, allow_unicode=True))
+    git_commit(f"janus: {key} {status}")
 
 
 # --- JANUS.md --------------------------------------------------------------
@@ -410,3 +411,25 @@ def human_gate(question: str, key: Optional[str] = None, show: Any = None) -> st
 
 def decision(question: str, options: List[str], key: Optional[str] = None, show: Any = None) -> str:
     return gate(question, make_key("decision", key), show, list(options))
+
+
+# --- git -------------------------------------------------------------------
+
+def git(*args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(["git", *args], cwd=str(ROOT), capture_output=True, text=True)
+
+
+def git_commit(message: str) -> None:
+    """Commit JANUS.md and journal.yaml and push if there is an upstream. Failures warn only."""
+    if not (ROOT / ".git").exists():
+        return
+    git("add", "--", *[f for f in (GOAL_FILE, JOURNAL_FILE) if (ROOT / f).exists()])
+    if git("diff", "--cached", "--quiet").returncode == 0:
+        return  # nothing staged
+    commit = git("commit", "-q", "-m", message)
+    if commit.returncode != 0:
+        print(f"janus: warning: git commit failed: {commit.stderr.strip()}", file=sys.stderr)
+    elif git("rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}").returncode == 0:
+        push = git("push", "-q")
+        if push.returncode != 0:
+            print(f"janus: warning: git push failed: {push.stderr.strip()}", file=sys.stderr)
