@@ -78,3 +78,44 @@ def test_decision_returns_an_answer_within_its_options(root):
     janus.begin(root)
     assert janus.decision("Continue?", ["retry", "skip"], key="d") == "skip"
     assert read_journal(root)["steps"]["d"]["status"] == "answered"
+
+
+def test_multiline_question_with_a_heading_line_is_still_answerable(root):
+    """A '## x'-shaped line inside a multi-line question must not fool find_section into ending
+    the gate section early (finding 1, question case)."""
+    question = "Approve this?\n## Plan\nSee tasks above."
+    with pytest.raises(SystemExit):
+        janus.human_gate(question, key="approve-multi")
+    janus.begin(root)
+    with pytest.raises(SystemExit):  # a second run before an answer must not append a duplicate section
+        janus.human_gate(question, key="approve-multi")
+    text = (root / "JANUS.md").read_text(encoding="utf-8")
+    assert text.count("## Gate: approve-multi") == 1
+    path = root / "JANUS.md"
+    path.write_text(text.replace("answer:\n", "answer: yes\n"), encoding="utf-8")
+    janus.begin(root)
+    assert janus.human_gate(question, key="approve-multi") == "yes"
+    assert read_journal(root)["steps"]["approve-multi"]["status"] == "answered"
+
+
+def test_multiline_answer_with_a_heading_line_is_returned_and_recorded_in_full(root):
+    """A '## x'-shaped line inside a human's multi-line answer must not truncate the gate section
+    before the engine's own answer: marker (finding 1, answer case)."""
+    open_gate(root, answer="\n## Reason\ntoo risky")
+    janus.begin(root)
+    assert janus.human_gate("Approve this plan?", key="approve-plan") == "## Reason\ntoo risky"
+    text = (root / "JANUS.md").read_text(encoding="utf-8")
+    assert "## Gate:" not in text
+    assert "  answer: ## Reason\n  too risky\n" in text
+
+
+def test_question_starting_with_answer_prefix_is_not_mistaken_for_the_marker(root):
+    """read_answer must find the engine's own answer: line, not a question line that happens to
+    start with 'answer:' (finding 1, Task 7 deferred minor)."""
+    question = "answer: is this workable?"
+    with pytest.raises(SystemExit):
+        janus.human_gate(question, key="weird")
+    path = root / "JANUS.md"
+    path.write_text(path.read_text(encoding="utf-8").replace("answer:\n", "answer: yes\n"), encoding="utf-8")
+    janus.begin(root)
+    assert janus.human_gate(question, key="weird") == "yes"

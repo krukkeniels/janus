@@ -88,12 +88,20 @@ def write_goal_file(lines: List[str]) -> None:
     write_atomic(ROOT / GOAL_FILE, "\n".join(lines).rstrip("\n") + "\n")
 
 
+def is_reserved_heading(line: str) -> bool:
+    """True for a heading line the engine itself writes; free text (a question, an answer, a note)
+    may contain a '#'-prefixed line without ending the section it lives in (finding 1)."""
+    line = line.rstrip()
+    return line in ("# Goal", "## Progress", "## Decisions") or line.startswith("## Gate: ")
+
+
 def find_section(lines: List[str], heading: str) -> Optional[Tuple[int, int]]:
-    """Line range [start, end) of the section with exactly this heading line; ### and deeper belong to it."""
+    """Line range [start, end) of the section with exactly this heading line; only another heading
+    the engine itself writes ends it, so free text within the section may contain '#' lines."""
     for i, line in enumerate(lines):
         if line.rstrip() == heading:
             j = i + 1
-            while j < len(lines) and not re.match(r"#{1,2} ", lines[j]):
+            while j < len(lines) and not is_reserved_heading(lines[j]):
                 j += 1
             return i, j
     return None
@@ -359,10 +367,13 @@ def ai_gate(prompt: str, key: Optional[str] = None, cwd: str = ".", **vars: Any)
 # --- gates -----------------------------------------------------------------
 
 def write_gate(key: str, question: str, show: Any, note: Optional[str] = None) -> None:
-    """(Re)write the gate section at the end of JANUS.md with an empty ``answer:`` line."""
+    """(Re)write the gate section at the end of JANUS.md with an empty ``answer:`` line.
+    Only the question's first line sits at column 0 (matching the spec's example); continuation
+    lines are indented so a '## x'-shaped question line can never be mistaken for a heading."""
     remove_section(f"## Gate: {key}")
     lines = read_goal_file()
-    section = [f"## Gate: {key}", question, ""]
+    qlines = question.splitlines() or [""]
+    section = [f"## Gate: {key}", qlines[0]] + ["    " + line for line in qlines[1:]] + [""]
     if show is not None:
         section += ["    " + line for line in as_text(show).splitlines()] + [""]
     section += ([note, ""] if note else []) + ["answer:", ""]
@@ -370,12 +381,15 @@ def write_gate(key: str, question: str, show: Any, note: Optional[str] = None) -
 
 
 def read_answer(key: str) -> str:
-    """Text after ``answer:`` up to the end of the gate section; empty when there is none."""
+    """Text after ``answer:`` up to the end of the gate section; empty when there is none.
+    Line 0 of the body is always the question's own first line (never the engine's marker, which
+    is always preceded by a blank line), so a question starting with 'answer:' cannot be mistaken
+    for it (finding 1, Task 7 deferred minor)."""
     lines = read_goal_file()
     span = find_section(lines, f"## Gate: {key}")
     body = [] if span is None else lines[span[0] + 1:span[1]]
     for i, line in enumerate(body):
-        if line.startswith("answer:"):
+        if i > 0 and line.startswith("answer:"):
             return "\n".join([line[len("answer:"):]] + body[i + 1:]).strip()
     return ""
 
