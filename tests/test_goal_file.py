@@ -18,6 +18,15 @@ def test_goal_without_a_goal_section_raises(root):
         janus.goal()
 
 
+def test_goal_stops_at_a_human_notes_section_that_follows_it(root):
+    """NB1(a): the relaxed 'only a reserved heading ends a section' rule from finding 1 must be
+    confined to gate sections; # Goal still ends at any level 1/2 heading, so a human's own
+    ## Notes section does not leak into every {{goal}} render."""
+    (root / "JANUS.md").write_text(
+        "# Goal\nUpgrade the widget.\n\n## Notes\nsome human note\n\n## Decisions\n- none\n", encoding="utf-8")
+    assert janus.goal() == "Upgrade the widget."
+
+
 def test_log_appends_a_dated_line_to_progress_and_prints(root, capsys):
     (root / "JANUS.md").write_text("# Goal\nx\n\n## Progress\n\n## Decisions\n", encoding="utf-8")
     janus.log("task 1 done")
@@ -25,6 +34,18 @@ def test_log_appends_a_dated_line_to_progress_and_prints(root, capsys):
     text = (root / "JANUS.md").read_text(encoding="utf-8")
     progress = text.split("## Progress\n")[1].split("## Decisions")[0]
     assert re.fullmatch(r"- \d{4}-\d\d-\d\dT\d\d:\d\d:\d\d task 1 done\n\n", progress)
+
+
+def test_log_appends_inside_progress_before_a_following_human_notes_section(root):
+    """NB1(b): log() must not append its Progress line inside a human ## Notes section that
+    follows ## Progress."""
+    (root / "JANUS.md").write_text(
+        "# Goal\nx\n\n## Progress\n\n## Notes\nsome human note\n", encoding="utf-8")
+    janus.log("task 1 done")
+    text = (root / "JANUS.md").read_text(encoding="utf-8")
+    progress, _, rest = text.partition("## Notes")
+    assert "task 1 done" in progress
+    assert rest.strip() == "some human note"
 
 
 def test_log_creates_the_progress_section_when_missing(root):

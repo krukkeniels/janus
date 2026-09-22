@@ -118,6 +118,22 @@ def test_multiline_answer_with_a_heading_line_is_returned_and_recorded_in_full(r
     assert "  answer: ## Reason\n  too risky\n" in text
 
 
+def test_human_notes_after_the_gate_are_not_deleted_or_treated_as_the_answer(root):
+    """NB1(c): a human ## Notes section placed after the gate, separated by a blank line, is not
+    swallowed into the gate span. The chosen rule (documented in write_gate/read_answer): a gate
+    section also ends at a blank line immediately followed by any '#'/'##' heading."""
+    open_gate(root)
+    path = root / "JANUS.md"
+    text = path.read_text(encoding="utf-8").replace("answer:\n", "answer: yes\n")
+    text += "\n## Notes\nsome human note\n"
+    path.write_text(text, encoding="utf-8")
+    janus.begin(root)
+    assert janus.human_gate("Approve this plan?", key="approve-plan") == "yes"
+    final = (root / "JANUS.md").read_text(encoding="utf-8")
+    assert "## Gate:" not in final
+    assert "## Notes\nsome human note" in final
+
+
 def test_question_starting_with_answer_prefix_is_not_mistaken_for_the_marker(root):
     """read_answer must find the engine's own answer: line, not a question line that happens to
     start with 'answer:' (finding 1, Task 7 deferred minor)."""
