@@ -1,0 +1,7 @@
+# Product repositories are cloned into this folder; they are not part of it.
+*/
+!prompts/
+!journals/
+!tests/
+# Janus writes JANUS.md and journal.yaml through temporary files in this folder.
+*.tmp
