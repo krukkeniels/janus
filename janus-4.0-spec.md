@@ -317,7 +317,7 @@ What the diagram's boxes became:
 | Run Controller: start autonomous run | `python janus.py run`; every rerun after a gate is the same run resumed |
 | Codex: plan, upgrade and fix | `{prefix}/plan` once per major; `{k}/implement/<id>/<n>` once per round, with `{{findings}}` from the round before |
 | TeamCity: green for the exact commit? | `{k}/ci/<id>/<n>`, a `step()` around `teamcity.wait_for_build`, keyed per verdict so a fix commit is verified too |
-| Can Codex resolve it within run limits? | `MAX_FIX` iterations of `{k}/fix/<id>/<n>`, at most `MAX_CI` verdicts; past that, the blocker report |
+| Can Codex resolve it within run limits? | `MAX_FIX` iterations of `{k}/fix/<id>/<v>`, where `<v>` is the CI verdict the fix answers, at most `MAX_CI` verdicts; past that, the blocker report |
 | Run Controller: stop and produce blocker report | a `decision` with the last result as `show`: `retry` (next round, blockers become findings), `skip`, `stop` |
 | Fresh Codex session: review full diff | `{k}/review`, a `codex()` whose prompt declares `passed` and `reasons` so the flow can hand the reasons back |
 | Developer: human code review | `{k}/human-review`, a `human_gate`; `approved` moves on, anything else is the findings of the next round |
