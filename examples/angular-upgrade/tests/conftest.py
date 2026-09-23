@@ -19,6 +19,8 @@ EXAMPLE = Path(__file__).resolve().parent.parent
 REPO = EXAMPLE.parent.parent
 sys.path.insert(0, str(EXAMPLE))  # so `import teamcity` finds the example's helper
 
+import teamcity  # noqa: E402  the sys.path entry above is what makes this import work
+
 
 def _load(name, path):
     spec = importlib.util.spec_from_file_location(name, path)
@@ -37,6 +39,7 @@ def without_teamcity(monkeypatch):
     up before the fixtures a test names, so `teamcity_server` still wins where a test asks for it."""
     monkeypatch.delenv("JANUS_TEAMCITY_URL", raising=False)
     monkeypatch.delenv("JANUS_TEAMCITY_TOKEN", raising=False)
+    teamcity.reload_env()  # the module read the environment at import; forget what it found
 
 
 @pytest.fixture
@@ -68,6 +71,7 @@ def teamcity_server(monkeypatch):
     threading.Thread(target=server.serve_forever, daemon=True).start()
     monkeypatch.setenv("JANUS_TEAMCITY_URL", "http://127.0.0.1:%d" % server.server_address[1])
     monkeypatch.setenv("JANUS_TEAMCITY_TOKEN", "t0ken")
+    teamcity.reload_env()  # `teamcity` reads the environment once, so tell it to read it again
     yield types.SimpleNamespace(serve=queue.extend, requests=lambda: list(seen))
     server.shutdown()
     server.server_close()

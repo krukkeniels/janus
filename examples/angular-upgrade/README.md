@@ -79,10 +79,13 @@ flow skips both. `build_type` in a task is the TeamCity build type id, or the st
 `CI_TIMEOUT` at the top of `flow.py` (7200 s) is passed explicitly to `teamcity.wait_for_build`
 and is how long a single poll waits for a build to finish before it gives up.
 
-**The token is readable by Codex.** Every `codex exec` inherits this process's environment and
-runs with `--dangerously-bypass-approvals-and-sandbox`, which is the Janus 4.0 trade-off: the
-machine Janus runs on is the sandbox (spec section 7). This is why the preamble forbids echoing
-secrets: `journal.yaml` is committed and pushed after every step.
+**The token is not readable by Codex.** `teamcity.py` reads both variables once, at import, and
+removes `JANUS_TEAMCITY_TOKEN` from `os.environ` as it reads it, before any Codex process starts.
+`JANUS_TEAMCITY_URL` stays in the environment; it is not a secret. This matters because every
+`codex exec` inherits this process's environment and runs with
+`--dangerously-bypass-approvals-and-sandbox`, which is the Janus 4.0 trade-off: the machine Janus
+runs on is the sandbox (spec section 7). Whatever else you export is readable by Codex, which is
+why the preamble forbids echoing secrets: `journal.yaml` is committed and pushed after every step.
 
 ## Running the example's tests
 

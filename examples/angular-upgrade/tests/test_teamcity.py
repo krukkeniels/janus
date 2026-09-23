@@ -1,3 +1,5 @@
+import os
+
 import teamcity
 
 RUNNING = {"build": [{"id": 42, "webUrl": "http://tc/viewLog.html?buildId=42", "state": "running"}]}
@@ -10,11 +12,24 @@ FAILED = {"build": [{"id": 42, "webUrl": "http://tc/viewLog.html?buildId=42",
 def test_configured_is_false_until_both_variables_are_set(monkeypatch):
     monkeypatch.delenv("JANUS_TEAMCITY_URL", raising=False)
     monkeypatch.delenv("JANUS_TEAMCITY_TOKEN", raising=False)
+    teamcity.reload_env()
     assert teamcity.configured() is False
     monkeypatch.setenv("JANUS_TEAMCITY_URL", "http://tc")
+    teamcity.reload_env()
     assert teamcity.configured() is False
     monkeypatch.setenv("JANUS_TEAMCITY_TOKEN", "t0ken")
+    teamcity.reload_env()
     assert teamcity.configured() is True
+
+
+def test_the_token_is_taken_out_of_the_environment_that_codex_inherits(teamcity_server):
+    """Every `codex exec` inherits this process's environment, so the token must not be in it."""
+    assert teamcity.configured() is True
+    assert "JANUS_TEAMCITY_TOKEN" not in os.environ
+    assert os.environ["JANUS_TEAMCITY_URL"].startswith("http://127.0.0.1:")
+    teamcity_server.serve([FINISHED])
+    assert teamcity.wait_for_build("app_Build", "abc123", timeout=5, poll=0)["status"] == "SUCCESS"
+    assert teamcity_server.requests()[0]["auth"] == "Bearer t0ken"
 
 
 def test_wait_for_build_returns_success_and_the_build_url(teamcity_server):

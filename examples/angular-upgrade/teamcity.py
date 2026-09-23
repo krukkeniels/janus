@@ -10,17 +10,31 @@ import urllib.request
 
 REST = "/app/rest/2018.1"
 
+URL = ""
+TOKEN = ""
+
+
+def reload_env():
+    """Read the two variables into the module. The token is *removed* from ``os.environ`` as it is
+    read: every ``codex exec`` inherits this process's environment, and no Codex needs the token.
+    The URL is left in place; it is not a secret. Called once at import, and by the tests."""
+    global URL, TOKEN
+    URL = os.environ.get("JANUS_TEAMCITY_URL", "")
+    TOKEN = os.environ.pop("JANUS_TEAMCITY_TOKEN", "")
+
+
+reload_env()
+
 
 def configured():
-    """True when both environment variables are set; the flow skips the CI wait otherwise."""
-    return bool(os.environ.get("JANUS_TEAMCITY_URL") and os.environ.get("JANUS_TEAMCITY_TOKEN"))
+    """True when both variables were set at import; the flow skips the CI wait otherwise."""
+    return bool(URL and TOKEN)
 
 
 def get(path):
     """One authenticated GET returning parsed JSON, or None when TeamCity answers 404."""
-    url = os.environ["JANUS_TEAMCITY_URL"].rstrip("/") + path
-    request = urllib.request.Request(url, headers={
-        "Authorization": "Bearer " + os.environ["JANUS_TEAMCITY_TOKEN"], "Accept": "application/json"})
+    request = urllib.request.Request(URL.rstrip("/") + path, headers={
+        "Authorization": "Bearer " + TOKEN, "Accept": "application/json"})
     try:
         with urllib.request.urlopen(request, timeout=30) as response:
             return json.loads(response.read().decode("utf-8"))
