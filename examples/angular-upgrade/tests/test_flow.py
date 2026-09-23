@@ -289,3 +289,102 @@ def test_stop_at_an_exhausted_implement_loop_ends_the_run_with_exit_1(goal_folde
     assert run(goal_folder, monkeypatch) == 1
     steps = journal_of(goal_folder)["steps"]
     assert steps["v16/r1/implement/app/exhausted"]["answer"] == "stop" and "v16/r1/review" not in steps
+
+
+def test_a_green_build_is_journaled_under_the_first_verdict_and_no_fix_runs(
+        goal_folder, fake_codex, teamcity_server, monkeypatch):
+    teamcity_server.serve(GREEN)
+    run_to_human_review(goal_folder, fake_codex, monkeypatch, ONE_ROUND)
+    steps = journal_of(goal_folder)["steps"]
+    assert steps["v16/r1/ci/app/1"]["result"] == {"status": "SUCCESS", "url": "http://tc/viewLog.html?buildId=42",
+                                                  "excerpt": ""}
+    assert "v16/r1/ci/app/2" not in steps and "v16/r1/fix/app/1/1" not in steps
+    assert "revision%3A%28version%3A" + "a" * 40 in teamcity_server.requests()[0]["path"]
+
+
+def test_a_build_type_of_none_skips_the_teamcity_wait(goal_folder, fake_codex, teamcity_server, monkeypatch):
+    plan = {"summary": PLAN["summary"], "tasks": [dict(PLAN["tasks"][0], build_type="none")]}
+    fake_codex.script([{"output": plan}] + ONE_ROUND)
+    run(goal_folder, monkeypatch)
+    answer(goal_folder, "yes")
+    assert run(goal_folder, monkeypatch) == 2
+    assert "v16/r1/ci/app/1" not in journal_of(goal_folder)["steps"]
+    assert teamcity_server.requests() == []
+
+
+def test_a_red_build_gets_a_fix_whose_commit_is_verified_by_the_second_verdict(
+        goal_folder, fake_codex, teamcity_server, monkeypatch):
+    teamcity_server.serve(RED + GREEN)
+    run_to_human_review(goal_folder, fake_codex, monkeypatch, [{"output": DONE}, {"output": FIXED}] + ONE_ROUND[1:])
+    steps = journal_of(goal_folder)["steps"]
+    assert steps["v16/r1/ci/app/1"]["result"]["status"] == "FAILURE"
+    assert steps["v16/r1/fix/app/1/1"]["result"]["commit"] == "b" * 40
+    assert steps["v16/r1/ci/app/2"]["result"]["status"] == "SUCCESS"
+    assert "v16/r1/ci/app/3" not in steps
+    fix_prompt = fake_codex.calls()[2]["prompt"]
+    assert "AppComponent should render title" in fix_prompt and "http://tc/viewLog.html?buildId=42" in fix_prompt
+    paths = [r["path"] for r in teamcity_server.requests()]
+    assert "revision%3A%28version%3A" + "a" * 40 in paths[0]
+    assert "revision%3A%28version%3A" + "b" * 40 in paths[2]  # the fix commit, not the implement commit
+    assert "b" * 40 in (goal_folder / "JANUS.md").read_text(encoding="utf-8")
+
+
+def test_max_ci_red_verdicts_open_the_red_decision_and_skip_keeps_the_commits(
+        goal_folder, fake_codex, teamcity_server, monkeypatch):
+    teamcity_server.serve(RED * 3)
+    run_to_human_review(goal_folder, fake_codex, monkeypatch,
+                        [{"output": DONE}, {"output": FIXED}, {"output": FIXED}] + ONE_ROUND[1:])
+    steps = journal_of(goal_folder)["steps"]
+    assert (steps["v16/r1/ci/app/red"]["kind"], steps["v16/r1/ci/app/red"]["status"]) == ("decision", "open")
+    assert [k for k in steps if "/ci/" in k or "/fix/" in k] == \
+        ["v16/r1/ci/app/1", "v16/r1/fix/app/1/1", "v16/r1/ci/app/2", "v16/r1/fix/app/2/1", "v16/r1/ci/app/3",
+         "v16/r1/ci/app/red"]
+    answer(goal_folder, "skip")
+    assert run(goal_folder, monkeypatch) == 2
+    steps = journal_of(goal_folder)["steps"]
+    assert steps["v16/r1/ci/app/red"]["answer"] == "skip"
+    assert list(steps)[-2:] == ["v16/r1/review", "v16/r1/human-review"]
+
+
+def test_retry_at_the_red_decision_starts_round_2_with_the_failure_as_findings(
+        goal_folder, fake_codex, teamcity_server, monkeypatch):
+    teamcity_server.serve(RED * 3 + GREEN)
+    run_to_human_review(goal_folder, fake_codex, monkeypatch,
+                        [{"output": DONE}, {"output": FIXED}, {"output": FIXED}, {"output": DONE_2}] + ONE_ROUND[1:])
+    answer(goal_folder, "retry")
+    assert run(goal_folder, monkeypatch) == 2
+    steps = journal_of(goal_folder)["steps"]
+    assert list(steps)[-4:] == ["v16/r2/implement/app/1", "v16/r2/ci/app/1", "v16/r2/review", "v16/r2/human-review"]
+    assert "Task app is still red after 3 CI verdicts (http://tc/viewLog.html?buildId=42):\n" \
+           "AppComponent should render title" in fake_codex.calls()[4]["prompt"]
+
+
+def test_an_exhausted_fix_loop_opens_its_decision_and_skip_keeps_the_implement_commit(
+        goal_folder, fake_codex, teamcity_server, monkeypatch):
+    teamcity_server.serve(RED)
+    run_to_human_review(goal_folder, fake_codex, monkeypatch,
+                        [{"output": DONE}] + [{"output": NOT_DONE}] * 3 + ONE_ROUND[1:])
+    gate = journal_of(goal_folder)["steps"]["v16/r1/fix/app/1/exhausted"]
+    assert (gate["kind"], gate["status"]) == ("decision", "open")
+    answer(goal_folder, "skip")
+    assert run(goal_folder, monkeypatch) == 2
+    steps = journal_of(goal_folder)["steps"]
+    assert steps["v16/r1/fix/app/1/exhausted"]["answer"] == "skip"
+    assert "v16/r1/ci/app/2" not in steps and steps["v16/r1/human-review"]["status"] == "open"
+    assert "a" * 40 in (goal_folder / "JANUS.md").read_text(encoding="utf-8")
+
+
+def test_a_build_teamcity_cannot_find_opens_the_missing_decision_instead_of_a_fix(
+        goal_folder, fake_codex, teamcity_server, monkeypatch):
+    teamcity_server.serve([{"count": 0}])
+    run_to_human_review(goal_folder, fake_codex, monkeypatch, ONE_ROUND)
+    steps = journal_of(goal_folder)["steps"]
+    assert steps["v16/r1/ci/app/1"]["result"]["status"] == "NOT_FOUND"
+    assert (steps["v16/r1/ci/app/1/missing"]["kind"], steps["v16/r1/ci/app/1/missing"]["status"]) == \
+        ("decision", "open")
+    assert "v16/r1/fix/app/1/1" not in steps
+    answer(goal_folder, "skip")
+    assert run(goal_folder, monkeypatch) == 2
+    steps = journal_of(goal_folder)["steps"]
+    assert steps["v16/r1/ci/app/1/missing"]["answer"] == "skip" and "v16/r1/ci/app/2" not in steps
+    assert steps["v16/r1/human-review"]["status"] == "open"

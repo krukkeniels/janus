@@ -8,11 +8,16 @@ Every key carries every enclosing loop's counter or id, so a rerun replays the f
 executes only what is new, and the counters come from this file's own control flow, never from
 the journal.
 """
-from janus import Exhausted, codex, context, decision, human_gate, log, ralph
+from janus import Exhausted, codex, context, decision, human_gate, log, ralph, step
+
+import teamcity
 
 MAJORS = [16]           # the majors to reach, in order; [16, 17, 18] walks three upgrades in one goal
 MAX_ROUNDS = 3          # rounds per major before the flow asks whether to keep going
 MAX_IMPLEMENT = 5       # ralph iterations of one implement task
+MAX_CI = 3              # CI verdicts one task may wait for in one round: implement, then each fix
+MAX_FIX = 3             # ralph iterations of one fix
+CI_TIMEOUT = 7200       # seconds one CI wait may take before it gives up on that build
 
 
 class SendBack(Exception):
@@ -49,9 +54,53 @@ def ask_after_exhausted(key, exc, task, attempts):
     log("task %s: %s skipped by the human" % (task["id"], key))
 
 
+def verify_in_ci(k, task, result):
+    """The CI return loop: wait for the build of the exact commit; a red build gets a fix, and the fix
+    commit is waited for in turn, up to MAX_CI verdicts. Returns the result CI last judged."""
+    build = None
+    for n in range(1, MAX_CI + 1):
+        ci_key = "%s/ci/%s/%d" % (k, task["id"], n)
+        build = step(ci_key, lambda: teamcity.wait_for_build(task["build_type"], result["commit"],
+                                                             timeout=CI_TIMEOUT))
+        log("task %s build %d of %d %s: %s" % (task["id"], n, MAX_CI, build["status"], build["url"]))
+        if build["status"] == "SUCCESS":
+            return result
+        if build["status"] in ("NOT_FOUND", "TIMEOUT"):
+            choice = decision(  # nothing here is fixable by Codex: the build never gave a verdict
+                "TeamCity gave no verdict for task %s (%s). Continue without a CI check, or stop"
+                " the run?" % (task["id"], build["status"]),
+                ["skip", "stop"], key="%s/missing" % ci_key,
+                show={"commit": result["commit"], "status": build["status"], "url": build["url"]})
+            if choice == "stop":
+                stop_run("task %s stopped the run: no CI verdict" % task["id"])
+            log("task %s continues without a CI verdict" % task["id"])
+            return result
+        if n == MAX_CI:
+            break
+        fix_key = "%s/fix/%s/%d" % (k, task["id"], n)
+        try:
+            result = ralph("prompts/fix.md", until=lambda r: r["done"], max_iter=MAX_FIX, key=fix_key,
+                           cwd=task["repo"], task=task, build=build)
+        except Exhausted as exc:  # `skip` keeps the implement commit, red build and all
+            ask_after_exhausted(fix_key, exc, task, MAX_FIX)
+            return result
+    choice = decision(
+        "Task %s is still red after %d CI verdicts. Retry it in the next round (the failure becomes"
+        " the findings), skip it and keep the commits, or stop the run?" % (task["id"], MAX_CI),
+        ["retry", "skip", "stop"], key="%s/ci/%s/red" % (k, task["id"]),
+        show={"commit": result["commit"], "url": build["url"], "excerpt": build["excerpt"]})
+    if choice == "stop":
+        stop_run("task %s stopped the run: still red after %d CI verdicts" % (task["id"], MAX_CI))
+    if choice == "retry":
+        raise SendBack("Task %s is still red after %d CI verdicts (%s):\n%s"
+                       % (task["id"], MAX_CI, build["url"], build["excerpt"]))
+    log("task %s continues with a red build, as the human decided" % task["id"])
+    return result
+
+
 def run_task(k, task, finished, findings):
-    """Implement one task in a ralph. Returns the record for `finished`, or None when the human
-    skipped the task at the blocker report."""
+    """Implement one task in a ralph, then verify it in CI when TeamCity is configured. Returns the
+    record for `finished`, or None when the human skipped the task at the blocker report."""
     key = "%s/implement/%s" % (k, task["id"])
     try:
         result = ralph("prompts/implement.md", until=lambda r: r["done"], max_iter=MAX_IMPLEMENT,
@@ -59,6 +108,8 @@ def run_task(k, task, finished, findings):
     except Exhausted as exc:  # `retry` raised SendBack and `stop` exited; only `skip` returns here
         ask_after_exhausted(key, exc, task, MAX_IMPLEMENT)
         return None
+    if teamcity.configured() and task["build_type"] != "none":
+        result = verify_in_ci(k, task, result)
     log("task %s done: %s" % (task["id"], result["summary"]))
     return {"id": task["id"], "repo": task["repo"], "title": task["title"], "commit": result["commit"]}
 
