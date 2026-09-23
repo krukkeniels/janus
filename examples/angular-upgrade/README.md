@@ -308,9 +308,202 @@ trial.
 plan, the approval gate, the implementation loop and the review gate, and left `app` on Angular
 16 with `pnpm build` and all three specs green on the pushed branch.
 
-## Trial 2 (slice 3): a round sent back by the human review, with real Codex
+## Trial 2 (slice 3): a round sent back by the human review, with real Codex, 2026-09-23
 
-Filled in by the slice 3 trial (plan `docs/superpowers/plans/2026-09-23-janus4-slice3-loops.md`,
-Task 6): round 1 of Angular 16 is answered with a finding at `v16/r1/human-review`, round 2 runs
-with real Codex under `v16/r2/...`, and the finished flow is run once more to show that the
-journal does not change.
+Run on one throwaway application, without TeamCity, to satisfy spec criterion 12.9: the human
+review of round 1 answers with a finding, the next round runs with real Codex under its own keys,
+the finished flow is run once more and the journal does not change. It took **three** rounds, not
+two: the AI review of round 2 rejected half of what the human finding had asked for and sent the
+round back on its own, so round 3 ran before the human review was reached again. That is the most
+interesting result of the trial and it is described under *How the rounds came back*.
+
+**Setup.** Goal folder `/home/race-day/janus-trial/slice3-angular-16`, a Git repository with the
+bare remote `/home/race-day/janus-trial/origin/slice3-angular-16.git`. `janus.py` copied from the
+worktree at commit `a5fdc59`; its blob is identical to `main`'s at `137ab59` (slice 3 changed no
+engine code). The application is `app/`, a clone of
+`/home/race-day/janus-trial/origin/ng15-app-slice3.git`, a bare made from the slice 2 remote's
+`master` alone (`f8dc4e4`, Angular 15.2, three karma specs), because the slice 2 remote already
+carried `ai/angular-15-to-16` from Trial 1. Codex is codex-cli 0.155.1, model `gpt-5.6-sol` at
+`xhigh` reasoning from `~/.codex/config.toml`; Janus passes no model flags. Node v24.5.0, pnpm
+10.33.0, PyYAML 6.0.1. `JANUS_TEAMCITY_URL` and `JANUS_TEAMCITY_TOKEN` were unset, so no `ci/` key
+was journaled. `MAJORS = [16]`, so the branch was `ai/angular-15-to-16` and no `direction`
+decision opened.
+
+**Runs.**
+
+| Run | Command | Wall clock | Exit | Stopped at |
+|---|---|---|---|---|
+| 1 | `python3 janus.py run` | 108 s | 2 | gate `v16/approve-plan` |
+| 2 | `python3 janus.py run` | 263 s | 2 | gate `v16/r1/human-review` |
+| 3 | `python3 janus.py run` | 622 s | 2 | gate `v16/r3/human-review` (round 2 came back by itself) |
+| 4 | `python3 janus.py run` | < 1 s | 2 | gate `v16/r3/merge` |
+| 5 | `python3 janus.py run` | 91 s | 2 | gate `v16/r3/qa` |
+| 6 | `python3 janus.py run` | < 1 s | 0 | flow ended, `Angular 16 reached in 3 round(s)` |
+| 7 | `python3 janus.py run` | 1 s | 0 | flow ended, nothing re-executed, journal byte-identical |
+
+Eight Codex calls in all, 1084 s of the 1085 s the seven runs took (each span is the journal's
+`started` to `finished`, so it also covers that step's own commit): `v16/plan` 108 s,
+`v16/r1/implement/app/1` 121 s, `v16/r1/review` 142 s, `v16/r2/implement/app/1` 124 s,
+`v16/r2/review` 187 s, `v16/r3/implement/app/1` 111 s, `v16/r3/review` 200 s, `v16/r3/testplan`
+91 s. Every ralph finished in one iteration and every step succeeded on `attempt 1`; no step was
+retried, no `exhausted`, `blocked`, `red` or `missing` decision opened. Runs 4, 6 and 7 started no
+`codex` process.
+
+**Gates.**
+
+| Key | Question | Shown | Answer |
+|---|---|---|---|
+| `v16/approve-plan` | Approve this plan for Angular 16? … | `summary`, one `app [app] …` line | `yes` |
+| `v16/r1/human-review` | Review the pull requests of round 1. … | `review`, `tasks` | the finding (below) |
+| `v16/r3/human-review` | Review the pull requests of round 3. … | `review`, `tasks` | `approved` |
+| `v16/r3/merge` | Merge the pull requests of round 3 … | task line with `b0a1ed4` | `merged` |
+| `v16/r3/qa` | QA: run this test plan … | `summary`, 9 `steps` | `passed` |
+
+Round 2 opened no gate: its AI review failed, which ends the round before `human-review`.
+
+The finding written at `v16/r1/human-review`: "README.md still says the project was generated
+with Angular CLI version 15.2.11. Change that line to Angular CLI 16 and add one line under the
+title saying the app was upgraded from Angular 15 to 16 on this branch. Also confirm in your
+summary which zone.js version package.json asks for now." There is no pull request in this trial,
+so `merged` stands for the verified push: the bare `ng15-app-slice3.git` carries
+`ai/angular-15-to-16` at `b0a1ed42ec363ecb4156f26cfdacc8432ff3a252`, the SHA the merge gate
+showed.
+
+**How the rounds came back.** Run 3 replayed `v16/plan`, `v16/approve-plan`,
+`v16/r1/implement/app/1` and `v16/r1/review` from the journal — their entries are byte-identical
+before and after the run, 4 of 4 round-1 entries unchanged — read the answer of
+`v16/r1/human-review`, built `findings = "Human review of round 1:\n<the finding>"`, and the first
+key it did not know was `v16/r2/implement/app/1`, which ran with that string in `{{findings}}`.
+The run log shows the rendered block verbatim under "Why the previous round of this upgrade came
+back is below". Round 2's Codex did exactly what the finding asked. Its AI review then set
+`passed: false` over one of those two edits, so `run_round` returned without opening a human gate
+and the same run went straight into round 3 with `findings = "AI review of round 2:\n<the
+reason>"`, again visible in the log. Round 3's Codex reverted the generated-with line and kept the
+upgrade note, and its review passed. The journal therefore holds `v16/r2/implement/app/1` and
+`v16/r2/review` but no `v16/r2/human-review`: a round that the AI review ends leaves only the keys
+it reached, and the numbering of the later keys follows the loop counter, not the gate.
+
+**What Codex did.**
+
+- `v16/plan`: summary "The workspace contains one product repository, `app`, with no
+  inter-repository dependencies or TeamCity build type. The plan upgrades it only from Angular 15
+  to Angular 16, preserves TypeScript and unrelated dependencies, applies all official migrations,
+  and verifies installation, build, and all three existing tests before commit and push."; one
+  task with `id: app`, `repo: app`, `title: Upgrade app from Angular 15 to Angular 16`,
+  `build_type: none`, and an objective naming the branch, the two `ng update` packages and the
+  three checks. `id` is `app`, the repository folder, as `plan.md` now requires.
+- `v16/r1/implement/app/1`: `done: true`, commit `a079274` ("chore: upgrade Angular to 16"),
+  summary "Upgraded all Angular runtime and build dependencies from 15 to 16, applied every
+  offered migration, and preserved TypeScript at ~4.9.4. `pnpm install`, `pnpm build`, and the
+  required ChromeHeadless test command succeeded with all 3 specs passing; the clean branch was
+  pushed to origin.", `blockers: []`.
+- `v16/r1/review`: `passed: true`, `reasons: []`, summary "The app is clean and fully upgraded to
+  Angular 16 on the pushed ai/angular-15-to-16 branch; only package.json and pnpm-lock.yaml
+  changed, with TypeScript untouched and no Angular 15 dependencies remaining. …"
+- `v16/r2/implement/app/1`: `done: true`, commit `9db9440` ("docs: note Angular 16 upgrade"),
+  summary "Updated README.md to document the Angular 15-to-16 upgrade and Angular CLI 16;
+  package.json requests zone.js ~0.13.3. …", `blockers: []`. It names the `zone.js` version the
+  finding asked about, so all three parts of the finding were answered.
+- `v16/r2/review`: `passed: false`, one reason: "app/README.md: The upgrade commit incorrectly
+  changes the boilerplate to claim the project was generated with Angular CLI 16; retain the
+  original generation version or describe only the upgrade."; summary "The Angular 16 dependency
+  upgrade is otherwise complete, clean, and pushed on the required branch. …"
+- `v16/r3/implement/app/1`: `done: true`, commit `b0a1ed4` ("docs: preserve original Angular CLI
+  version"), summary "Corrected the README to preserve the original Angular CLI 15.2.11 generation
+  version and pushed the fix. …", `blockers: []`.
+- `v16/r3/review`: `passed: true`, `reasons: []`, summary "The app is clean, committed, and pushed
+  on ai/angular-15-to-16 at b0a1ed42ec363ecb4156f26cfdacc8432ff3a252, with all Angular
+  dependencies upgraded to version 16 and TypeScript unchanged. …"
+- `v16/r3/testplan`: summary "The main risk is framework-level runtime compatibility: the upgrade
+  changed Angular packages and Zone.js but did not migrate application source files. …"; nine
+  steps, each an action and its expected result: load `/` and see the toolbar and the
+  "ng15-app app is running!" highlight; hard-refresh with console and network open and see no
+  Angular, Zone.js or uncaught error; scroll the whole page; check the terminal starts at
+  `ng generate component xyz`; click the six Next Steps buttons in sequence and check each
+  terminal line; focus a button with Tab and activate it with Enter or Space; open a Resources
+  card and a footer link in a new tab; load an unconfigured path such as `/route-smoke` and see
+  the shell bootstrap with an empty outlet; resize from desktop to a narrow viewport. QA could run
+  every one of them on this app: it is one component with six buttons, an empty router outlet and
+  three specs, and the plan tests exactly that, without inventing forms, routes or services.
+
+**The result in `app/`.**
+
+```text
+* b0a1ed4 docs: preserve original Angular CLI version
+* 9db9440 docs: note Angular 16 upgrade
+* a079274 chore: upgrade Angular to 16
+* f8dc4e4 initial commit
+
+ README.md      |    2 +
+ package.json   |   26 +-
+ pnpm-lock.yaml | 2785 +++++++++++++++++++++++++++++++++-----------------------
+ 3 files changed, 1669 insertions(+), 1144 deletions(-)
+```
+
+`README.md` after round 3, first lines: `# Ng15App`, blank, `This app was upgraded from Angular 15
+to Angular 16 on this branch.`, blank, `This project was generated with [Angular
+CLI](https://github.com/angular/angular-cli) version 15.2.11.` — round 2 had written `version 16.`
+on that last line and round 3 put `15.2.11` back, which is the visible trace of the two rounds.
+`zone.js` is at `~0.13.3`, `@angular/core` at `^16.2.12`, `@angular/cli` at `~16.2.16`,
+`typescript` untouched at `~4.9.4`. `git status --porcelain` in `app/` was empty, and the bare
+`ng15-app-slice3.git` lists `ai/angular-15-to-16 b0a1ed4` beside the untouched `master f8dc4e4`.
+Nothing under `app/` was edited by hand and no commit of Codex's was amended.
+
+**Journal.**
+
+```text
+v16/plan                         codex     done      attempt 1
+v16/approve-plan                 gate      answered  -
+v16/r1/implement/app/1           codex     done      attempt 1
+v16/r1/review                    codex     done      attempt 1
+v16/r1/human-review              gate      answered  -
+v16/r2/implement/app/1           codex     done      attempt 1
+v16/r2/review                    codex     done      attempt 1
+v16/r3/implement/app/1           codex     done      attempt 1
+v16/r3/review                    codex     done      attempt 1
+v16/r3/human-review              gate      answered  -
+v16/r3/merge                     gate      answered  -
+v16/r3/testplan                  codex     done      attempt 1
+v16/r3/qa                        gate      answered  -
+```
+
+No `v16/direction` (one major) and no `ci/` key (no TeamCity). `## Progress` holds
+`round 1 of Angular 16 came back: Human review of round 1:`,
+`round 2 of Angular 16 came back: AI review of round 2:` and `Angular 16 reached in 3 round(s)`;
+`## Decisions` holds the two answers that carry text, the plan approval and the finding. The
+goal folder has one commit per status change, all pushed, and `git status --porcelain` is empty —
+the `log()`-after-the-last-commit problem of Trial 1 is gone, because run 6 ends with
+`janus: run ended`.
+
+**Problems.**
+
+- The AI review and the human review contradicted each other. The human asked for the
+  generated-with line to say Angular CLI 16; the next round's AI reviewer called that wrong and
+  sent the round back, and round 3 undid it. The flow behaved exactly as written — the AI review
+  runs before the human gate and any `passed: false` ends the round — but a human finding can be
+  overruled by a machine on the next pass without anyone being asked. The findings string carries
+  only the last round's reason, so round 3's Codex never saw the human's wish; it saw only the
+  reviewer's objection. `## Progress` and `## Decisions` keep the history, but the prompt does
+  not. A flow that wants the human to win would have to carry the human findings forward (or ask
+  at a gate when the AI review contradicts an answered human review); that is a flow change, not
+  an engine change.
+- The round numbers in the keys are loop counters, not gate counters, so the merge, test plan and
+  QA of this trial sit under `v16/r3/...` although only two human reviews happened. Anyone reading
+  the journal has to know that round 2 ended at its AI review.
+- Each `implement` iteration streamed several intermediate JSON objects that satisfy the schema
+  (`{"done":false,…}`) before the final one; only the last is journaled, which is correct, but a
+  log reader can mistake an early one for the result.
+
+**Engine gaps found.** None. Every gate, decision and loop the trial needed was expressible with
+`codex`, `ralph`, `human_gate`, `decision`, `step`, `log` and `context` as they are; the return
+loop worked from the flow's own `while True` and the keys it builds. No change was made to
+`janus.py` for this trial.
+
+**Verdict on spec 12.9.** Met. A round was sent back by the human review answer: the finding at
+`v16/r1/human-review` became `{{findings}}` in `v16/r2/implement/app/1`, which ran with real Codex
+under `v16/r2/` keys and made the commit the finding asked for. Every round-1 entry stayed
+byte-identical (4 of 4). The finished flow, run once more, executed nothing, printed only the
+replayed `log()` lines and `flow ended`, exited 0 in 1 s and left `journal.yaml` byte-identical.
+The one departure from the plan is that the flow needed three rounds instead of two, because the
+AI review of round 2 sent that round back as well — which §12.9 allows (a round, not round 1) and
+which exercised the return loop twice instead of once.
