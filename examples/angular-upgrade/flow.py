@@ -1,103 +1,88 @@
-"""Upgrade every Angular application in this folder, one repository at a time.
+"""Upgrade every Angular application in this folder, one major at a time.
 
-Plan with Codex, let a human approve the plan, implement each task in a ralph loop, wait for
-TeamCity when it is configured, let Codex review the result and let the human merge. Every step
-has an explicit key, so editing this file does not shift the keys of finished steps.
+Three nested loops (spec sections 10 and 14): `for target in MAJORS` outside, `while True` rounds
+inside a major, and the task and CI loops inside a round. Codex plans and upgrades, CI verifies the
+exact commit, a fresh Codex reviews, a human reviews, a human merges, Codex proposes a test plan and
+QA validates; every "no" along the way ends the round and the next round starts with the findings.
+Every key carries every enclosing loop's counter or id, so a rerun replays the finished rounds and
+executes only what is new, and the counters come from this file's own control flow, never from
+the journal.
 """
-from janus import Exhausted, ai_gate, codex, context, decision, human_gate, log, ralph, step
+from janus import codex, context, decision, human_gate, log, ralph
 
-import teamcity
-
-BRANCH = "ai/angular-15-to-16"
-MAX_IMPLEMENT = 5
-MAX_FIX = 3
-CI_TIMEOUT = 7200  # seconds the CI poll may take before it gives up on this build
-
-context(branch=BRANCH)
+MAJORS = [16]           # the majors to reach, in order; [16, 17, 18] walks three upgrades in one goal
+MAX_IMPLEMENT = 5       # ralph iterations of one implement task
 
 
-def ask_after_exhausted(key, exc, task):
-    """Open the decision a ralph that gave up needs: `skip` returns, `stop` ends the run with 1.
-    The decision is keyed `<key>/exhausted`, so it is stable against edits to this file."""
-    choice = decision(
-        "The loop '%s' of task %s gave up. Skip what is left of it, or stop the run?"
-        % (key, task["id"]),
-        ["skip", "stop"], key="%s/exhausted" % key,
-        show={"summary": exc.last["summary"], "blockers": exc.last["blockers"]})
-    if choice == "stop":
-        log("task %s stopped the run at %s" % (task["id"], key))
-        raise SystemExit(1)
-    log("task %s: %s was skipped by the human" % (task["id"], key))
-    return choice
+def task_line(record):
+    return "%s [%s] %s -- %s" % (record["id"], record["repo"], record["commit"] or "no commit", record["title"])
 
 
-plan = codex("prompts/plan.md", key="plan")
-human_gate(
-    "Approve this plan? Answer 'yes' to run it. To change it, edit the goal or the prompts,"
-    " run `python janus.py reset` and start again.",
-    key="approve-plan",
-    show={"summary": plan["summary"],
-          "tasks": ["%s [%s] %s" % (t["id"], t["repo"], t["title"]) for t in plan["tasks"]]},
-)
-
-finished = []
-for task in plan["tasks"]:
-    key = "implement/%s" % task["id"]
-    try:
-        result = ralph("prompts/implement.md", until=lambda r: r["done"], max_iter=MAX_IMPLEMENT,
-                       key=key, cwd=task["repo"], task=task, done_so_far=finished)
-    except Exhausted as exc:
-        choice = decision(
-            "Task %s is not done after %d attempts. Retry it, skip it, or stop the run?"
-            % (task["id"], MAX_IMPLEMENT),
-            ["retry", "skip", "stop"], key="%s/exhausted" % key,
-            show={"summary": exc.last["summary"], "blockers": exc.last["blockers"]})
-        if choice == "stop":
-            log("task %s stopped the run" % task["id"])
-            raise SystemExit(1)
-        if choice == "skip":
-            log("task %s skipped by the human" % task["id"])
-            continue
-        try:
-            result = ralph("prompts/implement.md", until=lambda r: r["done"], max_iter=MAX_IMPLEMENT,
-                           key="%s/retry" % key, cwd=task["repo"], task=task,
-                           done_so_far=finished)
-        except Exhausted as retry_exc:  # nothing was implemented, so there is no commit to record
-            ask_after_exhausted("%s/retry" % key, retry_exc, task)
-            continue
-    if teamcity.configured() and task["build_type"] != "none":
-        build = step("ci/%s" % task["id"],
-                     lambda: teamcity.wait_for_build(task["build_type"], result["commit"],
-                                                     timeout=CI_TIMEOUT))
-        log("task %s build %s: %s" % (task["id"], build["status"], build["url"]))
-        if build["status"] in ("NOT_FOUND", "TIMEOUT"):
-            choice = decision(  # nothing here is fixable by Codex: the build never gave a verdict
-                "TeamCity gave no verdict for task %s (%s). Continue without a CI check, or stop"
-                " the run?" % (task["id"], build["status"]),
-                ["skip", "stop"], key="ci/%s/missing" % task["id"],
-                show={"status": build["status"], "url": build["url"]})
-            if choice == "stop":
-                log("task %s stopped the run: no CI verdict" % task["id"])
-                raise SystemExit(1)
-            log("task %s continues without a CI verdict" % task["id"])
-        elif build["status"] == "FAILURE":
-            try:
-                result = ralph("prompts/fix.md", until=lambda r: r["done"], max_iter=MAX_FIX,
-                               key="fix/%s" % task["id"], cwd=task["repo"], task=task, build=build)
-            except Exhausted as fix_exc:  # `skip` keeps the implement commit, red build and all
-                ask_after_exhausted("fix/%s" % task["id"], fix_exc, task)
-    finished.append({"id": task["id"], "repo": task["repo"], "title": task["title"],
-                     "commit": result["commit"]})
+def run_task(k, task, finished, findings):
+    """Implement one task in a ralph. Returns the record for `finished`."""
+    key = "%s/implement/%s" % (k, task["id"])
+    result = ralph("prompts/implement.md", until=lambda r: r["done"], max_iter=MAX_IMPLEMENT,
+                   key=key, cwd=task["repo"], task=task, done_so_far=finished, findings=findings)
     log("task %s done: %s" % (task["id"], result["summary"]))
+    return {"id": task["id"], "repo": task["repo"], "title": task["title"], "commit": result["commit"]}
 
-if not ai_gate("prompts/review.md", key="review", tasks=finished):
+
+def run_round(k, rnd, plan, findings):
+    """One round of one major: every task, the AI review, the human review, the merge, the test plan
+    and QA. Returns None when QA passed, otherwise the findings the next round starts with."""
+    finished = []
+    for task in plan["tasks"]:
+        record = run_task(k, task, finished, findings)
+        if record is not None:
+            finished.append(record)
+    review = codex("prompts/review.md", key="%s/review" % k, tasks=finished)
+    if not review["passed"]:
+        return "AI review of round %d:\n%s" % (rnd, "\n".join(review["reasons"]))
+    answer = human_gate(
+        "Review the pull requests of round %d. Answer 'approved', or write your findings: anything"
+        " else you write is what Codex works on in the next round." % rnd,
+        key="%s/human-review" % k,
+        show={"review": review["summary"], "tasks": [task_line(t) for t in finished]})
+    if answer.strip().lower() != "approved":
+        return "Human review of round %d:\n%s" % (rnd, answer)
+    human_gate("Merge the pull requests of round %d to the release branch, then answer 'merged'." % rnd,
+               key="%s/merge" % k, show=[task_line(t) for t in finished])
+    testplan = codex("prompts/testplan.md", key="%s/testplan" % k, tasks=finished)
+    answer = human_gate(
+        "QA: run this test plan on the release branch. Answer 'passed', or write your findings:"
+        " anything else you write is what Codex works on in the next round.",
+        key="%s/qa" % k, show={"summary": testplan["summary"], "steps": testplan["steps"]})
+    if answer.strip().lower() != "passed":
+        return "QA of round %d:\n%s" % (rnd, answer)
+    return None
+
+
+for i, target in enumerate(MAJORS):
+    prefix = "v%d" % target
+    context(branch="ai/angular-%d-to-%d" % (target - 1, target), target=target)
+    plan = codex("prompts/plan.md", key="%s/plan" % prefix)
     human_gate(
-        "The review did not pass. Its reasons are in journal.yaml under the step 'review'."
-        " Fix what it found, or answer 'accepted' to continue anyway.",
-        key="review-findings")
+        "Approve this plan for Angular %d? Answer 'yes' to run it. To change it, edit the goal or the"
+        " prompts, run `python janus.py reset` and start again." % target,
+        key="%s/approve-plan" % prefix,
+        show={"summary": plan["summary"],
+              "tasks": ["%s [%s] %s" % (t["id"], t["repo"], t["title"]) for t in plan["tasks"]]})
 
-human_gate(
-    "Every task is committed on %s. Review the branches, open and merge the pull requests,"
-    " then answer 'merged'." % BRANCH,
-    key="merge", show=finished)
-log("flow finished")
+    findings = ""       # why the previous round came back: review reasons, human findings, QA findings, blockers
+    rnd = 0
+    while True:
+        rnd += 1
+        k = "%s/r%d" % (prefix, rnd)
+        findings = run_round(k, rnd, plan, findings)
+        if findings is None:
+            log("Angular %d reached in %d round(s)" % (target, rnd))
+            break
+        log("round %d of Angular %d came back: %s" % (rnd, target, findings.splitlines()[0]))
+
+    if i + 1 < len(MAJORS):
+        choice = decision(
+            "Direction check: Angular %d is done. Continue to Angular %d, or stop here?" % (target, MAJORS[i + 1]),
+            ["next", "stop"], key="%s/direction" % prefix)
+        if choice == "stop":
+            log("stopped after Angular %d, as the human decided" % target)
+            break
