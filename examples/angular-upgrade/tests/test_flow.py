@@ -117,6 +117,20 @@ def test_a_successful_teamcity_build_is_journaled_and_no_fix_loop_runs(
     assert "revision%3A%28version%3A" + "a" * 40 in teamcity_server.requests()[0]["path"]
 
 
+def test_a_build_type_of_none_skips_the_teamcity_wait(goal_folder, fake_codex, teamcity_server, monkeypatch):
+    plan = {"summary": PLAN["summary"], "tasks": [dict(PLAN["tasks"][0], build_type="none")]}
+    fake_codex.script([{"output": plan}, {"output": DONE}, {"output": REVIEW_OK}])
+    run(goal_folder, monkeypatch)
+    answer(goal_folder, "yes")
+    assert run(goal_folder, monkeypatch) == 2
+    steps = journal_of(goal_folder)["steps"]
+    assert "ci/app" not in steps
+    assert "fix/app/1" not in steps
+    assert teamcity_server.requests() == []
+    answer(goal_folder, "merged")
+    assert run(goal_folder, monkeypatch) == 0
+
+
 def test_a_failing_teamcity_build_runs_the_fix_loop_with_the_failed_tests(
         goal_folder, fake_codex, teamcity_server, monkeypatch):
     fake_codex.script([{"output": PLAN}, {"output": DONE}, {"output": FIXED}, {"output": REVIEW_OK}])

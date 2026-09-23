@@ -43,7 +43,7 @@ for task in plan["tasks"]:
             continue
         result = ralph("prompts/implement.md", until=lambda r: r["done"], max_iter=MAX_IMPLEMENT,
                        key="%s/retry" % key, cwd=task["repo"], task=task)
-    if teamcity.configured():
+    if teamcity.configured() and task["build_type"] != "none":
         build = step("ci/%s" % task["id"],
                      lambda: teamcity.wait_for_build(task["build_type"], result["commit"]))
         log("task %s build %s: %s" % (task["id"], build["status"], build["url"]))
