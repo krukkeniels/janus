@@ -11,6 +11,7 @@ import teamcity
 BRANCH = "ai/angular-15-to-16"
 MAX_IMPLEMENT = 5
 MAX_FIX = 3
+CI_TIMEOUT = 7200  # seconds the CI poll may take before it gives up on this build
 
 context(branch=BRANCH)
 
@@ -66,7 +67,8 @@ for task in plan["tasks"]:
             continue
     if teamcity.configured() and task["build_type"] != "none":
         build = step("ci/%s" % task["id"],
-                     lambda: teamcity.wait_for_build(task["build_type"], result["commit"]))
+                     lambda: teamcity.wait_for_build(task["build_type"], result["commit"],
+                                                     timeout=CI_TIMEOUT))
         log("task %s build %s: %s" % (task["id"], build["status"], build["url"]))
         if build["status"] in ("NOT_FOUND", "TIMEOUT"):
             choice = decision(  # nothing here is fixable by Codex: the build never gave a verdict

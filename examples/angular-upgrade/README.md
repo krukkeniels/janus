@@ -76,6 +76,8 @@ export JANUS_TEAMCITY_TOKEN=<a token with read access>
 With both set, each task waits for the TeamCity build of its commit before the flow moves on,
 and a red build opens the fix loop. With either unset, `teamcity.configured()` is false and the
 flow skips both. `build_type` in a task is the TeamCity build type id, or the string `none`.
+`CI_TIMEOUT` at the top of `flow.py` (7200 s) is passed explicitly to `teamcity.wait_for_build`
+and is how long a single poll waits for a build to finish before it gives up.
 
 **The token is readable by Codex.** Every `codex exec` inherits this process's environment and
 runs with `--dangerously-bypass-approvals-and-sandbox`, which is the Janus 4.0 trade-off: the
