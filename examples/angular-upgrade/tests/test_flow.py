@@ -73,3 +73,31 @@ def test_a_second_run_of_the_finished_flow_changes_nothing(goal_folder, fake_cod
     assert run(goal_folder, monkeypatch) == 0
     assert journal_of(goal_folder) == before
     assert len(fake_codex.calls()) == 3
+
+
+def test_an_exhausted_implement_loop_opens_a_decision_and_skip_continues(goal_folder, fake_codex, monkeypatch):
+    fake_codex.script([{"output": PLAN}] + [{"output": NOT_DONE}] * 5 + [{"output": REVIEW_OK}])
+    run(goal_folder, monkeypatch)
+    answer(goal_folder, "yes")
+    assert run(goal_folder, monkeypatch) == 2
+    gate = journal_of(goal_folder)["steps"]["implement/app/exhausted"]
+    assert (gate["kind"], gate["status"]) == ("decision", "open")
+    assert "app.component.ts does not compile" in (goal_folder / "JANUS.md").read_text(encoding="utf-8")
+    answer(goal_folder, "skip")
+    assert run(goal_folder, monkeypatch) == 2
+    steps = journal_of(goal_folder)["steps"]
+    assert list(steps) == ["plan", "approve-plan"] + ["implement/app/%d" % n for n in range(1, 6)] + \
+        ["implement/app/exhausted", "review", "merge"]
+    assert steps["implement/app/exhausted"]["answer"] == "skip"
+
+
+def test_stop_at_the_exhausted_decision_ends_the_run_with_exit_1(goal_folder, fake_codex, monkeypatch):
+    fake_codex.script([{"output": PLAN}] + [{"output": NOT_DONE}] * 5)
+    run(goal_folder, monkeypatch)
+    answer(goal_folder, "yes")
+    run(goal_folder, monkeypatch)
+    answer(goal_folder, "stop")
+    assert run(goal_folder, monkeypatch) == 1
+    steps = journal_of(goal_folder)["steps"]
+    assert steps["implement/app/exhausted"]["answer"] == "stop"
+    assert "review" not in steps

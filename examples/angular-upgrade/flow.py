@@ -4,7 +4,7 @@ Plan with Codex, let a human approve the plan, implement each task in a ralph lo
 review the result and let the human merge. Every step has an explicit key, so editing this file
 does not shift the keys of finished steps.
 """
-from janus import ai_gate, codex, context, human_gate, log, ralph
+from janus import Exhausted, ai_gate, codex, context, decision, human_gate, log, ralph
 
 BRANCH = "ai/angular-15-to-16"
 MAX_IMPLEMENT = 5
@@ -22,8 +22,24 @@ human_gate(
 
 finished = []
 for task in plan["tasks"]:
-    result = ralph("prompts/implement.md", until=lambda r: r["done"], max_iter=MAX_IMPLEMENT,
-                   key="implement/%s" % task["id"], cwd=task["repo"], task=task)
+    key = "implement/%s" % task["id"]
+    try:
+        result = ralph("prompts/implement.md", until=lambda r: r["done"], max_iter=MAX_IMPLEMENT,
+                       key=key, cwd=task["repo"], task=task)
+    except Exhausted as exc:
+        choice = decision(
+            "Task %s is not done after %d attempts. Retry it, skip it, or stop the run?"
+            % (task["id"], MAX_IMPLEMENT),
+            ["retry", "skip", "stop"], key="%s/exhausted" % key,
+            show={"summary": exc.last["summary"], "blockers": exc.last["blockers"]})
+        if choice == "stop":
+            log("task %s stopped the run" % task["id"])
+            raise SystemExit(1)
+        if choice == "skip":
+            log("task %s skipped by the human" % task["id"])
+            continue
+        result = ralph("prompts/implement.md", until=lambda r: r["done"], max_iter=MAX_IMPLEMENT,
+                       key="%s/retry" % key, cwd=task["repo"], task=task)
     finished.append({"id": task["id"], "repo": task["repo"], "title": task["title"],
                      "commit": result["commit"]})
     log("task %s done: %s" % (task["id"], result["summary"]))
