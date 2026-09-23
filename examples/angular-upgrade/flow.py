@@ -8,21 +8,57 @@ Every key carries every enclosing loop's counter or id, so a rerun replays the f
 executes only what is new, and the counters come from this file's own control flow, never from
 the journal.
 """
-from janus import codex, context, decision, human_gate, log, ralph
+from janus import Exhausted, codex, context, decision, human_gate, log, ralph
 
 MAJORS = [16]           # the majors to reach, in order; [16, 17, 18] walks three upgrades in one goal
+MAX_ROUNDS = 3          # rounds per major before the flow asks whether to keep going
 MAX_IMPLEMENT = 5       # ralph iterations of one implement task
+
+
+class SendBack(Exception):
+    """Ends the round from inside the task loop; `.findings` is what the next round's Codex reads."""
+
+    def __init__(self, findings):
+        Exception.__init__(self, findings)
+        self.findings = findings
+
+
+def stop_run(reason):
+    log(reason)
+    raise SystemExit(1)
 
 
 def task_line(record):
     return "%s [%s] %s -- %s" % (record["id"], record["repo"], record["commit"] or "no commit", record["title"])
 
 
+def ask_after_exhausted(key, exc, task, attempts):
+    """The blocker report of a ralph that gave up (spec section 14), keyed `<key>/exhausted`.
+    `retry` ends the round with the blockers as the next round's findings, `stop` ends the run with
+    exit 1, and `skip` returns so that the caller keeps what was committed and goes on."""
+    report = "\n".join(exc.last["blockers"]) or exc.last["summary"]
+    choice = decision(
+        "Task %s gave up at '%s' after %d attempts. Retry it in the next round (the blockers become"
+        " the findings), skip what is left of it, or stop the run?" % (task["id"], key, attempts),
+        ["retry", "skip", "stop"], key="%s/exhausted" % key,
+        show={"summary": exc.last["summary"], "blockers": exc.last["blockers"]})
+    if choice == "stop":
+        stop_run("task %s stopped the run at %s" % (task["id"], key))
+    if choice == "retry":
+        raise SendBack("Task %s gave up at %s:\n%s" % (task["id"], key, report))
+    log("task %s: %s skipped by the human" % (task["id"], key))
+
+
 def run_task(k, task, finished, findings):
-    """Implement one task in a ralph. Returns the record for `finished`."""
+    """Implement one task in a ralph. Returns the record for `finished`, or None when the human
+    skipped the task at the blocker report."""
     key = "%s/implement/%s" % (k, task["id"])
-    result = ralph("prompts/implement.md", until=lambda r: r["done"], max_iter=MAX_IMPLEMENT,
-                   key=key, cwd=task["repo"], task=task, done_so_far=finished, findings=findings)
+    try:
+        result = ralph("prompts/implement.md", until=lambda r: r["done"], max_iter=MAX_IMPLEMENT,
+                       key=key, cwd=task["repo"], task=task, done_so_far=finished, findings=findings)
+    except Exhausted as exc:  # `retry` raised SendBack and `stop` exited; only `skip` returns here
+        ask_after_exhausted(key, exc, task, MAX_IMPLEMENT)
+        return None
     log("task %s done: %s" % (task["id"], result["summary"]))
     return {"id": task["id"], "repo": task["repo"], "title": task["title"], "commit": result["commit"]}
 
@@ -69,11 +105,23 @@ for i, target in enumerate(MAJORS):
               "tasks": ["%s [%s] %s" % (t["id"], t["repo"], t["title"]) for t in plan["tasks"]]})
 
     findings = ""       # why the previous round came back: review reasons, human findings, QA findings, blockers
+    allowed = MAX_ROUNDS
     rnd = 0
     while True:
         rnd += 1
+        if rnd > allowed:  # `retry` raises the allowance and never resets the counter: r1.. are done
+            choice = decision(
+                "%d rounds did not finish Angular %d. Keep going for %d more, or stop the run?"
+                % (rnd - 1, target, MAX_ROUNDS),
+                ["retry", "stop"], key="%s/r%d/blocked" % (prefix, rnd), show=findings)
+            if choice == "stop":
+                stop_run("Angular %d stopped by the human after %d rounds" % (target, rnd - 1))
+            allowed += MAX_ROUNDS
         k = "%s/r%d" % (prefix, rnd)
-        findings = run_round(k, rnd, plan, findings)
+        try:
+            findings = run_round(k, rnd, plan, findings)
+        except SendBack as back:
+            findings = back.findings
         if findings is None:
             log("Angular %d reached in %d round(s)" % (target, rnd))
             break

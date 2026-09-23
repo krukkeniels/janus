@@ -226,3 +226,66 @@ def test_the_direction_check_can_stop_after_the_first_major(goal_folder, fake_co
     steps = journal_of(goal_folder)["steps"]
     assert steps["v16/direction"]["answer"] == "stop" and "v17/plan" not in steps
     assert len(fake_codex.calls()) == 4
+
+
+def test_past_max_rounds_the_blocked_decision_opens_and_retry_continues_to_round_4(
+        goal_folder, fake_codex, monkeypatch):
+    sent_back = [{"output": DONE}, {"output": REVIEW_BAD}]
+    run_to_human_review(goal_folder, fake_codex, monkeypatch, sent_back * 3 + ONE_ROUND)
+    steps = journal_of(goal_folder)["steps"]
+    gate = steps["v16/r4/blocked"]
+    assert (gate["kind"], gate["status"]) == ("decision", "open")
+    assert "3 rounds did not finish Angular 16" in gate["question"]
+    assert list(steps)[-3:] == ["v16/r3/implement/app/1", "v16/r3/review", "v16/r4/blocked"]
+    text = (goal_folder / "JANUS.md").read_text(encoding="utf-8")
+    assert "    AI review of round 3:\n    app: app.component.spec.ts is marked xdescribe" in text
+    answer(goal_folder, "retry")
+    assert run(goal_folder, monkeypatch) == 2
+    steps = journal_of(goal_folder)["steps"]
+    assert steps["v16/r4/blocked"]["answer"] == "retry"
+    assert list(steps)[-3:] == ["v16/r4/implement/app/1", "v16/r4/review", "v16/r4/human-review"]
+    assert "AI review of round 3:" in fake_codex.calls()[7]["prompt"]
+    assert "v16/r5/blocked" not in steps and "v16/r1/implement/app/2" not in steps
+
+
+def test_stop_at_the_blocked_decision_ends_the_run_with_exit_1(goal_folder, fake_codex, monkeypatch):
+    run_to_human_review(goal_folder, fake_codex, monkeypatch, [{"output": DONE}, {"output": REVIEW_BAD}] * 3)
+    answer(goal_folder, "stop")
+    assert run(goal_folder, monkeypatch) == 1
+    steps = journal_of(goal_folder)["steps"]
+    assert steps["v16/r4/blocked"]["answer"] == "stop" and "v16/r4/implement/app/1" not in steps
+    assert "stopped by the human after 3 rounds" in (goal_folder / "JANUS.md").read_text(encoding="utf-8")
+
+
+def test_retry_at_an_exhausted_implement_loop_starts_round_2_with_the_blockers_as_findings(
+        goal_folder, fake_codex, monkeypatch):
+    run_to_human_review(goal_folder, fake_codex, monkeypatch, [{"output": NOT_DONE}] * 5 + ONE_ROUND)
+    gate = journal_of(goal_folder)["steps"]["v16/r1/implement/app/exhausted"]
+    assert (gate["kind"], gate["status"]) == ("decision", "open")
+    assert "app.component.ts does not compile" in (goal_folder / "JANUS.md").read_text(encoding="utf-8")
+    answer(goal_folder, "retry")
+    assert run(goal_folder, monkeypatch) == 2
+    steps = journal_of(goal_folder)["steps"]
+    assert list(steps) == ["v16/plan", "v16/approve-plan"] + ["v16/r1/implement/app/%d" % n for n in range(1, 6)] \
+        + ["v16/r1/implement/app/exhausted", "v16/r2/implement/app/1", "v16/r2/review", "v16/r2/human-review"]
+    assert "v16/r1/review" not in steps
+    round_2 = fake_codex.calls()[6]["prompt"]
+    assert "Task app gave up at v16/r1/implement/app:\napp.component.ts does not compile" in round_2
+
+
+def test_skip_at_an_exhausted_implement_loop_leaves_the_task_out_of_the_round(goal_folder, fake_codex, monkeypatch):
+    run_to_human_review(goal_folder, fake_codex, monkeypatch, [{"output": NOT_DONE}] * 5 + ONE_ROUND[1:])
+    answer(goal_folder, "skip")
+    assert run(goal_folder, monkeypatch) == 2
+    steps = journal_of(goal_folder)["steps"]
+    assert steps["v16/r1/implement/app/exhausted"]["answer"] == "skip"
+    assert list(steps)[-2:] == ["v16/r1/review", "v16/r1/human-review"]
+    assert "named by its `repo`:\n\n[]\n" in fake_codex.calls()[6]["prompt"]  # the review sees an empty round
+
+
+def test_stop_at_an_exhausted_implement_loop_ends_the_run_with_exit_1(goal_folder, fake_codex, monkeypatch):
+    run_to_human_review(goal_folder, fake_codex, monkeypatch, [{"output": NOT_DONE}] * 5)
+    answer(goal_folder, "stop")
+    assert run(goal_folder, monkeypatch) == 1
+    steps = journal_of(goal_folder)["steps"]
+    assert steps["v16/r1/implement/app/exhausted"]["answer"] == "stop" and "v16/r1/review" not in steps
