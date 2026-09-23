@@ -470,8 +470,10 @@ v16/r3/qa                        gate      answered  -
 No `v16/direction` (one major) and no `ci/` key (no TeamCity). `## Progress` holds
 `round 1 of Angular 16 came back: Human review of round 1:`,
 `round 2 of Angular 16 came back: AI review of round 2:` and `Angular 16 reached in 3 round(s)`;
-`## Decisions` holds the two answers that carry text, the plan approval and the finding. The
-goal folder has one commit per status change, all pushed, and `git status --porcelain` is empty —
+`## Decisions` holds all five answered gates, each with its question and its answer in full:
+`v16/approve-plan` `yes`, `v16/r1/human-review` the finding, `v16/r3/human-review` `approved`,
+`v16/r3/merge` `merged` and `v16/r3/qa` `passed`. The goal folder has one commit per status
+change, all pushed, and `git status --porcelain` is empty —
 the `log()`-after-the-last-commit problem of Trial 1 is gone, because run 6 ends with
 `janus: run ended`.
 
