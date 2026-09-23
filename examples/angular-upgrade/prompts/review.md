@@ -2,8 +2,14 @@
 output:
   summary: str
 ---
-Review the finished work. This step is read-only: do not create, change or delete any file,
-and do not commit anything, here or in any repository.
+Review the finished work. This step is read-only, here and in every repository.
+
+Read-only means: do not change or delete any tracked file, do not create commits, branches or
+tags, and do not push. You may run the project's install, build and test commands, and they may
+write into `node_modules/`, `dist/` and other ignored paths.
+
+Judge only from the repositories' Git history and working trees. Do not read `JANUS.md`,
+`journal.yaml` or any other Janus file; the implementer's own report is not evidence.
 
 These tasks were implemented, each in the sub-folder named by its `repo`:
 

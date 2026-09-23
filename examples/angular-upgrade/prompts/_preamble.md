@@ -11,6 +11,8 @@ These rules override anything the instructions below ask for:
   branch does not exist there, create it from the current branch before you change anything.
 - Commit your own work in that repository, in small commits with clear messages, and report the
   full SHA of your last commit in your output. Push `{{branch}}` if the repository has a remote.
+- If the instructions below say this step is read-only, none of this applies: do not create a
+  branch, do not commit and do not push — only read.
 - Never merge, rebase or push another branch, never tag, never publish a package and never deploy.
 - Never weaken, delete, skip or disable a test to make a build or a check pass. If a test is
   wrong, leave it failing and say so in your output.
