@@ -76,3 +76,29 @@ def test_git_commit_with_neither_file_present_does_nothing(repo):
     janus.git_commit("janus: nothing done")
     assert git(repo, "log", "--format=%s").splitlines() == ["init"]
     assert git(repo, "status", "--porcelain") == before  # untouched: no commit, nothing unstaged
+
+
+def test_a_log_after_the_last_journaled_step_is_committed_and_pushed(repo_with_upstream, monkeypatch):
+    """finding 8: only save_journal() commits, so a log() after the last status change left
+    JANUS.md modified and unpushed. cmd_run commits once more before it returns."""
+    repo, bare = repo_with_upstream
+    (repo / "flow.py").write_text("from janus import step, log\n\nstep('a', lambda: 1)\nlog('bye')\n",
+                                  encoding="utf-8")
+    git(repo, "add", "--", "flow.py")  # not commit_all: the bare remote lives inside this work tree
+    git(repo, "commit", "-q", "-m", "flow")
+    git(repo, "push", "-q")
+    monkeypatch.chdir(repo)
+    assert janus.main(["run"]) == 0
+    assert git(repo, "status", "--porcelain", "--", "JANUS.md", "journal.yaml") == ""
+    assert git(repo, "log", "-1", "--format=%s") == "janus: run ended"
+    assert "bye" in git(bare, "show", "HEAD:JANUS.md")
+
+
+def test_the_progress_line_of_an_uncaught_exception_is_committed(repo, monkeypatch):
+    """The same gap on the failure path: cmd_run writes a Progress line, then returns 1."""
+    (repo / "flow.py").write_text("raise ValueError('kaboom')\n", encoding="utf-8")
+    commit_all(repo, "flow")
+    monkeypatch.chdir(repo)
+    assert janus.main(["run"]) == 1
+    assert git(repo, "status", "--porcelain", "--", "JANUS.md") == ""
+    assert "kaboom" in git(repo, "show", "HEAD:JANUS.md")

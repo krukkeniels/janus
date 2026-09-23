@@ -499,6 +499,8 @@ def cmd_run() -> int:
         REPLAYING = False
         log(f"{CURRENT or 'flow'}: {type(exc).__name__}: {exc}")
         return 1
+    finally:  # only save_journal() commits; a log() after the last status change needs this one
+        git_commit("janus: run ended")
     print("flow ended")
     return 0
 
