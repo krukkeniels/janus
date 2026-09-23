@@ -47,8 +47,9 @@ def journal_of(folder):
     return yaml.safe_load((folder / "journal.yaml").read_text(encoding="utf-8"))
 
 
-def run_to_human_review(folder, fake_codex, monkeypatch, script):
-    """Plan, approve, and run the first round up to its human review gate."""
+def run_to_the_second_gate(folder, fake_codex, monkeypatch, script):
+    """Plan, run to the approval gate, answer 'yes', then run again and assert exit 2 wherever
+    that second run stops: the human review, or one of the CI decisions, along the way."""
     fake_codex.script([{"output": PLAN}] + script)
     assert run(folder, monkeypatch) == 2
     answer(folder, "yes")
@@ -56,7 +57,7 @@ def run_to_human_review(folder, fake_codex, monkeypatch, script):
 
 
 def test_one_round_that_passes_every_check_ends_at_qa_passed(goal_folder, fake_codex, monkeypatch):
-    run_to_human_review(goal_folder, fake_codex, monkeypatch, ONE_ROUND)
+    run_to_the_second_gate(goal_folder, fake_codex, monkeypatch, ONE_ROUND)
     answer(goal_folder, "approved")
     assert run(goal_folder, monkeypatch) == 2
     answer(goal_folder, "merged")
@@ -75,7 +76,7 @@ def test_one_round_that_passes_every_check_ends_at_qa_passed(goal_folder, fake_c
 
 def test_every_prompt_renders_with_the_branch_the_target_the_task_and_empty_findings(
         goal_folder, fake_codex, monkeypatch):
-    run_to_human_review(goal_folder, fake_codex, monkeypatch, [{"output": NOT_DONE}] + ONE_ROUND)
+    run_to_the_second_gate(goal_folder, fake_codex, monkeypatch, [{"output": NOT_DONE}] + ONE_ROUND)
     plan, first, second, review = fake_codex.calls()[:4]
     assert plan["cwd"].endswith("angular-16-upgrade") and first["cwd"].endswith("angular-16-upgrade/app")
     assert "ai/angular-15-to-16" in plan["prompt"] and "Plan the upgrade to Angular 16." in plan["prompt"]
@@ -101,8 +102,8 @@ def test_every_prompt_renders_with_the_branch_the_target_the_task_and_empty_find
 
 def test_a_failed_ai_review_sends_the_work_back_and_round_2_implements_with_the_reasons(
         goal_folder, fake_codex, monkeypatch):
-    run_to_human_review(goal_folder, fake_codex, monkeypatch,
-                        [{"output": DONE}, {"output": REVIEW_BAD}, {"output": DONE_2}] + ONE_ROUND[1:])
+    run_to_the_second_gate(goal_folder, fake_codex, monkeypatch,
+                            [{"output": DONE}, {"output": REVIEW_BAD}, {"output": DONE_2}] + ONE_ROUND[1:])
     steps = journal_of(goal_folder)["steps"]
     assert list(steps) == ["v16/plan", "v16/approve-plan", "v16/r1/implement/app/1", "v16/r1/review",
                            "v16/r2/implement/app/1", "v16/r2/review", "v16/r2/human-review"]
@@ -116,7 +117,7 @@ def test_a_failed_ai_review_sends_the_work_back_and_round_2_implements_with_the_
 
 
 def test_human_review_findings_become_the_findings_of_round_2(goal_folder, fake_codex, monkeypatch):
-    run_to_human_review(goal_folder, fake_codex, monkeypatch, ONE_ROUND[:2] + [{"output": DONE_2}] + ONE_ROUND[1:])
+    run_to_the_second_gate(goal_folder, fake_codex, monkeypatch, ONE_ROUND[:2] + [{"output": DONE_2}] + ONE_ROUND[1:])
     round_1 = dict(journal_of(goal_folder)["steps"]["v16/r1/implement/app/1"])
     answer(goal_folder, "Also update zone.js to the version Angular 16 recommends")
     assert run(goal_folder, monkeypatch) == 2
@@ -133,7 +134,7 @@ def test_human_review_findings_become_the_findings_of_round_2(goal_folder, fake_
 
 
 def test_qa_findings_become_the_findings_of_round_2_and_round_2_can_finish(goal_folder, fake_codex, monkeypatch):
-    run_to_human_review(goal_folder, fake_codex, monkeypatch, ONE_ROUND + [{"output": DONE_2}] + ONE_ROUND[1:])
+    run_to_the_second_gate(goal_folder, fake_codex, monkeypatch, ONE_ROUND + [{"output": DONE_2}] + ONE_ROUND[1:])
     answer(goal_folder, "approved")
     run(goal_folder, monkeypatch)
     answer(goal_folder, "merged")
@@ -154,7 +155,7 @@ def test_qa_findings_become_the_findings_of_round_2_and_round_2_can_finish(goal_
 
 
 def test_a_second_run_of_the_finished_flow_changes_nothing(goal_folder, fake_codex, monkeypatch):
-    run_to_human_review(goal_folder, fake_codex, monkeypatch, ONE_ROUND)
+    run_to_the_second_gate(goal_folder, fake_codex, monkeypatch, ONE_ROUND)
     for text in ("approved", "merged", "passed"):
         answer(goal_folder, text)
         code = run(goal_folder, monkeypatch)
@@ -189,7 +190,7 @@ def test_two_majors_run_in_order_when_the_direction_check_says_next(goal_folder,
     (goal_folder / "flow.py").write_text(flow.replace("MAJORS = [16] ", "MAJORS = [16, 17]"), encoding="utf-8")
     plan_17 = {"summary": "app goes from Angular 16 to 17.",
                "tasks": [dict(PLAN["tasks"][0], title="Upgrade app to Angular 17")]}
-    run_to_human_review(goal_folder, fake_codex, monkeypatch, ONE_ROUND + [{"output": plan_17}] + ONE_ROUND)
+    run_to_the_second_gate(goal_folder, fake_codex, monkeypatch, ONE_ROUND + [{"output": plan_17}] + ONE_ROUND)
     for text in ("approved", "merged", "passed"):
         answer(goal_folder, text)
         assert run(goal_folder, monkeypatch) == 2
@@ -217,7 +218,7 @@ def test_two_majors_run_in_order_when_the_direction_check_says_next(goal_folder,
 def test_the_direction_check_can_stop_after_the_first_major(goal_folder, fake_codex, monkeypatch):
     flow = (goal_folder / "flow.py").read_text(encoding="utf-8")
     (goal_folder / "flow.py").write_text(flow.replace("MAJORS = [16] ", "MAJORS = [16, 17]"), encoding="utf-8")
-    run_to_human_review(goal_folder, fake_codex, monkeypatch, ONE_ROUND)
+    run_to_the_second_gate(goal_folder, fake_codex, monkeypatch, ONE_ROUND)
     for text in ("approved", "merged", "passed"):
         answer(goal_folder, text)
         assert run(goal_folder, monkeypatch) == 2
@@ -231,7 +232,7 @@ def test_the_direction_check_can_stop_after_the_first_major(goal_folder, fake_co
 def test_past_max_rounds_the_blocked_decision_opens_and_retry_continues_to_round_4(
         goal_folder, fake_codex, monkeypatch):
     sent_back = [{"output": DONE}, {"output": REVIEW_BAD}]
-    run_to_human_review(goal_folder, fake_codex, monkeypatch, sent_back * 3 + ONE_ROUND)
+    run_to_the_second_gate(goal_folder, fake_codex, monkeypatch, sent_back * 3 + ONE_ROUND)
     steps = journal_of(goal_folder)["steps"]
     gate = steps["v16/r4/blocked"]
     assert (gate["kind"], gate["status"]) == ("decision", "open")
@@ -249,7 +250,7 @@ def test_past_max_rounds_the_blocked_decision_opens_and_retry_continues_to_round
 
 
 def test_stop_at_the_blocked_decision_ends_the_run_with_exit_1(goal_folder, fake_codex, monkeypatch):
-    run_to_human_review(goal_folder, fake_codex, monkeypatch, [{"output": DONE}, {"output": REVIEW_BAD}] * 3)
+    run_to_the_second_gate(goal_folder, fake_codex, monkeypatch, [{"output": DONE}, {"output": REVIEW_BAD}] * 3)
     answer(goal_folder, "stop")
     assert run(goal_folder, monkeypatch) == 1
     steps = journal_of(goal_folder)["steps"]
@@ -259,7 +260,7 @@ def test_stop_at_the_blocked_decision_ends_the_run_with_exit_1(goal_folder, fake
 
 def test_retry_at_an_exhausted_implement_loop_starts_round_2_with_the_blockers_as_findings(
         goal_folder, fake_codex, monkeypatch):
-    run_to_human_review(goal_folder, fake_codex, monkeypatch, [{"output": NOT_DONE}] * 5 + ONE_ROUND)
+    run_to_the_second_gate(goal_folder, fake_codex, monkeypatch, [{"output": NOT_DONE}] * 5 + ONE_ROUND)
     gate = journal_of(goal_folder)["steps"]["v16/r1/implement/app/exhausted"]
     assert (gate["kind"], gate["status"]) == ("decision", "open")
     assert "app.component.ts does not compile" in (goal_folder / "JANUS.md").read_text(encoding="utf-8")
@@ -274,7 +275,7 @@ def test_retry_at_an_exhausted_implement_loop_starts_round_2_with_the_blockers_a
 
 
 def test_skip_at_an_exhausted_implement_loop_leaves_the_task_out_of_the_round(goal_folder, fake_codex, monkeypatch):
-    run_to_human_review(goal_folder, fake_codex, monkeypatch, [{"output": NOT_DONE}] * 5 + ONE_ROUND[1:])
+    run_to_the_second_gate(goal_folder, fake_codex, monkeypatch, [{"output": NOT_DONE}] * 5 + ONE_ROUND[1:])
     answer(goal_folder, "skip")
     assert run(goal_folder, monkeypatch) == 2
     steps = journal_of(goal_folder)["steps"]
@@ -284,7 +285,7 @@ def test_skip_at_an_exhausted_implement_loop_leaves_the_task_out_of_the_round(go
 
 
 def test_stop_at_an_exhausted_implement_loop_ends_the_run_with_exit_1(goal_folder, fake_codex, monkeypatch):
-    run_to_human_review(goal_folder, fake_codex, monkeypatch, [{"output": NOT_DONE}] * 5)
+    run_to_the_second_gate(goal_folder, fake_codex, monkeypatch, [{"output": NOT_DONE}] * 5)
     answer(goal_folder, "stop")
     assert run(goal_folder, monkeypatch) == 1
     steps = journal_of(goal_folder)["steps"]
@@ -294,7 +295,7 @@ def test_stop_at_an_exhausted_implement_loop_ends_the_run_with_exit_1(goal_folde
 def test_a_green_build_is_journaled_under_the_first_verdict_and_no_fix_runs(
         goal_folder, fake_codex, teamcity_server, monkeypatch):
     teamcity_server.serve(GREEN)
-    run_to_human_review(goal_folder, fake_codex, monkeypatch, ONE_ROUND)
+    run_to_the_second_gate(goal_folder, fake_codex, monkeypatch, ONE_ROUND)
     steps = journal_of(goal_folder)["steps"]
     assert steps["v16/r1/ci/app/1"]["result"] == {"status": "SUCCESS", "url": "http://tc/viewLog.html?buildId=42",
                                                   "excerpt": ""}
@@ -315,7 +316,7 @@ def test_a_build_type_of_none_skips_the_teamcity_wait(goal_folder, fake_codex, t
 def test_a_red_build_gets_a_fix_whose_commit_is_verified_by_the_second_verdict(
         goal_folder, fake_codex, teamcity_server, monkeypatch):
     teamcity_server.serve(RED + GREEN)
-    run_to_human_review(goal_folder, fake_codex, monkeypatch, [{"output": DONE}, {"output": FIXED}] + ONE_ROUND[1:])
+    run_to_the_second_gate(goal_folder, fake_codex, monkeypatch, [{"output": DONE}, {"output": FIXED}] + ONE_ROUND[1:])
     steps = journal_of(goal_folder)["steps"]
     assert steps["v16/r1/ci/app/1"]["result"]["status"] == "FAILURE"
     assert steps["v16/r1/fix/app/1/1"]["result"]["commit"] == "b" * 40
@@ -332,8 +333,8 @@ def test_a_red_build_gets_a_fix_whose_commit_is_verified_by_the_second_verdict(
 def test_max_ci_red_verdicts_open_the_red_decision_and_skip_keeps_the_commits(
         goal_folder, fake_codex, teamcity_server, monkeypatch):
     teamcity_server.serve(RED * 3)
-    run_to_human_review(goal_folder, fake_codex, monkeypatch,
-                        [{"output": DONE}, {"output": FIXED}, {"output": FIXED}] + ONE_ROUND[1:])
+    run_to_the_second_gate(goal_folder, fake_codex, monkeypatch,
+                            [{"output": DONE}, {"output": FIXED}, {"output": FIXED}] + ONE_ROUND[1:])
     steps = journal_of(goal_folder)["steps"]
     assert (steps["v16/r1/ci/app/red"]["kind"], steps["v16/r1/ci/app/red"]["status"]) == ("decision", "open")
     assert [k for k in steps if "/ci/" in k or "/fix/" in k] == \
@@ -349,8 +350,9 @@ def test_max_ci_red_verdicts_open_the_red_decision_and_skip_keeps_the_commits(
 def test_retry_at_the_red_decision_starts_round_2_with_the_failure_as_findings(
         goal_folder, fake_codex, teamcity_server, monkeypatch):
     teamcity_server.serve(RED * 3 + GREEN)
-    run_to_human_review(goal_folder, fake_codex, monkeypatch,
-                        [{"output": DONE}, {"output": FIXED}, {"output": FIXED}, {"output": DONE_2}] + ONE_ROUND[1:])
+    run_to_the_second_gate(goal_folder, fake_codex, monkeypatch,
+                            [{"output": DONE}, {"output": FIXED}, {"output": FIXED}, {"output": DONE_2}]
+                            + ONE_ROUND[1:])
     answer(goal_folder, "retry")
     assert run(goal_folder, monkeypatch) == 2
     steps = journal_of(goal_folder)["steps"]
@@ -362,8 +364,8 @@ def test_retry_at_the_red_decision_starts_round_2_with_the_failure_as_findings(
 def test_an_exhausted_fix_loop_opens_its_decision_and_skip_keeps_the_implement_commit(
         goal_folder, fake_codex, teamcity_server, monkeypatch):
     teamcity_server.serve(RED)
-    run_to_human_review(goal_folder, fake_codex, monkeypatch,
-                        [{"output": DONE}] + [{"output": NOT_DONE}] * 3 + ONE_ROUND[1:])
+    run_to_the_second_gate(goal_folder, fake_codex, monkeypatch,
+                            [{"output": DONE}] + [{"output": NOT_DONE}] * 3 + ONE_ROUND[1:])
     gate = journal_of(goal_folder)["steps"]["v16/r1/fix/app/1/exhausted"]
     assert (gate["kind"], gate["status"]) == ("decision", "open")
     answer(goal_folder, "skip")
@@ -377,7 +379,7 @@ def test_an_exhausted_fix_loop_opens_its_decision_and_skip_keeps_the_implement_c
 def test_a_build_teamcity_cannot_find_opens_the_missing_decision_instead_of_a_fix(
         goal_folder, fake_codex, teamcity_server, monkeypatch):
     teamcity_server.serve([{"count": 0}])
-    run_to_human_review(goal_folder, fake_codex, monkeypatch, ONE_ROUND)
+    run_to_the_second_gate(goal_folder, fake_codex, monkeypatch, ONE_ROUND)
     steps = journal_of(goal_folder)["steps"]
     assert steps["v16/r1/ci/app/1"]["result"]["status"] == "NOT_FOUND"
     assert (steps["v16/r1/ci/app/1/missing"]["kind"], steps["v16/r1/ci/app/1/missing"]["status"]) == \

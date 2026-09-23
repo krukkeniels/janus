@@ -110,7 +110,7 @@ def run_task(k, task, finished, findings):
         return None
     if teamcity.configured() and task["build_type"] != "none":
         result = verify_in_ci(k, task, result)
-    log("task %s done: %s" % (task["id"], result["summary"]))
+    log("task %s finished: %s" % (task["id"], result["summary"]))
     return {"id": task["id"], "repo": task["repo"], "title": task["title"], "commit": result["commit"]}
 
 
@@ -129,7 +129,7 @@ def run_round(k, rnd, plan, findings):
         "Review the pull requests of round %d. Answer 'approved', or write your findings: anything"
         " else you write is what Codex works on in the next round." % rnd,
         key="%s/human-review" % k,
-        show={"review": review["summary"], "tasks": [task_line(t) for t in finished]})
+        show={"summary": review["summary"], "tasks": [task_line(t) for t in finished]})
     if answer.strip().lower() != "approved":
         return "Human review of round %d:\n%s" % (rnd, answer)
     human_gate("Merge the pull requests of round %d to the release branch, then answer 'merged'." % rnd,
@@ -176,7 +176,7 @@ for i, target in enumerate(MAJORS):
         if findings is None:
             log("Angular %d reached in %d round(s)" % (target, rnd))
             break
-        log("round %d of Angular %d came back: %s" % (rnd, target, findings.splitlines()[0]))
+        log("round %d of Angular %d came back: %s" % (rnd, target, " ".join(findings.split())[:160]))
 
     if i + 1 < len(MAJORS):
         choice = decision(

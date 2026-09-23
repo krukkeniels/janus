@@ -12,7 +12,7 @@ Carry out this task in the repository you were started in:
     title:     {{task.title}}
     objective: {{task.objective}}
 
-Tasks already finished in this round (repo, title, commit), so that you know what the other
+Tasks already finished in this round (id, repo, title, commit), so that you know what the other
 repositories already produced. `[]` means this is the first task of the round:
 
 {{done_so_far}}

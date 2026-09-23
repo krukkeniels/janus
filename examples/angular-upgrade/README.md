@@ -354,8 +354,8 @@ retried, no `exhausted`, `blocked`, `red` or `missing` decision opened. Runs 4, 
 | Key | Question | Shown | Answer |
 |---|---|---|---|
 | `v16/approve-plan` | Approve this plan for Angular 16? … | `summary`, one `app [app] …` line | `yes` |
-| `v16/r1/human-review` | Review the pull requests of round 1. … | `review`, `tasks` | the finding (below) |
-| `v16/r3/human-review` | Review the pull requests of round 3. … | `review`, `tasks` | `approved` |
+| `v16/r1/human-review` | Review the pull requests of round 1. … | `summary`, `tasks` | the finding (below) |
+| `v16/r3/human-review` | Review the pull requests of round 3. … | `summary`, `tasks` | `approved` |
 | `v16/r3/merge` | Merge the pull requests of round 3 … | task line with `b0a1ed4` | `merged` |
 | `v16/r3/qa` | QA: run this test plan … | `summary`, 9 `steps` | `passed` |
 
@@ -488,13 +488,17 @@ the `log()`-after-the-last-commit problem of Trial 1 is gone, because run 6 ends
   reviewer's objection. `## Progress` and `## Decisions` keep the history, but the prompt does
   not. A flow that wants the human to win would have to carry the human findings forward (or ask
   at a gate when the AI review contradicts an answered human review); that is a flow change, not
-  an engine change.
+  an engine change. The next spec revision's mitigation is to pass `findings` to
+  `prompts/review.md` as well, so the reviewer knows what a human or an earlier review asked for
+  and does not call a requested change a defect.
 - The round numbers in the keys are loop counters, not gate counters, so the merge, test plan and
   QA of this trial sit under `v16/r3/...` although only two human reviews happened. Anyone reading
   the journal has to know that round 2 ended at its AI review.
-- Each `implement` iteration streamed several intermediate JSON objects that satisfy the schema
-  (`{"done":false,…}`) before the final one; only the last is journaled, which is correct, but a
-  log reader can mistake an early one for the result.
+- The trial used its whole `MAX_ROUNDS = 3` allowance: a fourth send-back would have opened the
+  `v16/r4/blocked` decision.
+- Two of the three `implement` iterations streamed several intermediate JSON objects that satisfy
+  the schema (`{"done":false,…}`) before the final one; only the last is journaled, which is
+  correct, but a log reader can mistake an early one for the result.
 
 **Engine gaps found.** None. Every gate, decision and loop the trial needed was expressible with
 `codex`, `ralph`, `human_gate`, `decision`, `step`, `log` and `context` as they are; the return
