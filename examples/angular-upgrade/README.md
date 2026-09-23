@@ -14,7 +14,7 @@ and edited.
 | File | What it is |
 |---|---|
 | `flow.py` | The flow. Plain Python over the primitives of spec section 4. |
-| `prompts/_preamble.md` | Prepended to every prompt: the branch, the commit and the safety rules. |
+| `prompts/_preamble.md` | Prepended to every prompt: the branch, the commit and the safety rules. `{{branch}}` there is the `BRANCH` constant in `flow.py`, passed in through `context()`. |
 | `prompts/plan.md` | Read-only survey of the repositories; returns ordered tasks. |
 | `prompts/implement.md` | One task in one repository; returns `done`, `commit`, `summary`, `blockers`. |
 | `prompts/review.md` | Read-only review of everything that was committed. |
@@ -36,7 +36,8 @@ git init -b main . && git add -A && git commit -m "goal folder"
 git clone <repo-url> ui-kit           # one clone per repository, as a sub-folder
 git clone <repo-url> shell
 
-$EDITOR JANUS.md                      # edit "# Goal": the repositories, the checks, the branch
+$EDITOR JANUS.md                      # edit "# Goal": the repositories, the checks, the definition of done
+$EDITOR flow.py                       # edit BRANCH at the top: the branch every task works on
 python3 janus.py run
 ```
 
