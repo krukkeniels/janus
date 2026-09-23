@@ -12,6 +12,8 @@ NOT_DONE = {"done": False, "commit": "", "summary": "ng update ran; the build st
 DONE = {"done": True, "commit": "a" * 40, "summary": "Angular 16, build and tests green.", "blockers": []}
 FIXED = {"done": True, "commit": "b" * 40, "summary": "Fixed the failing title spec.", "blockers": []}
 REVIEW_OK = {"summary": "The upgrade is complete and no test was weakened.", "passed": True, "reasons": []}
+REVIEW_BAD = {"summary": "The upgrade skips a spec.", "passed": False,
+              "reasons": ["app: app.component.spec.ts is marked xdescribe"]}
 BUILD = {"id": 42, "webUrl": "http://tc/viewLog.html?buildId=42", "state": "finished"}
 
 
@@ -145,3 +147,91 @@ def test_a_failing_teamcity_build_runs_the_fix_loop_with_the_failed_tests(
     fix_prompt = fake_codex.calls()[2]["prompt"]
     assert "AppComponent should render title" in fix_prompt and "http://tc/viewLog.html?buildId=42" in fix_prompt
     assert "b" * 40 in (goal_folder / "JANUS.md").read_text(encoding="utf-8")
+
+
+def test_retry_at_the_exhausted_decision_runs_a_second_loop_that_finishes(goal_folder, fake_codex, monkeypatch):
+    fake_codex.script([{"output": PLAN}] + [{"output": NOT_DONE}] * 5 + [{"output": DONE}, {"output": REVIEW_OK}])
+    run(goal_folder, monkeypatch)
+    answer(goal_folder, "yes")
+    assert run(goal_folder, monkeypatch) == 2
+    answer(goal_folder, "retry")
+    assert run(goal_folder, monkeypatch) == 2
+    steps = journal_of(goal_folder)["steps"]
+    assert steps["implement/app/exhausted"]["answer"] == "retry"
+    assert steps["implement/app/retry/1"]["result"]["commit"] == "a" * 40
+    assert "implement/app/retry/2" not in steps
+    answer(goal_folder, "merged")
+    assert run(goal_folder, monkeypatch) == 0
+
+
+def test_a_retry_loop_that_is_exhausted_too_opens_its_own_decision(goal_folder, fake_codex, monkeypatch):
+    fake_codex.script([{"output": PLAN}] + [{"output": NOT_DONE}] * 10 + [{"output": REVIEW_OK}])
+    run(goal_folder, monkeypatch)
+    answer(goal_folder, "yes")
+    run(goal_folder, monkeypatch)
+    answer(goal_folder, "retry")
+    assert run(goal_folder, monkeypatch) == 2
+    gate = journal_of(goal_folder)["steps"]["implement/app/retry/exhausted"]
+    assert (gate["kind"], gate["status"]) == ("decision", "open")
+    answer(goal_folder, "skip")
+    assert run(goal_folder, monkeypatch) == 2
+    steps = journal_of(goal_folder)["steps"]
+    assert list(steps)[-3:] == ["implement/app/retry/exhausted", "review", "merge"]
+    assert steps["implement/app/retry/exhausted"]["answer"] == "skip"
+
+
+def test_a_review_that_does_not_pass_opens_the_findings_gate_and_accepted_continues(
+        goal_folder, fake_codex, monkeypatch):
+    fake_codex.script([{"output": PLAN}, {"output": DONE}, {"output": REVIEW_BAD}])
+    run(goal_folder, monkeypatch)
+    answer(goal_folder, "yes")
+    assert run(goal_folder, monkeypatch) == 2
+    steps = journal_of(goal_folder)["steps"]
+    assert steps["review"]["result"]["passed"] is False
+    assert (steps["review-findings"]["kind"], steps["review-findings"]["status"]) == ("gate", "open")
+    answer(goal_folder, "accepted")
+    assert run(goal_folder, monkeypatch) == 2
+    steps = journal_of(goal_folder)["steps"]
+    assert steps["review-findings"]["answer"] == "accepted"
+    assert steps["merge"]["status"] == "open"
+    answer(goal_folder, "merged")
+    assert run(goal_folder, monkeypatch) == 0
+
+
+def test_an_exhausted_fix_loop_opens_a_decision_and_skip_keeps_the_implement_commit(
+        goal_folder, fake_codex, teamcity_server, monkeypatch):
+    fake_codex.script([{"output": PLAN}, {"output": DONE}] + [{"output": NOT_DONE}] * 3 + [{"output": REVIEW_OK}])
+    teamcity_server.serve([{"build": [dict(BUILD, status="FAILURE")]},
+                           {"testOccurrence": [{"name": "AppComponent should render title"}]}])
+    run(goal_folder, monkeypatch)
+    answer(goal_folder, "yes")
+    assert run(goal_folder, monkeypatch) == 2
+    gate = journal_of(goal_folder)["steps"]["fix/app/exhausted"]
+    assert (gate["kind"], gate["status"]) == ("decision", "open")
+    answer(goal_folder, "skip")
+    assert run(goal_folder, monkeypatch) == 2
+    steps = journal_of(goal_folder)["steps"]
+    assert steps["fix/app/exhausted"]["answer"] == "skip"
+    assert steps["merge"]["status"] == "open"
+    assert "a" * 40 in (goal_folder / "JANUS.md").read_text(encoding="utf-8")
+
+
+def test_a_build_teamcity_cannot_find_opens_a_decision_instead_of_the_fix_loop(
+        goal_folder, fake_codex, teamcity_server, monkeypatch):
+    fake_codex.script([{"output": PLAN}, {"output": DONE}, {"output": REVIEW_OK}])
+    teamcity_server.serve([{"count": 0}])
+    run(goal_folder, monkeypatch)
+    answer(goal_folder, "yes")
+    assert run(goal_folder, monkeypatch) == 2
+    steps = journal_of(goal_folder)["steps"]
+    assert steps["ci/app"]["result"]["status"] == "NOT_FOUND"
+    assert (steps["ci/app/missing"]["kind"], steps["ci/app/missing"]["status"]) == ("decision", "open")
+    assert "fix/app/1" not in steps
+    answer(goal_folder, "skip")
+    assert run(goal_folder, monkeypatch) == 2
+    steps = journal_of(goal_folder)["steps"]
+    assert steps["ci/app/missing"]["answer"] == "skip"
+    assert "fix/app/1" not in steps
+    assert "a" * 40 in (goal_folder / "JANUS.md").read_text(encoding="utf-8")
+    answer(goal_folder, "merged")
+    assert run(goal_folder, monkeypatch) == 0

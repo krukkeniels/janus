@@ -54,8 +54,11 @@ finished step is replayed from `journal.yaml`, so answering a gate never repeats
 | `implement/<id>/<n>` | codex | Ralph iteration `n` of task `<id>`, up to five. |
 | `implement/<id>/exhausted` | decision | `retry`, `skip` or `stop`, when five iterations were not enough. |
 | `implement/<id>/retry/<n>` | codex | The second ralph loop, after `retry`. |
+| `implement/<id>/retry/exhausted` | decision | `skip` or `stop`, when the retry loop was not enough either. |
 | `ci/<id>` | step | The TeamCity wait, only when TeamCity is configured. |
+| `ci/<id>/missing` | decision | `skip` or `stop`, when the build is `NOT_FOUND` or `TIMEOUT`. |
 | `fix/<id>/<n>` | codex | Up to three attempts at a red build. |
+| `fix/<id>/exhausted` | decision | `skip` or `stop`, when three attempts did not make the build green. |
 | `review` | ai_gate | Codex reviews every commit; `passed` and `reasons` are journaled. |
 | `review-findings` | gate | Only when the review did not pass. |
 | `merge` | gate | The human merges and answers `merged`. |
