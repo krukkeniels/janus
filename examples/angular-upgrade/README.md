@@ -6,23 +6,26 @@ human approves the plan, a ralph loop implements each task, TeamCity is consulte
 configured, Codex reviews the result and a human merges.
 
 Nothing here is engine code. `janus.py` knows nothing about Angular, Git branches or TeamCity;
-all of that lives in the four prompts, in `flow.py` and in `teamcity.py`, where it can be read
-and edited.
+all of that lives in the four step prompts and the preamble, in `flow.py` and in `teamcity.py`,
+where it can be read and edited.
 
 ## The files
 
 | File | What it is |
 |---|---|
 | `flow.py` | The flow. Plain Python over the primitives of spec section 4. |
-| `prompts/_preamble.md` | Prepended to every prompt: the branch, the commit and the safety rules. `{{branch}}` there is the `BRANCH` constant in `flow.py`, passed in through `context()`. |
+| `prompts/_preamble.md` | Prepended to every prompt: the branch, the commit and the safety rules. |
 | `prompts/plan.md` | Read-only survey of the repositories; returns ordered tasks. |
 | `prompts/implement.md` | One task in one repository; returns `done`, `commit`, `summary`, `blockers`. |
 | `prompts/review.md` | Read-only review of everything that was committed. |
 | `prompts/fix.md` | One red CI build; used only when TeamCity is configured. |
-| `teamcity.py` | Forty lines of `urllib`: find a build by revision, poll it, report failed tests. |
+| `teamcity.py` | A short `urllib` helper: find a build by revision, poll it, report failed tests. |
 | `JANUS.md` | The goal, and after the first run the open gate, the decisions and the progress. |
 | `.gitignore` | Ignores the product clones (`*/`), keeps `prompts/`, `journals/` and `tests/`. |
 | `tests/` | The example's own tests; they are not copied into a goal folder. |
+
+`{{branch}}` in the preamble is the `BRANCH` constant at the top of `flow.py`, passed to every
+render through `context()`.
 
 ## Starting a goal folder from it
 
@@ -73,11 +76,26 @@ export JANUS_TEAMCITY_URL=https://teamcity.example.com
 export JANUS_TEAMCITY_TOKEN=<a token with read access>
 ```
 
-With both set, each task waits for the TeamCity build of its commit before the flow moves on,
-and a red build opens the fix loop. With either unset, `teamcity.configured()` is false and the
-flow skips both. `build_type` in a task is the TeamCity build type id, or the string `none`.
-`CI_TIMEOUT` at the top of `flow.py` (7200 s) is passed explicitly to `teamcity.wait_for_build`
-and is how long a single poll waits for a build to finish before it gives up.
+With both set, each task waits for the TeamCity build of its implement commit before the flow
+moves on. With either unset, `teamcity.configured()` is false and the flow skips the wait and the
+fix loop alike. `build_type` in a task is the TeamCity build type id, or the string `none`; a task
+whose `build_type` is `none` skips the wait even when TeamCity is configured, so a repository
+without a build does not hold the run up. `CI_TIMEOUT` at the top of `flow.py` (7200 s) is passed
+explicitly to `teamcity.wait_for_build` and is how long a single poll waits for a build to finish
+before it gives up.
+
+What the flow does with the verdict:
+
+- `SUCCESS`: the task is recorded as finished and the flow moves on.
+- `FAILURE`: the fix loop runs, up to three attempts, with the failed test names in the prompt.
+- `NOT_FOUND` or `TIMEOUT`: there is nothing for Codex to fix, because CI never gave a verdict, so
+  the flow opens the `ci/<id>/missing` decision instead of the fix loop and asks the human to
+  `skip` (keep the implement commit and move on) or `stop`.
+
+**A fix commit is not verified by CI.** The flow waits for the build of the *implement* commit
+only; when the fix loop commits, the run continues to the review and the merge gate without
+another TeamCity wait. That is deliberate: the human at the `merge` gate sees the branch and its
+builds. If you want the fix re-verified, add a second `step("ci/<id>/fix", ...)` to `flow.py`.
 
 **The token is not readable by Codex.** `teamcity.py` reads both variables once, at import, and
 removes `JANUS_TEAMCITY_TOKEN` from `os.environ` as it reads it, before any Codex process starts.
