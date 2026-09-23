@@ -8,7 +8,7 @@ output:
       objective: str
       build_type: str
 ---
-Plan the work. This step changes nothing: do not edit, create or delete any file, and do not
+Plan the work. This step is read-only: do not edit, create or delete any file, and do not
 create the branch yet.
 
 Every product repository is a sub-folder of the folder you were started in that is a Git

@@ -81,8 +81,8 @@ moves on. With either unset, `teamcity.configured()` is false and the flow skips
 fix loop alike. `build_type` in a task is the TeamCity build type id, or the string `none`; a task
 whose `build_type` is `none` skips the wait even when TeamCity is configured, so a repository
 without a build does not hold the run up. `CI_TIMEOUT` at the top of `flow.py` (7200 s) is passed
-explicitly to `teamcity.wait_for_build` and is how long a single poll waits for a build to finish
-before it gives up.
+explicitly to `teamcity.wait_for_build` and is the deadline for the whole wait: how long the poll
+loop keeps asking TeamCity for a verdict before it gives up with `TIMEOUT`.
 
 What the flow does with the verdict:
 
