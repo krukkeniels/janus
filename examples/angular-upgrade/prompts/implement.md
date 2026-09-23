@@ -12,6 +12,11 @@ Carry out this task in the repository you were started in:
     title:     {{task.title}}
     objective: {{task.objective}}
 
+Tasks already finished in this run (repo, title, commit), so that you know what the other
+repositories already produced. `[]` means this is the first task of the run:
+
+{{done_so_far}}
+
 What the previous attempt at this task reported is below. An empty block means this is the
 first attempt; otherwise continue from where it stopped and deal with what it reported.
 

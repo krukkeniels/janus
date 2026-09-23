@@ -44,7 +44,7 @@ for task in plan["tasks"]:
     key = "implement/%s" % task["id"]
     try:
         result = ralph("prompts/implement.md", until=lambda r: r["done"], max_iter=MAX_IMPLEMENT,
-                       key=key, cwd=task["repo"], task=task)
+                       key=key, cwd=task["repo"], task=task, done_so_far=finished)
     except Exhausted as exc:
         choice = decision(
             "Task %s is not done after %d attempts. Retry it, skip it, or stop the run?"
@@ -59,7 +59,8 @@ for task in plan["tasks"]:
             continue
         try:
             result = ralph("prompts/implement.md", until=lambda r: r["done"], max_iter=MAX_IMPLEMENT,
-                           key="%s/retry" % key, cwd=task["repo"], task=task)
+                           key="%s/retry" % key, cwd=task["repo"], task=task,
+                           done_so_far=finished)
         except Exhausted as exc:  # nothing was implemented, so there is no commit to record
             ask_after_exhausted("%s/retry" % key, exc, task)
             continue

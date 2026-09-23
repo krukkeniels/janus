@@ -235,3 +235,20 @@ def test_a_build_teamcity_cannot_find_opens_a_decision_instead_of_the_fix_loop(
     assert "a" * 40 in (goal_folder / "JANUS.md").read_text(encoding="utf-8")
     answer(goal_folder, "merged")
     assert run(goal_folder, monkeypatch) == 0
+
+
+def test_a_later_task_sees_what_the_earlier_tasks_finished(goal_folder, fake_codex, monkeypatch):
+    (goal_folder / "ui-kit").mkdir()
+    plan = {"summary": PLAN["summary"],
+            "tasks": [PLAN["tasks"][0],
+                      {"id": "ui-kit", "repo": "ui-kit", "title": "Upgrade ui-kit to Angular 16",
+                       "objective": "ui-kit is on Angular 15.2 and app depends on it.",
+                       "build_type": "none"}]}
+    second = {"done": True, "commit": "c" * 40, "summary": "ui-kit is on 16.", "blockers": []}
+    fake_codex.script([{"output": plan}, {"output": DONE}, {"output": second}, {"output": REVIEW_OK}])
+    run(goal_folder, monkeypatch)
+    answer(goal_folder, "yes")
+    assert run(goal_folder, monkeypatch) == 2
+    first_prompt, later_prompt = fake_codex.calls()[1]["prompt"], fake_codex.calls()[2]["prompt"]
+    assert "Tasks already finished in this run" in first_prompt and "[]" in first_prompt
+    assert "a" * 40 in later_prompt and "Upgrade app to Angular 16" in later_prompt
