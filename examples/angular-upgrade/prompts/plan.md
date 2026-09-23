@@ -11,14 +11,18 @@ output:
 Plan the work. This step changes nothing: do not edit, create or delete any file, and do not
 create the branch yet.
 
-Every product repository is a sub-folder of the folder you were started in. Ignore `prompts`,
-`journals`, `tests` and any folder whose name starts with a dot. For each repository, read
-`package.json`, `angular.json` and enough of the source to see what the goal needs there.
+Every product repository is a sub-folder of the folder you were started in that is a Git
+repository. Ignore any sub-folder that is not a Git repository (no `.git` inside), which rules
+out `prompts`, `journals`, `tests`, `__pycache__` and any folder whose name starts with a dot.
+For each repository, read `package.json`, `angular.json` and enough of the source to see what
+the goal needs there.
 
 Produce one task per repository, ordered so that a repository other repositories depend on
 comes first. For each task:
 
-- `id`: a short lowercase identifier, unique in this plan, safe in a file path (for example `ui-kit`).
+- `id`: the repository's sub-folder name, exactly as it is on disk, which must be safe in a file
+  path (for example `ui-kit`). Only if one repository needs more than one task, add a short
+  lowercase suffix after a dash (`ui-kit-styles`) so that every `id` in this plan is unique.
 - `repo`: the sub-folder name of that repository, exactly as it is on disk.
 - `title`: one line naming what the task changes.
 - `objective`: two to five sentences: where the repository stands now, what to change, and which

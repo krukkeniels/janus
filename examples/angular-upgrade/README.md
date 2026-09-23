@@ -29,7 +29,7 @@ and edited.
 ```bash
 cp -r examples/angular-upgrade ~/work/angular-16-upgrade
 cd ~/work/angular-16-upgrade
-rm -rf tests README.md
+rm -rf tests README.md __pycache__   # __pycache__ appears once the example's tests have been run
 cp /path/to/janus/janus.py .          # copied, not symlinked: the goal folder is self-contained
 git init -b main . && git add -A && git commit -m "goal folder"
 
