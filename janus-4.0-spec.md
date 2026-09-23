@@ -1,7 +1,7 @@
 # Janus 4.0
 ## A small durable flow engine for Codex
 
-**Status:** implementation specification, v0.1 (supersedes Janus 3.0 v0.2 after the design session on 2026-09-22)
+**Status:** implementation specification, v0.2 (v0.1 superseded Janus 3.0 after the design session on 2026-09-22; v0.2 adds section 14 on loops and reshapes the example around them, 2026-09-23)
 **Reference example:** upgrade an Angular application from 15 to 16, shipped as `examples/angular-upgrade/`.
 
 ### Why 4.0
@@ -12,7 +12,7 @@ Decisions made in that session, all binding here:
 
 | Question | Decision |
 |---|---|
-| How a flow is written | A Python file using a handful of Janus primitives. Loops are plain `for` and `while`. No DSL, no interpreter. |
+| How a flow is written | A Python file using a handful of Janus primitives. Loops are plain `for` and `while`, including loops that return to an earlier stage after a gate says no (section 14). No DSL, no interpreter. |
 | What a human gate does | Writes its question into `JANUS.md` and exits. The human answers in the file and runs again. Replay from the journal resumes at the gate. |
 | How Codex output reaches the flow | Each prompt file declares its `output` fields in YAML front matter. Janus builds the JSON schema; `codex()` returns a dict with those keys. |
 | What the engine knows about Git, Bitbucket, TeamCity | Nothing. Flows do that in prompts or in plain Python. |
@@ -225,55 +225,118 @@ Coverage required:
 9. Journal and `JANUS.md` are committed after each step; a failing push warns and continues.
 10. `reset` archives the journal and removes open gates.
 11. Duplicate live keys raise `JanusError`.
+12. A return loop (section 14): a `while` flow whose gate answer sends it back to an earlier stage re-executes only the new round's keys on the next run, a gate inside the second round resumes in the second round, and a finished loop replays without executing anything.
 
 About thirty tests.
 
 ## 10. The example: `examples/angular-upgrade/`
 
-Files: `flow.py`, `prompts/_preamble.md`, `prompts/plan.md`, `prompts/implement.md`, `prompts/review.md`, `prompts/fix.md`, `teamcity.py`, `JANUS.md` with a sample goal, `.gitignore`.
+Files: `flow.py`, `prompts/_preamble.md`, `prompts/plan.md`, `prompts/implement.md`, `prompts/review.md`, `prompts/fix.md`, `prompts/testplan.md`, `teamcity.py`, `JANUS.md` with a sample goal, `.gitignore`, `README.md`.
 
-The flow, in outline:
+The example is the flow drawn on 2026-09-23 as the upgrade practice: Codex plans and upgrades, CI verifies the exact commit, a fresh Codex session reviews the diff, a human reviews, a human merges, Codex proposes a manual test strategy, QA validates, and every "no" along the way sends the work back to Codex with the findings. Each Angular major is one pass through that; the flow moves to the next major after a direction check. In Janus terms it is three nested loops (section 14): `for target in MAJORS` outside, `while True` rounds inside a major, and the task and CI loops inside a round.
 
 ```python
-from janus import goal, context, codex, ralph, human_gate, decision, ai_gate, step, log, Exhausted
+from janus import goal, context, codex, ralph, human_gate, decision, step, log, Exhausted
 import teamcity
 
-context(branch="ai/angular-15-to-16")
+MAJORS = [16]           # the majors to reach, in order; [16, 17, 18] walks three upgrades in one goal
+MAX_ROUNDS = 3          # rounds per major before the flow asks whether to keep going
+MAX_IMPLEMENT = 5       # ralph iterations of one implement task
+MAX_CI = 3              # CI verdicts one task may wait for in one round: implement, then each fix
+MAX_FIX = 3             # ralph iterations of one fix
 
-plan = codex("prompts/plan.md")                       # reads every repo, proposes ordered tasks
-human_gate("Approve this plan? Edit prompts or the goal and reset if not.", key="approve-plan", show=plan)
+for target in MAJORS:
+    prefix = f"v{target}"
+    context(branch=f"ai/angular-{target - 1}-to-{target}", target=target)
+    plan = codex("prompts/plan.md", key=f"{prefix}/plan")
+    human_gate("Approve this plan?", key=f"{prefix}/approve-plan", show=...)
 
-for task in plan["tasks"]:
-    key = f"implement/{task['id']}"
-    try:
-        result = ralph("prompts/implement.md", until=lambda r: r["done"], max_iter=5, key=key, task=task)
-    except Exhausted as e:
-        choice = decision(f"Task {task['id']} not done after 5 attempts.", ["retry", "skip", "stop"],
-                          key=f"{key}/exhausted", show=e.last)
-        if choice == "stop":
-            raise SystemExit(1)
-        if choice == "skip":
+    findings = ""       # why the previous round came back: review reasons, human findings, QA findings, blockers
+    allowed = MAX_ROUNDS
+    rnd = 0
+    while True:
+        rnd += 1
+        if rnd > allowed:
+            if decision(f"{rnd - 1} rounds did not finish Angular {target}. Keep going?", ["retry", "stop"],
+                        key=f"{prefix}/r{rnd}/blocked", show=findings) == "stop":
+                raise SystemExit(1)
+            allowed += MAX_ROUNDS
+        k = f"{prefix}/r{rnd}"
+
+        finished = []
+        for task in plan["tasks"]:
+            # implement: a ralph; Exhausted -> decision retry (next round, blockers become findings) | skip | stop
+            result = ralph("prompts/implement.md", until=lambda r: r["done"], max_iter=MAX_IMPLEMENT,
+                           key=f"{k}/implement/{task['id']}", cwd=task["repo"], task=task,
+                           done_so_far=finished, findings=findings)
+            # CI return loop: wait for the exact commit; a red build gets a fix and the fix commit is waited for too
+            if teamcity.configured() and task["build_type"] != "none":
+                for n in range(1, MAX_CI + 1):
+                    build = step(f"{k}/ci/{task['id']}/{n}",
+                                 lambda: teamcity.wait_for_build(task["build_type"], result["commit"]))
+                    if build["status"] == "SUCCESS":
+                        break
+                    if build["status"] in ("NOT_FOUND", "TIMEOUT"):
+                        ...  # decision skip | stop, keyed f"{k}/ci/{task['id']}/{n}/missing"; nothing for Codex to fix
+                        break
+                    result = ralph("prompts/fix.md", until=lambda r: r["done"], max_iter=MAX_FIX,
+                                   key=f"{k}/fix/{task['id']}/{n}", cwd=task["repo"], task=task, build=build)
+                else:
+                    ...  # MAX_CI verdicts and still red: the blocker report, a decision keyed f"{k}/ci/{task['id']}/red"
+            finished.append({...})
+
+        review = codex("prompts/review.md", key=f"{k}/review", tasks=finished)   # declares passed and reasons itself
+        if not review["passed"]:
+            findings = "AI review of round %d:\n%s" % (rnd, "\n".join(review["reasons"]))
+            log(f"round {rnd}: AI review sent the work back")
             continue
-        result = ralph("prompts/implement.md", until=lambda r: r["done"], max_iter=5, key=f"{key}/retry", task=task)
-    if teamcity.configured():
-        build = step(f"ci/{task['id']}", lambda: teamcity.wait_for_build(task["build_type"], result["commit"]))
-        if build["status"] != "SUCCESS":
-            ralph("prompts/fix.md", until=lambda r: r["done"], max_iter=3, key=f"fix/{task['id']}", build=build, task=task)
-    log(f"task {task['id']} done: {result['summary']}")
+        answer = human_gate("Review the pull requests. Answer 'approved', or write your findings.",
+                            key=f"{k}/human-review", show=finished)
+        if answer.strip().lower() != "approved":
+            findings = f"Human review of round {rnd}:\n{answer}"
+            continue
+        human_gate("Merge the pull requests to the release branch, then answer 'merged'.", key=f"{k}/merge")
+        testplan = codex("prompts/testplan.md", key=f"{k}/testplan", tasks=finished)  # read-only
+        answer = human_gate("QA: run the test plan on the release branch. Answer 'passed', or write your findings.",
+                            key=f"{k}/qa", show=testplan["steps"])
+        if answer.strip().lower() != "passed":
+            findings = f"QA of round {rnd}:\n{answer}"
+            continue
+        log(f"Angular {target} reached in {rnd} round(s)")
+        break
 
-if not ai_gate("prompts/review.md", key="review"):
-    human_gate("AI review found issues; see journal.", key="review-findings")
-human_gate("PRs are ready. Review, merge, then answer 'merged'.", key="merge")
+    if target != MAJORS[-1] and decision("Direction check: continue to the next major?", ["next", "stop"],
+                                         key=f"{prefix}/direction") == "stop":
+        break
 ```
+
+What the diagram's boxes became:
+
+| Diagram | Flow |
+|---|---|
+| Run Controller: start autonomous run | `python janus.py run`; every rerun after a gate is the same run resumed |
+| Codex: plan, upgrade and fix | `{prefix}/plan` once per major; `{k}/implement/<id>/<n>` once per round, with `{{findings}}` from the round before |
+| TeamCity: green for the exact commit? | `{k}/ci/<id>/<n>`, a `step()` around `teamcity.wait_for_build`, keyed per verdict so a fix commit is verified too |
+| Can Codex resolve it within run limits? | `MAX_FIX` iterations of `{k}/fix/<id>/<n>`, at most `MAX_CI` verdicts; past that, the blocker report |
+| Run Controller: stop and produce blocker report | a `decision` with the last result as `show`: `retry` (next round, blockers become findings), `skip`, `stop` |
+| Fresh Codex session: review full diff | `{k}/review`, a `codex()` whose prompt declares `passed` and `reasons` so the flow can hand the reasons back |
+| Developer: human code review | `{k}/human-review`, a `human_gate`; `approved` moves on, anything else is the findings of the next round |
+| Authorized human: merge | `{k}/merge` |
+| Codex: propose manual test strategy | `{k}/testplan`, read-only, shown at the QA gate |
+| QA: validate on release branch | `{k}/qa`, a `human_gate`; `passed` ends the major, anything else is the findings of the next round |
+| Team: fix tooling; AI lead: update playbook, replan | done by humans while the `blocked` or `exhausted` decision is open; `retry` starts the next round |
+| Architect: direction check | `{prefix}/direction`, a `decision` between majors |
+| AI lead: review metrics, update live playbook | outside the flow; `journal.yaml` and `## Progress` are the metrics |
 
 `prompts/_preamble.md` carries the rules that Janus 3.0 had in its engine: work only on `{{branch}}`, commit and push your own work and report the commit SHA, never merge or publish a release, never weaken or skip tests, report blockers instead of guessing. `teamcity.py` is about forty lines of `urllib`: find the build for a commit, poll until finished, return status, URL and a failure excerpt. It reads its URL and token from the environment and is used only when those are set.
 
-The example is tried on the throwaway Angular 15 application with a local bare remote and real Codex, without TeamCity. The trial report goes into the example's `README.md`.
+The example is tried on the throwaway Angular 15 application with a local bare remote and real Codex, without TeamCity. The trial report goes into the example's `README.md`. The slice 3 trial answers the human review of round 1 with a finding, so that round 2 runs with real Codex and the return loop is exercised end to end.
 
 ## 11. Slices
 
 1. **Engine.** `janus.py`, tests, `status`, `reset`. Verified by the test suite and by running a tiny flow with a fake `codex`.
 2. **Example and trial.** The example folder, the trial on the throwaway app, the README. This slice may change the engine; if the example needs something the primitives cannot express, the engine is wrong, not the example.
+3. **Loops.** Section 14, the engine test of coverage item 12, the example reshaped into the loops of section 10, and a second trial that goes through round 2. Same rule as slice 2: the engine changes only if a loop cannot be expressed without it. Writing the section showed none is needed: a return loop with a gate in its second round was run by hand on 2026-09-23 with the slice 2 engine and resumed correctly.
 
 ## 12. Acceptance criteria
 
@@ -285,7 +348,58 @@ The example is tried on the throwaway Angular 15 application with a local bare r
 6. `janus.py` contains no reference to Git branches, pull requests, TeamCity, Bitbucket or Angular, apart from committing its own two files.
 7. The Angular example runs on the throwaway app with real Codex through plan, approval gate, implementation loop and review gate.
 8. `janus.py` stays one file with only the standard library and PyYAML as imports.
+9. A round of the Angular example is sent back by a human review answer, round 2 runs with real Codex under `r2/` keys, the second run of the finished flow executes nothing, and every earlier round stays in the journal untouched.
 
 ## 13. Deliberate trade-off
 
 Janus 4.0 gives the flow author full Python and asks in return that the flow be deterministic in its step keys. The engine does not protect against a flow that forgets `step()` around a side effect, uses a changing default key in a loop, or lets Codex commit to the wrong branch. Those are visible in `flow.py` and the prompts, which is where they can be fixed. Engine features are added only after a real flow shows that prompts and Python cannot express something safely.
+
+## 14. Loops and return loops
+
+Every loop in a flow is ordinary Python. The engine has no loop primitive and needs none; what it asks for is that every step inside a loop has a key that names its iteration. These are the patterns, from the simplest to the one the example is built on.
+
+**Bounded loop.** A `for` over a known list or range, with the index or the item's id in the key.
+
+```python
+for task in plan["tasks"]:
+    codex("prompts/implement.md", key=f"implement/{task['id']}", task=task)
+for n in range(1, 4):
+    step(f"ci/{n}", lambda: teamcity.wait_for_build(...))
+```
+
+**Ralph loop.** The bounded loop the engine provides for "call Codex until its result satisfies a predicate": `ralph()` keys its iterations `<key>/<n>` and hands each one the previous result as `{{previous}}`.
+
+**Return loop.** The diagram shape "go back to Codex when a later check says no". It is a `while True` around the whole stretch that may be repeated, with a round counter, and every key inside the body carries the round: `f"r{rnd}/..."`. A checkpoint that fails records why in a variable, `findings`, and `continue`s; a checkpoint that passes falls through; the end of the body `break`s.
+
+```python
+findings = ""                   # a string, empty in the first round, like {{previous}} in a ralph
+rnd = 0
+while True:
+    rnd += 1
+    k = f"r{rnd}"
+    work = ralph("prompts/implement.md", until=lambda r: r["done"], max_iter=5, key=f"{k}/implement",
+                 findings=findings)
+    review = codex("prompts/review.md", key=f"{k}/review", commit=work["commit"])
+    if not review["passed"]:
+        findings = "\n".join(review["reasons"])
+        continue
+    answer = human_gate("Approve, or write your findings.", key=f"{k}/human-review", show=work)
+    if answer.strip().lower() != "approved":
+        findings = answer
+        continue
+    break
+```
+
+Why this works with replay: `run` executes the flow from the top every time. Round 1's steps are `done` and its gate is `answered`, so they return their stored results without executing; the flow takes the same branches it took last time, arrives at round 2 with the same `findings`, and the first key it meets that is not in the journal is the step that runs. A gate inside round 2 opens, exits with code 2, and the next run replays rounds 1 and 2 up to that gate. The round counter is never read from the journal; it is recomputed by the flow from the replayed answers, which is what keeps the keys deterministic (section 5).
+
+**Feeding the reason back.** The next round's Codex must know why the last one came back. Pass it as a call variable and reference it in the prompt (`{{findings}}`), the way `{{previous}}` works inside a ralph. A `human_gate` answer is free text and is the natural carrier: one gate serves both as the approval and as the findings box, the flow only compares the answer with the pass word. When the check is Codex's own, declare `passed` and `reasons` in the prompt's `output` and call `codex()` rather than `ai_gate()`, so the reasons come back to the flow and not only into the journal.
+
+**Bounding a return loop.** `while True` needs an exit the flow controls. Count the rounds and, past the limit, open a `decision` keyed with the round (`f"r{rnd}/blocked"`) that offers `retry` or `stop`; `retry` raises the limit and lets the loop go on, so the keys of the rounds that follow stay fresh. Never reset the counter to reuse `r1`: those keys are `done` and would replay.
+
+**The blocker report.** When a ralph gives up, `Exhausted.last` is the report. Catch it and open a `decision` with the report as `show`. `retry` ends the round and starts the next one with the blockers as `findings`; `skip` keeps what was committed and continues the round; `stop` raises `SystemExit(1)`. The human does the tooling or access work while the gate is open and answers when it is done. `reset` is not the way back: it archives the journal, and every finished round with it.
+
+**Nested loops.** Loops compose by prefixing keys: a major, a round, a task and a ralph iteration give `v16/r2/implement/ui-kit/3`. Any depth is fine; the journal is a flat mapping and the keys are strings.
+
+**Two rules.** Every key in a loop body carries every enclosing loop's counter or id, and the flow derives those counters from its own control flow, never from the journal, the clock or a random source. Break either and a later run replays the wrong step under a reused key, silently.
+
+**What is deliberately not there.** No journal compaction: a long loop makes a long journal, and `status` shows the last five steps. No loop primitive: the day a flow needs one that `while` cannot express is the day to add it, as section 13 says.
