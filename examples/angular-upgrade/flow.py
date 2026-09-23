@@ -1,13 +1,16 @@
 """Upgrade every Angular application in this folder, one repository at a time.
 
-Plan with Codex, let a human approve the plan, implement each task in a ralph loop, let Codex
-review the result and let the human merge. Every step has an explicit key, so editing this file
-does not shift the keys of finished steps.
+Plan with Codex, let a human approve the plan, implement each task in a ralph loop, wait for
+TeamCity when it is configured, let Codex review the result and let the human merge. Every step
+has an explicit key, so editing this file does not shift the keys of finished steps.
 """
-from janus import Exhausted, ai_gate, codex, context, decision, human_gate, log, ralph
+from janus import Exhausted, ai_gate, codex, context, decision, human_gate, log, ralph, step
+
+import teamcity
 
 BRANCH = "ai/angular-15-to-16"
 MAX_IMPLEMENT = 5
+MAX_FIX = 3
 
 context(branch=BRANCH)
 
@@ -40,6 +43,13 @@ for task in plan["tasks"]:
             continue
         result = ralph("prompts/implement.md", until=lambda r: r["done"], max_iter=MAX_IMPLEMENT,
                        key="%s/retry" % key, cwd=task["repo"], task=task)
+    if teamcity.configured():
+        build = step("ci/%s" % task["id"],
+                     lambda: teamcity.wait_for_build(task["build_type"], result["commit"]))
+        log("task %s build %s: %s" % (task["id"], build["status"], build["url"]))
+        if build["status"] != "SUCCESS":
+            result = ralph("prompts/fix.md", until=lambda r: r["done"], max_iter=MAX_FIX,
+                           key="fix/%s" % task["id"], cwd=task["repo"], task=task, build=build)
     finished.append({"id": task["id"], "repo": task["repo"], "title": task["title"],
                      "commit": result["commit"]})
     log("task %s done: %s" % (task["id"], result["summary"]))

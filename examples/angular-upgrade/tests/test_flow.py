@@ -101,3 +101,33 @@ def test_stop_at_the_exhausted_decision_ends_the_run_with_exit_1(goal_folder, fa
     steps = journal_of(goal_folder)["steps"]
     assert steps["implement/app/exhausted"]["answer"] == "stop"
     assert "review" not in steps
+
+
+def test_a_successful_teamcity_build_is_journaled_and_no_fix_loop_runs(
+        goal_folder, fake_codex, teamcity_server, monkeypatch):
+    fake_codex.script([{"output": PLAN}, {"output": DONE}, {"output": REVIEW_OK}])
+    teamcity_server.serve([{"build": [dict(BUILD, status="SUCCESS")]}])
+    run(goal_folder, monkeypatch)
+    answer(goal_folder, "yes")
+    assert run(goal_folder, monkeypatch) == 2
+    steps = journal_of(goal_folder)["steps"]
+    assert steps["ci/app"]["result"] == {"status": "SUCCESS", "url": "http://tc/viewLog.html?buildId=42",
+                                         "excerpt": ""}
+    assert "fix/app/1" not in steps
+    assert "revision%3A%28version%3A" + "a" * 40 in teamcity_server.requests()[0]["path"]
+
+
+def test_a_failing_teamcity_build_runs_the_fix_loop_with_the_failed_tests(
+        goal_folder, fake_codex, teamcity_server, monkeypatch):
+    fake_codex.script([{"output": PLAN}, {"output": DONE}, {"output": FIXED}, {"output": REVIEW_OK}])
+    teamcity_server.serve([{"build": [dict(BUILD, status="FAILURE")]},
+                           {"testOccurrence": [{"name": "AppComponent should render title"}]}])
+    run(goal_folder, monkeypatch)
+    answer(goal_folder, "yes")
+    assert run(goal_folder, monkeypatch) == 2
+    steps = journal_of(goal_folder)["steps"]
+    assert steps["ci/app"]["result"]["status"] == "FAILURE"
+    assert steps["fix/app/1"]["result"]["commit"] == "b" * 40
+    fix_prompt = fake_codex.calls()[2]["prompt"]
+    assert "AppComponent should render title" in fix_prompt and "http://tc/viewLog.html?buildId=42" in fix_prompt
+    assert "b" * 40 in (goal_folder / "JANUS.md").read_text(encoding="utf-8")
