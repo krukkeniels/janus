@@ -62,8 +62,8 @@ for task in plan["tasks"]:
             result = ralph("prompts/implement.md", until=lambda r: r["done"], max_iter=MAX_IMPLEMENT,
                            key="%s/retry" % key, cwd=task["repo"], task=task,
                            done_so_far=finished)
-        except Exhausted as exc:  # nothing was implemented, so there is no commit to record
-            ask_after_exhausted("%s/retry" % key, exc, task)
+        except Exhausted as retry_exc:  # nothing was implemented, so there is no commit to record
+            ask_after_exhausted("%s/retry" % key, retry_exc, task)
             continue
     if teamcity.configured() and task["build_type"] != "none":
         build = step("ci/%s" % task["id"],
@@ -84,8 +84,8 @@ for task in plan["tasks"]:
             try:
                 result = ralph("prompts/fix.md", until=lambda r: r["done"], max_iter=MAX_FIX,
                                key="fix/%s" % task["id"], cwd=task["repo"], task=task, build=build)
-            except Exhausted as exc:  # `skip` keeps the implement commit, red build and all
-                ask_after_exhausted("fix/%s" % task["id"], exc, task)
+            except Exhausted as fix_exc:  # `skip` keeps the implement commit, red build and all
+                ask_after_exhausted("fix/%s" % task["id"], fix_exc, task)
     finished.append({"id": task["id"], "repo": task["repo"], "title": task["title"],
                      "commit": result["commit"]})
     log("task %s done: %s" % (task["id"], result["summary"]))

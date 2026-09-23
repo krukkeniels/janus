@@ -1,6 +1,7 @@
 """TeamCity lookup for the Angular upgrade flow. This is flow code, not engine code: Janus itself
-knows nothing about CI. The URL and the token are read from the environment, so the engine never
-holds a secret; the flow calls it only when ``configured()`` is true."""
+knows nothing about CI. The URL and the token are read from the environment at import, and the
+token is taken out of it again so that no `codex exec` inherits it; the engine never holds a
+secret, and the flow calls this module only when ``configured()`` is true."""
 import json
 import os
 import time
