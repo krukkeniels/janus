@@ -503,3 +503,15 @@ def test_retry_at_the_fix_exhausted_decision_starts_round_2_with_the_blockers_as
     round_2 = fake_codex.calls()[5]["prompt"]
     assert "Task app gave up at fix:\napp.component.ts does not compile" in round_2
     assert path_of(goal_folder)[8:11] == [("fix", "gave_up"), ("fix_exhausted", "retry"), ("start_round", "go")]
+
+
+def test_graph_prints_the_map_the_readme_embeds(goal_folder, monkeypatch, capsys):
+    readme = (EXAMPLE / "README.md").read_text(encoding="utf-8")
+    assert readme.count("```mermaid\n") == 1
+    block = readme.split("```mermaid\n", 1)[1].split("```", 1)[0]
+    monkeypatch.chdir(goal_folder)
+    capsys.readouterr()
+    assert janus.main(["graph"]) == 0
+    assert capsys.readouterr().out == block
+    assert block.startswith("flowchart LR\n  start --> next_major\n") and block.endswith("  END([END])\n")
+    assert not (goal_folder / "journal.yaml").exists()

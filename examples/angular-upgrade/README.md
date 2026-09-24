@@ -1,11 +1,12 @@
 # Angular upgrade, one major at a time
 
-The reference flow of Janus 4.0 (spec sections 10 and 14). It upgrades one or more Angular
-applications, each a Git clone in a sub-folder of the goal folder, through one major at a time:
-Codex plans and upgrades, TeamCity verifies the exact commit when it is configured, a fresh Codex
-reviews the diff, a human reviews, a human merges, Codex proposes a manual test plan and QA
-validates. Every "no" along the way sends the work back to Codex with the findings, as a new round
-of the same major; the flow moves to the next major after a direction check.
+The reference flow of Janus 4.0 v0.3 (spec sections 10 and 14), written as a node flow. It
+upgrades one or more Angular applications, each a Git clone in a sub-folder of the goal folder,
+through one major at a time: Codex plans and upgrades, TeamCity verifies the exact commit when it
+is configured, a fresh Codex reviews the diff, a human reviews, a human merges, Codex proposes a
+manual test plan and QA validates. Every "no" along the way is an edge back to `start_round`: the
+work goes back to Codex with the findings, as a new round of the same major, and the flow moves to
+the next major after a direction check.
 
 Nothing here is engine code. `janus.py` knows nothing about Angular, Git branches or TeamCity;
 all of that lives in the five step prompts and the preamble, in `flow.py` and in `teamcity.py`,
@@ -15,7 +16,7 @@ where it can be read and edited.
 
 | File | What it is |
 |---|---|
-| `flow.py` | The flow: three nested loops in plain Python over the primitives of spec section 4. |
+| `flow.py` | The flow: 21 `@node` functions over the primitives of spec section 4; `graph` draws them. |
 | `prompts/_preamble.md` | Prepended to every prompt: the branch, the commit and the safety rules. |
 | `prompts/plan.md` | Read-only survey of the repositories for one target major; returns ordered tasks. |
 | `prompts/implement.md` | One task in one repository; sees `{{findings}}` of the round before. |
@@ -27,8 +28,8 @@ where it can be read and edited.
 | `.gitignore` | Ignores the product clones (`*/`), keeps `prompts/`, `journals/` and `tests/`. |
 | `tests/` | The example's own tests; they are not copied into a goal folder. |
 
-`{{branch}}` and `{{target}}` come from `context(branch=..., target=...)` at the top of the major
-loop in `flow.py`: the branch of Angular 16 is `ai/angular-15-to-16`, the branch of 17 is
+`{{branch}}` and `{{target}}` come from `context(branch=..., target=...)` in the `next_major` node
+of `flow.py`: the branch of Angular 16 is `ai/angular-15-to-16`, the branch of 17 is
 `ai/angular-16-to-17`, and the preamble follows.
 
 ## Starting a goal folder from it
@@ -45,75 +46,148 @@ git clone <repo-url> shell
 
 $EDITOR JANUS.md                      # edit "# Goal": the repositories, the checks, the definition of done
 $EDITOR flow.py                       # edit MAJORS at the top: [16] for one upgrade, [16, 17] for two
+python3 janus.py graph                # print the map below; every edge you expect must be on it
 python3 janus.py run
 ```
 
 `run` stops at the first gate and exits with code 2. Answer it after `answer:` in `JANUS.md`
-and run again; `python3 janus.py status` shows the open gate and the last five steps. Every
-finished step is replayed from `journal.yaml`, so answering a gate never repeats work.
+and run again; `python3 janus.py status` shows the current node visit, the open gate and the last
+five steps. Every finished step is replayed from `journal.yaml`, so answering a gate never repeats
+work. When `janus_ui.py` is present next to `janus.py` in the Janus repository, copy it too:
+`python3 janus_ui.py` from the goal folder shows the run live in the browser, the map with the
+visited nodes coloured, the current gate and every step.
 
-## The steps it journals
+## The nodes
 
-Every key carries the major (`v16`), the round (`r1`) and, inside the task loop, the task id and
-the ralph iteration. With one repository `app` and no TeamCity, a round that passes every check
-journals eight steps: `v16/plan`, `v16/approve-plan`, `v16/r1/implement/app/1`, `v16/r1/review`,
-`v16/r1/human-review`, `v16/r1/merge`, `v16/r1/testplan`, `v16/r1/qa`.
+Each stage of the flow is one function in `flow.py`, decorated with `@node(next=...)` that says
+where it can go. The engine walks them from `start`, prefixes every step's key with the node and
+its visit count (`implement#2/implement#1/1` is the ralph of the second visit of `implement`),
+records the map under `graph:` and every visit under `path:` in `journal.yaml`, and checks each
+visit against that path on replay. With one repository `app` and no TeamCity, a round that passes
+every check journals eight steps: `plan#1/plan#1`, `approve#1/gate#1`, `implement#1/implement#1/1`,
+`review#1/review#1`, `human_review#1/gate#1`, `merge#1/gate#1`, `testplan#1/testplan#1`,
+`qa#1/gate#1`.
 
-| Key | Kind | What it does |
+```mermaid
+flowchart LR
+  start --> next_major
+  next_major --> plan
+  plan --> approve
+  approve --> start_round
+  start_round -- go --> next_task
+  start_round -- too_many --> blocked
+  blocked -- retry --> start_round
+  blocked -- stop --> END
+  next_task -- task --> implement
+  next_task -- all_done --> review
+  implement -- ci --> ci
+  implement -- done --> task_done
+  implement -- gave_up --> implement_exhausted
+  implement_exhausted -- retry --> start_round
+  implement_exhausted -- skip --> next_task
+  implement_exhausted -- stop --> END
+  ci -- green --> task_done
+  ci -- red --> fix
+  ci -- no_verdict --> ci_missing
+  ci -- still_red --> ci_red
+  ci_missing -- skip --> task_done
+  ci_missing -- stop --> END
+  fix -- ci --> ci
+  fix -- gave_up --> fix_exhausted
+  fix_exhausted -- retry --> start_round
+  fix_exhausted -- skip --> task_done
+  fix_exhausted -- stop --> END
+  ci_red -- retry --> start_round
+  ci_red -- skip --> task_done
+  ci_red -- stop --> END
+  task_done --> next_task
+  review -- passed --> human_review
+  review -- failed --> start_round
+  human_review -- approved --> merge
+  human_review -- findings --> start_round
+  merge --> testplan
+  testplan --> qa
+  qa -- passed --> major_done
+  qa -- findings --> start_round
+  major_done -- next --> next_major
+  major_done -- stop --> END
+  major_done -- all_done --> END
+  END([END])
+```
+
+That block is the output of `python janus.py graph`, and the example's tests assert that it is.
+
+| Node | `next` | What it does |
 |---|---|---|
-| `v<t>/plan` | codex | Reads the repositories and proposes ordered tasks for Angular `<t>`. |
-| `v<t>/approve-plan` | gate | The human approves the plan, or resets and edits it. |
-| `v<t>/r<n>/implement/<id>/<i>` | codex | Ralph iteration `i` of task `<id>` in round `n`, up to `MAX_IMPLEMENT`. |
-| `v<t>/r<n>/implement/<id>/exhausted` | decision | `retry` (next round, blockers as findings), `skip` or `stop`. |
-| `v<t>/r<n>/ci/<id>/<v>` | step | TeamCity verdict `v` of the task's latest commit, up to `MAX_CI`. |
-| `v<t>/r<n>/ci/<id>/<v>/missing` | decision | `skip` or `stop`, when verdict `v` is `NOT_FOUND` or `TIMEOUT`. |
-| `v<t>/r<n>/fix/<id>/<v>/<i>` | codex | Fix iteration `i` after red verdict `v`, up to `MAX_FIX`. |
-| `v<t>/r<n>/fix/<id>/<v>/exhausted` | decision | `retry`, `skip` (keep the commits, build red) or `stop`. |
-| `v<t>/r<n>/ci/<id>/red` | decision | `retry`, `skip` or `stop`, when `MAX_CI` verdicts were all red. |
-| `v<t>/r<n>/review` | codex | A fresh Codex reviews the round; `passed: false` sends it back, `reasons` as findings. |
-| `v<t>/r<n>/human-review` | gate | `approved` moves on; any other answer is the findings of the next round. |
-| `v<t>/r<n>/merge` | gate | The human merges and answers `merged`. |
-| `v<t>/r<n>/testplan` | codex | Codex proposes the manual test plan, shown at the QA gate. |
-| `v<t>/r<n>/qa` | gate | `passed` ends the major; any other answer is the findings of the next round. |
-| `v<t>/r<n>/blocked` | decision | Past `MAX_ROUNDS` rounds: `retry` allows `MAX_ROUNDS` more, `stop` exits 1. |
-| `v<t>/direction` | decision | Between majors: `next` or `stop`. Absent after the last major. |
+| `start` | `next_major` | `s.majors = list(MAJORS)`, `s.major_index = -1`. |
+| `next_major` | `plan` | Steps to the next major: sets `s.target`, `context(branch=..., target=...)`, `round = 0`, `allowed = MAX_ROUNDS`, `findings = ""`. |
+| `plan` | `approve` | `codex("prompts/plan.md")`: reads the repositories and proposes ordered tasks for Angular `<t>`. |
+| `approve` | `start_round` | `human_gate` with the plan summary and one line per task; the human answers `yes`, or resets and edits. |
+| `start_round` | `go`, `too_many` | `too_many` when the round allowance is used up; otherwise `round += 1`, `task_index = 0`, `finished = []`. |
+| `blocked` | `retry`, `stop` | `decision` past `MAX_ROUNDS` rounds, with the last findings shown: `retry` allows `MAX_ROUNDS` more, `stop` ends the flow. |
+| `next_task` | `task`, `all_done` | Picks `s.task = tasks[task_index]`, or goes to the review when none is left. |
+| `implement` | `ci`, `done`, `gave_up` | Ralph of `implement.md` (up to `MAX_IMPLEMENT`) with the task, `done_so_far` and `findings`; `ci` when TeamCity is configured and `build_type` is not `none`. |
+| `implement_exhausted` | `retry`, `skip`, `stop` | The blocker report: `retry` (next round, blockers as findings), `skip` (the task is left out of the round), `stop`. |
+| `ci` | `green`, `red`, `no_verdict`, `still_red` | `step("wait", ...)` around `teamcity.wait_for_build` for the task's latest commit; `still_red` after `MAX_CI` red verdicts. |
+| `ci_missing` | `skip`, `stop` | `decision` when the verdict is `NOT_FOUND` or `TIMEOUT`: nothing for Codex to fix. |
+| `fix` | `ci`, `gave_up` | Ralph of `fix.md` (up to `MAX_FIX`) with the failed build; its commit goes back to `ci`. |
+| `fix_exhausted` | `retry`, `skip`, `stop` | The blocker report of a fix: `skip` keeps the commits, red build and all. |
+| `ci_red` | `retry`, `skip`, `stop` | `decision` when `MAX_CI` verdicts were all red: `retry` makes the failure the findings, `skip` keeps the commits. |
+| `task_done` | `next_task` | Appends the task's record (id, repo, title, commit) to `finished`, logs it, `task_index += 1`. |
+| `review` | `passed`, `failed` | `codex("prompts/review.md")` with the finished tasks and the round's findings; `failed` makes the reasons the next findings. |
+| `human_review` | `approved`, `findings` | `human_gate` with the review summary and the task lines; anything but `approved` is the next findings. |
+| `merge` | `testplan` | `human_gate`: the human merges and answers `merged`. |
+| `testplan` | `qa` | `codex("prompts/testplan.md")`: the manual test plan, shown at the QA gate. |
+| `qa` | `passed`, `findings` | `human_gate`; anything but `passed` is the next findings. |
+| `major_done` | `next`, `stop`, `all_done` | Logs "Angular N reached in M round(s)"; `all_done` after the last major, else the direction `decision`. |
 
-The keys are explicit everywhere in `flow.py`, never the engine's per-run default, and every one
-carries every enclosing loop's counter or id. That is what lets the flow branch on a gate answer,
-or come back for another round, without shifting the keys of finished steps.
+The keys are automatic: a node's steps are keyed by the primitive's default (`plan#1`,
+`implement#1/<n>`, `gate#1`, `decision#1`, `wait`) under the node's visit, so `flow.py` passes no
+`key=` anywhere. A visit count is per node, not per round: the human review of a round 2 that
+follows a round the AI review sent back is `human_review#1/gate#1`, because it is the first time
+that node runs; the round is on `s.round`, in the gate question and in the findings strings.
+`stop` at any decision ends the flow through `END` with exit 0; the `## Progress` line says who
+stopped it.
 
-## Loops
+## How a round comes back
 
-The flow is three nested loops of spec section 14: `for target in MAJORS` outside, `while True`
-rounds inside a major, and the task loop with its CI return loop inside a round. Rounds are the
-return loop of the diagram: the stretch from the first implement to QA may be repeated, and every
-checkpoint that says no ends the round and records why in `findings`.
+A round is the stretch from `start_round` to `qa`. Four edges lead back to `start_round`, and each
+one first stores why in `s.findings`, a string, and logs `round N of Angular T came back: ...`:
 
-How a round comes back:
+1. `review -- failed`: the AI review returned `passed: false`; `findings` is
+   `AI review of round N:\n<reasons>`.
+2. `human_review -- findings`: the answer was not `approved`; `findings` is
+   `Human review of round N:\n<answer>`.
+3. `qa -- findings`: the answer was not `passed`; `findings` is `QA of round N:\n<answer>`.
+4. `retry` at a blocker report, `implement_exhausted`, `fix_exhausted` or `ci_red`: `findings` is
+   `Task <id> gave up at implement:\n<blockers>` or `Task <id> is still red after 3 CI verdicts
+   (<url>):\n<excerpt>`.
 
-1. A checkpoint fails: the AI review returns `passed: false`, the human review gets an answer other
-   than `approved`, QA gets an answer other than `passed`, or the human answers `retry` at a blocker
-   report (`.../exhausted`, `.../ci/<id>/red`). The flow builds `findings`, a string such as
-   `Human review of round 1:\n<the answer>`, and starts round 2 without stopping, unless a gate
-   opened, in which case round 2 starts on the next `run`.
-2. Round 2 replays nothing of its own, because none of its keys is in the journal yet; round 1's
-   steps are `done` and its gates `answered`, so `run` re-executes the flow from the top, takes the
-   same branches, arrives at round 2 with the same `findings` and runs the first key it does not
-   know: `v16/r2/implement/<id>/1`. `{{findings}}` in `implement.md` is that string; it is the
-   empty string in round 1, like `{{previous}}` in the first ralph iteration.
-3. A gate inside round 2 opens and exits with code 2; the next `run` replays rounds 1 and 2 up to
-   that gate and continues from it. The round counter is never read from the journal; the flow
-   recomputes it from the replayed answers, which is what keeps the keys deterministic.
-4. After `MAX_ROUNDS` rounds the flow opens `v16/r4/blocked` with the last findings as `show`.
-   `retry` raises the allowance by `MAX_ROUNDS` and the loop goes on with `r4`; the counter is
-   never reset, because `r1..r3` are `done` and would replay. `stop` exits with code 1.
+`start_round` then counts the round up and `implement.md` and `review.md` both render
+`{{findings}}`: the implementer knows what to resolve, and the reviewer knows that work answering
+a finding is requested, not a defect (Trial 2 found the reviewer rejecting the edit the human had
+asked for). `findings` is the empty string in round 1, like `{{previous}}` in a ralph's first
+iteration.
+
+Replay does the rest. `run` executes `flow.py` from the top, walks the nodes from `start`, and
+every finished step returns its journaled result without executing; `s` is rebuilt from those
+results, so round 2 arrives with the same `findings` and the first step the journal does not know
+is `implement#2/implement#1/1`. A gate inside round 2 opens and exits with code 2; the next run
+replays both rounds up to that gate. The engine also checks the path: visit 11 must be the node
+the journal recorded for visit 11, and a finished visit must take the edge it took before, or the
+run stops with `flow changed`.
+
+The bound: `start_round` goes to `blocked` when `MAX_ROUNDS` rounds have run, with the last
+findings as `show`. `retry` raises the allowance by `MAX_ROUNDS` and `start_round` counts the
+next round; the counter is never reset, so the round numbers in the log stay unique. `stop` ends
+the flow.
 
 The blocker report is the other way a round ends early. When a ralph gives up, `Exhausted.last`
-is shown at a decision: `retry` ends the round and the blockers become the next round's findings;
-`skip` keeps what was committed and continues the round (an implement task that is skipped is left
-out of the round's review); `stop` exits with code 1. The human does the tooling or access work
-while the decision is open. `reset` is not the way back: it archives the journal, and every
-finished round with it.
+is kept on `s.last` and shown at `implement_exhausted` or `fix_exhausted`: `retry` ends the round
+and the blockers become the next round's findings; `skip` keeps what was committed and continues
+the round (an implement task that is skipped is left out of the round's review); `stop` ends the
+flow. The human does the tooling or access work while the decision is open. `reset` is not the
+way back: it archives the journal, and every finished round with it.
 
 ## TeamCity (optional)
 
@@ -130,18 +204,18 @@ without a build does not hold the run up. `CI_TIMEOUT` at the top of `flow.py` (
 explicitly to `teamcity.wait_for_build` and is the deadline for one wait: how long the poll loop
 keeps asking TeamCity for one verdict before it gives up with `TIMEOUT`.
 
-The CI wait is a return loop of its own, keyed per verdict (`v16/r1/ci/app/1`, `/2`, `/3`):
+The CI wait is a loop of its own, one visit of `ci` per verdict (`ci#1/wait`, `ci#2/wait`, `ci#3/wait`):
 
 - `SUCCESS`: the task is recorded as finished with the commit CI just verified, and the flow moves on.
-- `FAILURE`: the fix loop runs (`v16/r1/fix/app/<v>/<i>`, up to `MAX_FIX` iterations) with the
-  failed test names in the prompt, and **the fix commit is waited for in turn** under the next
-  verdict key. A task may wait for `MAX_CI` verdicts in one round: the implement commit, then each
-  fix. When the last allowed verdict is still red, the flow opens `v16/r1/ci/app/red` with the
-  commit, the build URL and the excerpt: `retry` ends the round with that failure as the findings,
-  `skip` keeps the commits and continues to the review, `stop` exits with code 1.
+- `FAILURE`: the fix ralph runs (`fix#1/fix#1/<i>`, up to `MAX_FIX` iterations) with the failed
+  test names in the prompt, and **the fix commit is waited for in turn** by the next visit of
+  `ci`. A task may wait for `MAX_CI` verdicts in one round: the implement commit, then each fix.
+  When the last allowed verdict is still red, `ci_red` opens its decision with the commit, the
+  build URL and the excerpt: `retry` ends the round with that failure as the findings, `skip`
+  keeps the commits and continues to the review, `stop` ends the flow.
 - `NOT_FOUND` or `TIMEOUT`: there is nothing for Codex to fix, because CI never gave a verdict, so
-  the flow opens `v16/r1/ci/app/<v>/missing` instead of the fix loop and asks the human to `skip`
-  (keep the commit and move on) or `stop`.
+  `ci_missing` opens its decision instead of a fix and asks the human to `skip` (keep the commit
+  and move on) or `stop`.
 
 **The token is not readable by Codex.** `teamcity.py` reads both variables once, at import, and
 removes `JANUS_TEAMCITY_TOKEN` from `os.environ` as it reads it, before any Codex process starts.
@@ -161,14 +235,17 @@ uv run pytest -q
 
 `tests/test_teamcity.py` drives `teamcity.py` against a `http.server` stub on `127.0.0.1`, and
 `tests/test_flow.py` runs the whole flow with the engine's fake `codex` in a temporary goal
-folder, round by round and gate by gate. Neither needs the network, a TeamCity or the real Codex.
+folder, round by round and gate by gate, checks the `path` the journal records against the edges
+above, and asserts that `python janus.py graph` prints the mermaid block of this README. Neither
+needs the network, a TeamCity or the real Codex.
 
 ## Trial 1 (slice 2): Angular 15 to 16 with real Codex, 2026-09-23
 
 Run on one throwaway application, without TeamCity, to satisfy spec criterion 12.7. **This report is
 history**: it ran the slice 2 flow, whose keys (`plan`, `implement/<id>/<n>`, `review`, `merge`)
-predate the loops above; the flow of this folder journals `v16/plan`, `v16/r1/implement/<id>/<n>`
-and so on. It is kept because its findings about Codex still hold.
+are Janus 4.0 keys from before the loops and the nodes above; the flow of this folder journals
+`plan#1/plan#1`, `implement#1/implement#1/<n>` and so on. It is kept because its findings about
+Codex still hold.
 
 **Setup.** Goal folder `/home/race-day/janus-trial/angular-16-upgrade`, a Git repository with
 the bare remote `/home/race-day/janus-trial/origin/angular-16-upgrade.git`. `janus.py` copied
@@ -312,7 +389,11 @@ plan, the approval gate, the implementation loop and the review gate, and left `
 
 Run on one throwaway application, without TeamCity, to satisfy spec criterion 12.9: the human
 review of round 1 answers with a finding, the next round runs with real Codex under its own keys,
-the finished flow is run once more and the journal does not change. It took **three** rounds, not
+the finished flow is run once more and the journal does not change. **This report is history**: it
+ran the slice 3 script flow, whose keys (`v16/r1/implement/app/1`, `v16/r2/review`) are Janus 4.0
+keys; the node flow of this folder journals `implement#2/implement#1/1`, `review#2/review#1` and
+records a `path`. Its finding about the AI review is what `review.md`'s `{{findings}}` paragraph
+answers, and Trial 3 checks that. It took **three** rounds, not
 two: the AI review of round 2 rejected half of what the human finding had asked for and sent the
 round back on its own, so round 3 ran before the human review was reached again. That is the most
 interesting result of the trial and it is described under *How the rounds came back*.
