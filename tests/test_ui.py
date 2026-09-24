@@ -260,3 +260,44 @@ def test_path_filters_to_entries_with_node_and_visit(tmp_path):
     assert st["path"] == [{"node": "a", "visit": 1, "started": T0, "finished": T1, "next": ""}]
     assert st["mermaid"] == ("flowchart LR\n  a -- go --> b\n  a -- stop --> END\n  b --> a\n  END([END])\n"
                              "  class a visited\n" + CLASSDEFS)
+
+
+# --- the server --------------------------------------------------------------------------
+
+def test_server_serves_the_page_and_the_state_and_404s_the_rest(tmp_path):
+    write_journal(tmp_path, {"plan#1": entry("codex", "done", finished=T1, result={"summary": "ok"})})
+    server = janus_ui.make_server(tmp_path, 0)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = http.client.HTTPConnection("127.0.0.1", server.server_address[1], timeout=5)
+        conn.request("GET", "/")
+        r = conn.getresponse()
+        body = r.read().decode("utf-8")
+        assert (r.status, r.getheader("Content-Type")) == (200, "text/html; charset=utf-8")
+        assert "<title>" in body
+        conn.request("GET", "/state.json")
+        r = conn.getresponse()
+        st = json.loads(r.read().decode("utf-8"))
+        assert (r.status, r.getheader("Content-Type"), r.getheader("Cache-Control")) == \
+            (200, "application/json", "no-store")
+        assert st["folder"] == tmp_path.name and [s["key"] for s in st["steps"]] == ["plan#1"]
+        conn.request("GET", "/nope")
+        r = conn.getresponse()
+        r.read()
+        assert r.status == 404
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_main_reports_a_port_in_use(tmp_path, monkeypatch, capsys):
+    taken = janus_ui.make_server(tmp_path, 0)
+    try:
+        port = taken.server_address[1]
+        monkeypatch.chdir(tmp_path)
+        assert janus_ui.main(["--port", str(port)]) == 1
+        assert capsys.readouterr().err == f"janus_ui: port {port} is in use; try --port {port + 1}\n"
+    finally:
+        taken.server_close()

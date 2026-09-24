@@ -169,3 +169,71 @@ def build_state(root: Path, now: Any = None) -> Dict[str, Any]:
             "mermaid": mermaid_of(journal.get("graph"), path, current),
             "progress": section_lines(lines, "## Progress"), "decisions": section_lines(lines, "## Decisions"),
             "totals": totals}
+
+
+# --- server ----------------------------------------------------------------
+
+class Handler(BaseHTTPRequestHandler):
+    root = Path(".")  # make_server sets it on a subclass
+
+    def do_GET(self) -> None:
+        route = self.path.split("?")[0]
+        if route == "/":
+            self.reply(200, "text/html; charset=utf-8", PAGE.encode("utf-8"))
+        elif route == "/state.json":
+            try:
+                body = json.dumps(build_state(self.root), default=str).encode("utf-8")
+            except Exception as exc:  # the page keeps its last state and reddens the dot with this text
+                self.reply(500, "text/plain; charset=utf-8", f"{type(exc).__name__}: {exc}".encode("utf-8"))
+                return
+            self.reply(200, "application/json", body)
+        else:
+            self.reply(404, "text/plain; charset=utf-8", b"not found\n")
+
+    def reply(self, code: int, content_type: str, body: bytes) -> None:
+        self.send_response(code)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, format: str, *args: Any) -> None:  # noqa: A002 - the base class names it so
+        pass
+
+
+def make_server(root: Path, port: int) -> ThreadingHTTPServer:
+    """A loopback server for ``root``; port 0 picks a free one (``server.server_address[1]`` tells which)."""
+    handler = type("JanusHandler", (Handler,), {"root": Path(root)})
+    return ThreadingHTTPServer(("127.0.0.1", port), handler)
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    parser = argparse.ArgumentParser(prog="janus_ui.py", description="Janus UI: a live view of this goal folder")
+    parser.add_argument("--port", type=int, default=8765)
+    args = parser.parse_args(argv)
+    try:
+        server = make_server(Path.cwd(), args.port)
+    except OSError as exc:
+        if exc.errno != errno.EADDRINUSE:
+            raise
+        print(f"janus_ui: port {args.port} is in use; try --port {args.port + 1}", file=sys.stderr)
+        return 1
+    print(f"janus_ui: {Path.cwd().resolve().name} at http://127.0.0.1:{args.port} (Ctrl-C stops)", flush=True)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
+    return 0
+
+
+# --- page ------------------------------------------------------------------
+
+PAGE = r"""<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><title>Janus</title></head><body>Janus</body></html>
+"""
+
+if __name__ == "__main__":
+    sys.exit(main())
