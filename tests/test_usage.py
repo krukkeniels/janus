@@ -112,6 +112,19 @@ def test_each_ralph_iteration_records_its_own_session_and_a_step_records_none(ro
     assert "session" not in steps["push"] and "usage" not in steps["push"]
 
 
+def test_a_nested_codex_inside_step_does_not_double_count_usage(root, fake_codex, codex_home, monkeypatch, capsys):
+    write_prompt(root, "plan", "Plan {{goal}}", output={"summary": "str"})
+    fake_codex.script([{"output": {"summary": "ok"}, "stderr": f"session id: {SESSION}"}])
+    janus.step("outer", lambda: janus.codex("prompts/plan.md"))
+    steps = read_journal(root)["steps"]
+    assert list(steps) == ["outer", "plan#1"]
+    assert steps["plan#1"]["session"] == SESSION and steps["plan#1"]["usage"]["total"] == 41559
+    assert "session" not in steps["outer"] and "usage" not in steps["outer"]
+    monkeypatch.chdir(root)
+    assert janus.main(["status"]) == 0
+    assert "over 1 sessions" in capsys.readouterr().out
+
+
 def test_status_prints_the_tokens_line_when_any_entry_has_usage(root, monkeypatch, capsys):
     (root / "journal.yaml").write_text(
         "flow: flow.py\nstarted: x\nsteps:\n"

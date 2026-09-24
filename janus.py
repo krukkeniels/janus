@@ -74,6 +74,7 @@ def write_atomic(path: Path, text: str) -> None:
 def begin(root: Path) -> None:
     """Reset the engine for one run rooted at ``root`` and load its journal, or start a fresh one."""
     global ROOT, JOURNAL, CONTEXT, COUNTERS, LIVE, CURRENT, REPLAYING, NODES, NODE, DRY
+    LAST_CODEX.clear()
     ROOT = Path(root)
     path, fresh = ROOT / JOURNAL_FILE, {"flow": FLOW_FILE, "started": now(), "steps": {}}
     JOURNAL = fresh
@@ -172,6 +173,8 @@ def goal() -> str:
 
 def log(text: str) -> None:
     print(text)
+    if DRY:  # `graph` must be read-only: a script flow's module-level log() must not touch JANUS.md
+        return
     lines = text.splitlines() or [""]
     if not REPLAYING:  # a replayed run repeats the print, not the Progress line
         append_to_section("## Progress", [f"- {now()} {lines[0]}"] + [f"  {line}" for line in lines[1:]])
@@ -301,10 +304,14 @@ def run_step(key: str, kind: str, execute: Callable[[int], Any]) -> Any:
         yaml.safe_dump(result)  # a result that is not YAML-serialisable fails the step here
     except Exception as exc:
         error = str(exc) if isinstance(exc, JanusError) else f"{type(exc).__name__}: {exc}"
-        entry.update(status="failed", finished=now(), error=error, **LAST_CODEX)  # keeps what was captured
+        captured = dict(LAST_CODEX)  # consume: a nesting step must not let its caller double-count it
+        LAST_CODEX.clear()
+        entry.update(status="failed", finished=now(), error=error, **captured)  # keeps what was captured
         save_journal(key, "failed")
         raise
-    entry.update(status="done", finished=now(), result=copy.deepcopy(result), **LAST_CODEX)
+    captured = dict(LAST_CODEX)  # consume: a nesting step must not let its caller double-count it
+    LAST_CODEX.clear()
+    entry.update(status="done", finished=now(), result=copy.deepcopy(result), **captured)
     save_journal(key, "done")
     return copy.deepcopy(result)
 
@@ -494,6 +501,11 @@ def decision(question: str, options: List[str], key: Optional[str] = None, show:
 
 # --- nodes -----------------------------------------------------------------
 
+LABEL = re.compile(r"[A-Za-z_]\w*")
+MERMAID_KEYWORDS = {"end", "graph", "flowchart", "subgraph", "style", "class", "classDef", "click",
+                    "linkStyle", "direction"}
+
+
 def node(next: Any) -> Callable[[Callable[[Any], Any]], Callable[[Any], Any]]:
     """Register the decorated function as a node named after it. ``next`` is a node name (one edge,
     the function returns None), END, or {label: name or END} (the function returns a label)."""
@@ -502,12 +514,17 @@ def node(next: Any) -> Callable[[Callable[[Any], Any]], Callable[[Any], Any]]:
     elif (isinstance(next, dict) and next and all(isinstance(k, str) for k in next)
           and all(v is END or isinstance(v, str) for v in next.values())):
         edges = {k: (None if v is END else v) for k, v in next.items()}
+        for label in edges:  # labels become mermaid edge text (design 2.1), so they must be safe there
+            if not LABEL.fullmatch(label):
+                raise JanusError(f"node label must be an identifier: {label!r}")
     else:
         raise JanusError(f"node next must be a name, END or a non-empty dict of label -> name or END: {next!r}")
 
     def register(fn: Callable[[Any], Any]) -> Callable[[Any], Any]:
         if fn.__name__ in NODES:
             raise JanusError(f"duplicate node name: {fn.__name__}")
+        if fn.__name__ in MERMAID_KEYWORDS:  # node names become mermaid ids (design 2.1)
+            raise JanusError(f"node name {fn.__name__!r} is a mermaid keyword; rename it")
         NODES[fn.__name__] = (fn.__name__, fn, edges)
         return fn
     return register
@@ -560,7 +577,7 @@ def to_mermaid(graph: Dict[str, Any], classes: Optional[Dict[str, str]] = None,
 def run_nodes() -> None:
     """Walk the graph from the start node, recording each visit in JOURNAL["path"] (design 2.3). A finished
     entry is checked against the replayed visit, not re-recorded; an unfinished one is resumed in place."""
-    global NODE, COUNTERS
+    global NODE, COUNTERS, REPLAYING
     validate_nodes()
     JOURNAL["graph"] = graph()
     path: List[Dict[str, Any]] = JOURNAL.setdefault("path", [])
@@ -573,6 +590,7 @@ def run_nodes() -> None:
         if entry is None:
             entry = {"node": name, "visit": visit, "started": now()}
             path.append(entry)
+            REPLAYING = False  # a step-less first visit must still reach Progress, even right after a replay
         NODE, COUNTERS = f"{name}#{visit}", {}
         _, fn, edges = NODES[name]
         label = check_label(name, edges, fn(s))
@@ -583,6 +601,8 @@ def run_nodes() -> None:
             entry.update(finished=now(), next=label)
         name, index = edges[label], index + 1
     NODE = None
+    if index < len(path):  # a flow shortened to end earlier leaves a stale tail; do not run it silently
+        raise JanusError(f"flow changed: visit {index + 1} was {path[index]['node']}, now END")
 
 
 # --- git -------------------------------------------------------------------

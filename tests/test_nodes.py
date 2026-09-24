@@ -1,4 +1,6 @@
 """Node flows (design 2026-09-24 section 2): registration, keys inside a node, the runner, graph and mermaid."""
+import re
+
 import pytest
 
 import janus
@@ -54,6 +56,20 @@ def test_duplicate_node_name_raises_at_decoration(root):
 def test_bad_next_raises_at_decoration(root, bad):
     with pytest.raises(janus.JanusError, match="node next must be a name, END or a non-empty dict"):
         janus.node(next=bad)
+    assert janus.NODES == {}
+
+
+@pytest.mark.parametrize("name, next, match", [
+    ("a", {"": "b"}, "node label must be an identifier: ''"),
+    ("a", {"go go": "b"}, "node label must be an identifier: 'go go'"),
+    ("end", "b", "node name 'end' is a mermaid keyword"),
+])
+def test_unsafe_node_names_and_labels_raise_at_decoration(root, name, next, match):
+    def fn(s):
+        pass
+    fn.__name__ = name
+    with pytest.raises(janus.JanusError, match=re.escape(match)):
+        janus.node(next=next)(fn)
     assert janus.NODES == {}
 
 
@@ -279,6 +295,61 @@ def test_a_finished_visit_that_takes_another_edge_exits_1_with_flow_changed(root
     assert "a#1/plan#1: JanusError: flow changed: a#1 went to 'right' before, now 'left'\n" in text
 
 
+def test_a_flow_shortened_to_end_earlier_leaves_no_stale_path_tail(root, monkeypatch):
+    (root / "flow.py").write_text(
+        "from janus import node, END\n\n@node(next='b')\ndef a(s):\n    pass\n\n"
+        "@node(next=END)\ndef b(s):\n    pass\n", encoding="utf-8")
+    assert run(root, monkeypatch) == 0
+    (root / "flow.py").write_text(
+        "from janus import node, END\n\n@node(next=END)\ndef a(s):\n    pass\n\n"
+        "@node(next=END)\ndef b(s):\n    pass\n", encoding="utf-8")
+    assert run(root, monkeypatch) == 1
+    journal = read_journal(root)
+    assert [e["node"] for e in journal["path"]] == ["a", "b"]  # the stale tail is left as recorded
+    text = (root / "JANUS.md").read_text(encoding="utf-8")
+    assert "flow: JanusError: flow changed: visit 2 was b, now END\n" in text
+
+
+FIRST_LOG_AFTER_REPLAY = """\
+from janus import node, END, codex
+
+@node(next={"go": "b"})
+def a(s):
+    r = codex("prompts/plan.md")
+    return r["go"]
+
+@node(next=END)
+def b(s):
+    from janus import log
+    log("b reached")
+"""
+
+SECOND_LOG_AFTER_REPLAY = """\
+from janus import node, END, codex, log
+
+@node(next={"go": "b", "nope": "b"})
+def a(s):
+    r = codex("prompts/plan.md")
+    return r["go"]
+
+@node(next=END)
+def b(s):
+    log("b reached")
+"""
+
+
+def test_a_new_visit_right_after_replayed_steps_still_reaches_progress(root, fake_codex, monkeypatch):
+    (root / "flow.py").write_text(FIRST_LOG_AFTER_REPLAY, encoding="utf-8")
+    write_prompt(root, "plan", "Plan", output={"go": "str"})
+    fake_codex.script([{"output": {"go": "nope"}}])
+    assert run(root, monkeypatch) == 1  # "nope" is undeclared on run 1; the step is journaled done
+    assert read_journal(root)["steps"]["a#1/plan#1"]["status"] == "done"
+    (root / "flow.py").write_text(SECOND_LOG_AFTER_REPLAY, encoding="utf-8")  # "nope" is now declared
+    assert run(root, monkeypatch) == 0
+    progress = (root / "JANUS.md").read_text(encoding="utf-8").split("## Progress", 1)[1]
+    assert "b reached" in progress
+
+
 def test_an_unknown_target_fails_run_before_any_visit(root, monkeypatch):
     (root / "flow.py").write_text(
         "from janus import node\n\n@node(next='nowhere')\ndef a(s):\n    raise AssertionError('visited')\n",
@@ -344,6 +415,14 @@ def test_graph_command_refuses_a_script_flow_without_running_its_steps(root, fak
     (root / "flow.py").write_text("print('no steps, no nodes')\n", encoding="utf-8")
     assert run(root, monkeypatch, "graph") == 1
     assert capsys.readouterr().err == "janus: flow.py runs steps at load time; only node flows have a graph\n"
+
+
+def test_graph_leaves_janus_md_untouched_when_a_script_flow_calls_log(root, monkeypatch, capsys):
+    before = (root / "JANUS.md").read_bytes()
+    (root / "flow.py").write_text("from janus import log\nlog('hello')\n", encoding="utf-8")
+    assert run(root, monkeypatch, "graph") == 1
+    assert capsys.readouterr().err == "janus: flow.py runs steps at load time; only node flows have a graph\n"
+    assert (root / "JANUS.md").read_bytes() == before
 
 
 def test_graph_command_validates_targets(root, monkeypatch, capsys):
