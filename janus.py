@@ -55,6 +55,8 @@ NODES: Dict[str, Node] = {}  # node flows register here in definition order; the
 NODE: Optional[str] = None  # "<node>#<visit>" while the runner is inside a node; every key gets it as a prefix
 DRY = False  # set by `graph`: loading flow.py must register nodes only, so claim() refuses to run a step
 DRY_MESSAGE = "flow.py runs steps at load time; only node flows have a graph"
+LAST_CODEX: Dict[str, Any] = {}  # session id and token usage of the last codex exec; run_step merges it into the entry
+SESSION_LINE = re.compile(r"^session id: (\S+)$")
 
 
 def now() -> str:
@@ -293,15 +295,16 @@ def run_step(key: str, kind: str, execute: Callable[[int], Any]) -> Any:
     attempt = 1 if entry is None else int(entry.get("attempt", 0)) + 1
     entry = JOURNAL["steps"][key] = {"kind": kind, "status": "running", "attempt": attempt, "started": now()}
     save_journal(key, "running")
+    LAST_CODEX.clear()
     try:
         result = execute(attempt)
         yaml.safe_dump(result)  # a result that is not YAML-serialisable fails the step here
     except Exception as exc:
         error = str(exc) if isinstance(exc, JanusError) else f"{type(exc).__name__}: {exc}"
-        entry.update(status="failed", finished=now(), error=error)
+        entry.update(status="failed", finished=now(), error=error, **LAST_CODEX)  # keeps what was captured
         save_journal(key, "failed")
         raise
-    entry.update(status="done", finished=now(), result=copy.deepcopy(result))
+    entry.update(status="done", finished=now(), result=copy.deepcopy(result), **LAST_CODEX)
     save_journal(key, "done")
     return copy.deepcopy(result)
 
@@ -311,6 +314,23 @@ def step(key: str, fn: Callable[[], Any]) -> Any:
 
 
 # --- codex -----------------------------------------------------------------
+
+def read_usage(session_id: str) -> Optional[Dict[str, int]]:
+    """Token usage of a Codex session from its rollout file under CODEX_HOME (design 2.10): the last
+    ``token_count`` event's totals, or None when anything about the file is missing or malformed."""
+    home = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
+    totals = None
+    try:
+        rollout = next(iter(home.glob(f"sessions/*/*/*/rollout-*-{session_id}.jsonl")))
+        for line in rollout.read_text(encoding="utf-8").splitlines():
+            event = json.loads(line)
+            if event.get("type") == "event_msg" and event["payload"].get("type") == "token_count":
+                totals = (event["payload"].get("info") or {}).get("total_token_usage", totals)
+        return {"input": totals["input_tokens"], "cached": totals["cached_input_tokens"],
+                "output": totals["output_tokens"], "total": totals["total_tokens"]}
+    except Exception:
+        return None
+
 
 def run_codex(cwd: Path, prompt: str, schema: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     """One fresh ``codex exec`` (spec section 7). Returns the parsed final message."""
@@ -331,8 +351,15 @@ def run_codex(cwd: Path, prompt: str, schema: Optional[Dict[str, Any]]) -> Dict[
             sys.stderr.write(line)
             lines.append(line.rstrip("\n"))
         tail = "\n".join(lines[-20:])
-        if proc.wait() != 0:
-            raise JanusError(f"codex exec exited with {proc.returncode}: {tail}")
+        code = proc.wait()
+        session = next((m.group(1) for m in map(SESSION_LINE.match, lines) if m), None)
+        if session:  # the rollout file is complete once the process has exited
+            LAST_CODEX["session"] = session
+            usage = read_usage(session)
+            if usage is not None:
+                LAST_CODEX["usage"] = usage
+        if code != 0:
+            raise JanusError(f"codex exec exited with {code}: {tail}")
         message = last.read_text(encoding="utf-8") if last.exists() else ""
         if not message.strip():
             raise JanusError(f"codex exec ended without a final message: {tail}")
@@ -645,6 +672,11 @@ def cmd_status() -> int:
         last = JOURNAL["path"][-1]
         print(f"at: {last['node']}#{last['visit']} (visit {last['visit']} of {last['node']})")
     steps: Dict[str, Any] = JOURNAL["steps"]
+    used = [e["usage"] for e in steps.values() if isinstance(e, dict) and isinstance(e.get("usage"), dict)]
+    if used:
+        t = {k: sum(u.get(k, 0) for u in used) for k in ("total", "input", "cached", "output")}
+        print(f"tokens: {t['total']} total, {t['input']} in ({t['cached']} cached), {t['output']} out "
+              f"over {len(used)} sessions")
     gates = [k for k, e in steps.items() if e.get("status") == "open"]
     unfinished = [k for k, e in steps.items() if e.get("status") in ("running", "failed")]
     print(f"open gate: {gates[0]}\n  {steps[gates[0]].get('question', '')}" if gates else "no open gate")
