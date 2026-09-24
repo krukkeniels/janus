@@ -28,6 +28,10 @@ REVIEW_BAD = {"passed": False, "reasons": ["app: app.component.spec.ts is marked
               "summary": "The upgrade skips a spec."}
 TESTPLAN = {"steps": ["Open / and see the title", "Navigate to /about and back"],
             "summary": "Bootstrapping and routing are the risk of this round."}
+BUILD = {"id": 42, "webUrl": "http://tc/viewLog.html?buildId=42", "state": "finished"}
+RED = [{"build": [dict(BUILD, status="FAILURE")]},
+       {"testOccurrence": [{"name": "AppComponent should render title"}]}]
+GREEN = [{"build": [dict(BUILD, status="SUCCESS")]}]
 ONE_ROUND = [{"output": DONE}, {"output": REVIEW_OK}, {"output": TESTPLAN}]
 PLAN_KEYS = ["plan#1/plan#1", "approve#1/gate#1"]
 ROUND_1 = ["implement#1/implement#1/1", "review#1/review#1", "human_review#1/gate#1", "merge#1/gate#1",
@@ -335,3 +339,112 @@ def test_stop_at_an_exhausted_implement_loop_ends_the_flow_with_exit_0(goal_fold
     assert path_of(goal_folder)[-1] == ("implement_exhausted", "stop")
     assert "task app stopped the run at implement, as the human decided" \
         in (goal_folder / "JANUS.md").read_text(encoding="utf-8")
+
+
+def test_a_green_build_is_journaled_under_the_first_verdict_and_no_fix_runs(
+        goal_folder, fake_codex, teamcity_server, monkeypatch):
+    teamcity_server.serve(GREEN)
+    run_to_the_second_gate(goal_folder, fake_codex, monkeypatch, ONE_ROUND)
+    steps = journal_of(goal_folder)["steps"]
+    assert steps["ci#1/wait"]["result"] == {"status": "SUCCESS", "url": "http://tc/viewLog.html?buildId=42",
+                                            "excerpt": ""}
+    assert steps["ci#1/wait"]["kind"] == "step"
+    assert "ci#2/wait" not in steps and "fix#1/fix#1/1" not in steps
+    assert "revision%3A%28version%3A" + "a" * 40 in teamcity_server.requests()[0]["path"]
+    assert path_of(goal_folder)[6:8] == [("implement", "ci"), ("ci", "green")]
+    assert len(journal_of(goal_folder)["graph"]["nodes"]) == 21
+
+
+def test_a_build_type_of_none_skips_the_teamcity_wait(goal_folder, fake_codex, teamcity_server, monkeypatch):
+    plan = {"summary": PLAN["summary"], "tasks": [dict(PLAN["tasks"][0], build_type="none")]}
+    fake_codex.script([{"output": plan}] + ONE_ROUND)
+    run(goal_folder, monkeypatch)
+    answer(goal_folder, "yes")
+    assert run(goal_folder, monkeypatch) == 2
+    assert "ci#1/wait" not in journal_of(goal_folder)["steps"]
+    assert teamcity_server.requests() == []
+
+
+def test_a_red_build_gets_a_fix_whose_commit_is_verified_by_the_second_verdict(
+        goal_folder, fake_codex, teamcity_server, monkeypatch):
+    teamcity_server.serve(RED + GREEN)
+    run_to_the_second_gate(goal_folder, fake_codex, monkeypatch, [{"output": DONE}, {"output": FIXED}] + ONE_ROUND[1:])
+    steps = journal_of(goal_folder)["steps"]
+    assert steps["ci#1/wait"]["result"]["status"] == "FAILURE"
+    assert steps["fix#1/fix#1/1"]["result"]["commit"] == "b" * 40
+    assert steps["ci#2/wait"]["result"]["status"] == "SUCCESS"
+    assert "ci#3/wait" not in steps
+    fix_prompt = fake_codex.calls()[2]["prompt"]
+    assert "AppComponent should render title" in fix_prompt and "http://tc/viewLog.html?buildId=42" in fix_prompt
+    paths = [r["path"] for r in teamcity_server.requests()]
+    assert "revision%3A%28version%3A" + "a" * 40 in paths[0]
+    assert "revision%3A%28version%3A" + "b" * 40 in paths[2]  # the fix commit, not the implement commit
+    assert "b" * 40 in (goal_folder / "JANUS.md").read_text(encoding="utf-8")
+    assert path_of(goal_folder)[6:10] == [("implement", "ci"), ("ci", "red"), ("fix", "ci"), ("ci", "green")]
+
+
+def test_max_ci_red_verdicts_open_the_red_decision_and_skip_keeps_the_commits(
+        goal_folder, fake_codex, teamcity_server, monkeypatch):
+    teamcity_server.serve(RED * 3)
+    run_to_the_second_gate(goal_folder, fake_codex, monkeypatch,
+                            [{"output": DONE}, {"output": FIXED}, {"output": FIXED}] + ONE_ROUND[1:])
+    steps = journal_of(goal_folder)["steps"]
+    assert (steps["ci_red#1/decision#1"]["kind"], steps["ci_red#1/decision#1"]["status"]) == ("decision", "open")
+    assert [k for k in steps if k.startswith(("ci", "fix"))] == \
+        ["ci#1/wait", "fix#1/fix#1/1", "ci#2/wait", "fix#2/fix#1/1", "ci#3/wait", "ci_red#1/decision#1"]
+    answer(goal_folder, "skip")
+    assert run(goal_folder, monkeypatch) == 2
+    steps = journal_of(goal_folder)["steps"]
+    assert steps["ci_red#1/decision#1"]["answer"] == "skip"
+    assert list(steps)[-2:] == ["review#1/review#1", "human_review#1/gate#1"]
+    assert "b" * 40 in fake_codex.calls()[4]["prompt"]  # the review sees the last fix commit
+    assert ("ci", "still_red") in path_of(goal_folder) and ("ci_red", "skip") in path_of(goal_folder)
+
+
+def test_retry_at_the_red_decision_starts_round_2_with_the_failure_as_findings(
+        goal_folder, fake_codex, teamcity_server, monkeypatch):
+    teamcity_server.serve(RED * 3 + GREEN)
+    run_to_the_second_gate(goal_folder, fake_codex, monkeypatch,
+                            [{"output": DONE}, {"output": FIXED}, {"output": FIXED}, {"output": DONE_2}]
+                            + ONE_ROUND[1:])
+    answer(goal_folder, "retry")
+    assert run(goal_folder, monkeypatch) == 2
+    steps = journal_of(goal_folder)["steps"]
+    assert list(steps)[-4:] == ["implement#2/implement#1/1", "ci#4/wait", "review#1/review#1", "human_review#1/gate#1"]
+    assert "Task app is still red after 3 CI verdicts (http://tc/viewLog.html?buildId=42):\n" \
+           "AppComponent should render title" in fake_codex.calls()[4]["prompt"]
+    assert ("ci_red", "retry") in path_of(goal_folder)
+
+
+def test_an_exhausted_fix_loop_opens_its_decision_and_skip_keeps_the_implement_commit(
+        goal_folder, fake_codex, teamcity_server, monkeypatch):
+    teamcity_server.serve(RED)
+    run_to_the_second_gate(goal_folder, fake_codex, monkeypatch,
+                            [{"output": DONE}] + [{"output": NOT_DONE}] * 3 + ONE_ROUND[1:])
+    gate = journal_of(goal_folder)["steps"]["fix_exhausted#1/decision#1"]
+    assert (gate["kind"], gate["status"]) == ("decision", "open")
+    assert "Task app gave up at fix after 3 attempts." in gate["question"]
+    answer(goal_folder, "skip")
+    assert run(goal_folder, monkeypatch) == 2
+    steps = journal_of(goal_folder)["steps"]
+    assert steps["fix_exhausted#1/decision#1"]["answer"] == "skip"
+    assert "ci#2/wait" not in steps and steps["human_review#1/gate#1"]["status"] == "open"
+    assert "a" * 40 in (goal_folder / "JANUS.md").read_text(encoding="utf-8")
+    assert path_of(goal_folder)[8:10] == [("fix", "gave_up"), ("fix_exhausted", "skip")]
+
+
+def test_a_build_teamcity_cannot_find_opens_the_missing_decision_instead_of_a_fix(
+        goal_folder, fake_codex, teamcity_server, monkeypatch):
+    teamcity_server.serve([{"count": 0}])
+    run_to_the_second_gate(goal_folder, fake_codex, monkeypatch, ONE_ROUND)
+    steps = journal_of(goal_folder)["steps"]
+    assert steps["ci#1/wait"]["result"]["status"] == "NOT_FOUND"
+    assert (steps["ci_missing#1/decision#1"]["kind"], steps["ci_missing#1/decision#1"]["status"]) == \
+        ("decision", "open")
+    assert "fix#1/fix#1/1" not in steps
+    answer(goal_folder, "skip")
+    assert run(goal_folder, monkeypatch) == 2
+    steps = journal_of(goal_folder)["steps"]
+    assert steps["ci_missing#1/decision#1"]["answer"] == "skip" and "ci#2/wait" not in steps
+    assert steps["human_review#1/gate#1"]["status"] == "open"
+    assert path_of(goal_folder)[7:9] == [("ci", "no_verdict"), ("ci_missing", "skip")]

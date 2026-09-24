@@ -10,7 +10,9 @@ the state `s`, which the flow rebuilds on every run from the replayed steps, nev
 journal or the clock. Keys are automatic: the third visit of `implement` journals its ralph as
 `implement#3/implement#1/<n>`. `python janus.py graph` prints the map.
 """
-from janus import END, Exhausted, codex, context, decision, human_gate, log, node, ralph
+from janus import END, Exhausted, codex, context, decision, human_gate, log, node, ralph, step
+
+import teamcity
 
 MAJORS = [16]           # the majors to reach, in order; [16, 17, 18] walks three upgrades in one goal
 MAX_ROUNDS = 3          # rounds per major before the flow asks whether to keep going
@@ -105,7 +107,7 @@ def next_task(s):
     return "task"
 
 
-@node(next={"done": "task_done", "gave_up": "implement_exhausted"})
+@node(next={"ci": "ci", "done": "task_done", "gave_up": "implement_exhausted"})
 def implement(s):
     s.ci_count = 0
     try:
@@ -114,6 +116,8 @@ def implement(s):
     except Exhausted as exc:
         s.last = exc.last
         return "gave_up"
+    if teamcity.configured() and s.task["build_type"] != "none":
+        return "ci"
     return "done"
 
 
@@ -122,6 +126,67 @@ def implement_exhausted(s):
     choice = give_up(s, "implement", MAX_IMPLEMENT)
     if choice == "skip":  # nothing verified was produced: the task is left out of the round's review
         s.task_index += 1
+    return choice
+
+
+@node(next={"green": "task_done", "red": "fix", "no_verdict": "ci_missing", "still_red": "ci_red"})
+def ci(s):
+    """One TeamCity verdict on the task's latest commit; a fix commit comes back here for its own."""
+    s.ci_count += 1
+    build_type, commit = s.task["build_type"], s.result["commit"]
+    s.build = step("wait", lambda: teamcity.wait_for_build(build_type, commit, timeout=CI_TIMEOUT))
+    log("task %s build %d of %d %s: %s" % (s.task["id"], s.ci_count, MAX_CI, s.build["status"], s.build["url"]))
+    if s.build["status"] == "SUCCESS":
+        return "green"
+    if s.build["status"] in ("NOT_FOUND", "TIMEOUT"):  # nothing here is fixable by Codex
+        return "no_verdict"
+    return "still_red" if s.ci_count == MAX_CI else "red"
+
+
+@node(next={"skip": "task_done", "stop": END})
+def ci_missing(s):
+    choice = decision(
+        "TeamCity gave no verdict for task %s (%s). Continue without a CI check, or stop the run?"
+        % (s.task["id"], s.build["status"]), ["skip", "stop"],
+        show={"commit": s.result["commit"], "status": s.build["status"], "url": s.build["url"]})
+    if choice == "skip":
+        log("task %s continues without a CI verdict" % s.task["id"])
+    else:
+        log("task %s stopped the run: no CI verdict, as the human decided" % s.task["id"])
+    return choice
+
+
+@node(next={"ci": "ci", "gave_up": "fix_exhausted"})
+def fix(s):
+    try:
+        s.result = ralph("prompts/fix.md", until=lambda r: r["done"], max_iter=MAX_FIX,
+                         cwd=s.task["repo"], task=s.task, build=s.build)
+    except Exhausted as exc:  # `s.result` stays the commit CI last judged
+        s.last = exc.last
+        return "gave_up"
+    return "ci"
+
+
+@node(next={"retry": "start_round", "skip": "task_done", "stop": END})
+def fix_exhausted(s):
+    return give_up(s, "fix", MAX_FIX)  # `skip` keeps the commits, red build and all
+
+
+@node(next={"retry": "start_round", "skip": "task_done", "stop": END})
+def ci_red(s):
+    choice = decision(
+        "Task %s is still red after %d CI verdicts. Retry it in the next round (the failure becomes"
+        " the findings), skip it and keep the commits, or stop the run?" % (s.task["id"], MAX_CI),
+        ["retry", "skip", "stop"],
+        show={"commit": s.result["commit"], "url": s.build["url"], "excerpt": s.build["excerpt"]})
+    if choice == "retry":
+        send_back(s, "Task %s is still red after %d CI verdicts (%s):\n%s"
+                  % (s.task["id"], MAX_CI, s.build["url"], s.build["excerpt"]))
+    elif choice == "skip":
+        log("task %s continues with a red build, as the human decided" % s.task["id"])
+    else:
+        log("task %s stopped the run: still red after %d CI verdicts, as the human decided"
+            % (s.task["id"], MAX_CI))
     return choice
 
 
