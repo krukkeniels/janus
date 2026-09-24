@@ -151,8 +151,9 @@ stopped it.
 
 ## How a round comes back
 
-A round is the stretch from `start_round` to `qa`. Four edges lead back to `start_round`, and each
-one first stores why in `s.findings`, a string, and logs `round N of Angular T came back: ...`:
+A round is the stretch from `start_round` to `qa`. Six edges carry findings back to `start_round`,
+and `blocked`'s `retry` is the seventh; each of the six first stores why in `s.findings`, a string,
+and logs `round N of Angular T came back: ...`:
 
 1. `review -- failed`: the AI review returned `passed: false`; `findings` is
    `AI review of round N:\n<reasons>`.
@@ -160,8 +161,8 @@ one first stores why in `s.findings`, a string, and logs `round N of Angular T c
    `Human review of round N:\n<answer>`.
 3. `qa -- findings`: the answer was not `passed`; `findings` is `QA of round N:\n<answer>`.
 4. `retry` at a blocker report, `implement_exhausted`, `fix_exhausted` or `ci_red`: `findings` is
-   `Task <id> gave up at implement:\n<blockers>` or `Task <id> is still red after 3 CI verdicts
-   (<url>):\n<excerpt>`.
+   `Task <id> gave up at implement:\n<blockers>` (or `fix`) or `Task <id> is still red after 3 CI
+   verdicts (<url>):\n<excerpt>`.
 
 `start_round` then counts the round up and `implement.md` and `review.md` both render
 `{{findings}}`: the implementer knows what to resolve, and the reviewer knows that work answering
@@ -202,7 +203,9 @@ loop alike. `build_type` in a task is the TeamCity build type id, or the string 
 whose `build_type` is `none` skips the wait even when TeamCity is configured, so a repository
 without a build does not hold the run up. `CI_TIMEOUT` at the top of `flow.py` (7200 s) is passed
 explicitly to `teamcity.wait_for_build` and is the deadline for one wait: how long the poll loop
-keeps asking TeamCity for one verdict before it gives up with `TIMEOUT`.
+keeps asking TeamCity for one verdict before it gives up with `TIMEOUT`. Keep the
+`JANUS_TEAMCITY_*` variables set, or unset, for the whole goal: `implement` chooses its `ci` edge
+from them, and a replayed visit that chooses differently stops the run with `flow changed`.
 
 The CI wait is a loop of its own, one visit of `ci` per verdict (`ci#1/wait`, `ci#2/wait`, `ci#3/wait`):
 

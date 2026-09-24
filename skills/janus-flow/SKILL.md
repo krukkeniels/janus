@@ -82,7 +82,7 @@ Exit codes of `python janus.py run`: 0 the flow ended, 2 a gate is open, 1 a ste
   one visit would otherwise get the same key (two `codex("prompts/plan.md")` in one node are `plan#1` and
   `plan#2` already; two `step("wait", ...)` are not).
 - After editing `flow.py` mid-run, `run` may fail with `flow changed`. The ways back: `python janus.py reset`,
-  or delete the changed `path` entries from `journal.yaml`; steps replay by key, so nothing runs twice.
+  or delete the `path` entries from the first changed visit to the end; steps whose keys are unchanged replay from the journal, so nothing runs twice.
 - Gates exit the process; never catch `SystemExit`. Catch `Exhausted` around a `ralph` when the flow
   should ask the human what to do next; `exc.last` is the report to show.
 - A label must be an identifier; a node name may not be a mermaid keyword (`end`, `graph`, `style`, `class`, `click`).

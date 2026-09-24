@@ -2209,7 +2209,7 @@ Expected: run 6 exits 0 with `Angular 16 reached in 2 round(s)` and `flow ended`
 ```
 start#1 -> next_major#1 -> plan#1 -> approve#1 -> start_round#1 (go) -> next_task#1 (task) -> implement#1 (done) -> task_done#1 -> next_task#2 (all_done) -> review#1 (passed) -> human_review#1 (findings) -> start_round#2 (go) -> next_task#3 (task) -> implement#2 (done) -> task_done#2 -> next_task#4 (all_done) -> review#2 (passed) -> human_review#2 (approved) -> merge#1 -> testplan#1 -> qa#1 (passed) -> major_done#1 (all_done)
 22 visits, every edge is on the map, the last one ends at END
-5 codex entries: 5 with session, 5 with usage
+6 codex entries: 6 with session, 6 with usage
 ```
 
 followed by the eleven step lines (`plan#1/plan#1` ... `qa#1/gate#1`) with a `tokens` number on each codex line (this script was dry-run against a fake-codex journal while writing the plan and printed 15 visits and `4 codex entries: 1 with session, 0 with usage`, as the fake has no rollout). **That is the first acceptance point of design §3.5** (the path reads as the map) and the ruling's usage check; if any codex entry lacks `usage`, record its key and the rollout listing under `~/.codex/sessions/2026/09/24/`. `## Progress` has `round 1 of Angular 16 came back: Human review of round 1: ...` and `Angular 16 reached in 2 round(s)`; `## Decisions` has the five answers; the goal folder has one commit per status change plus `janus: run ended`, all pushed, and `git status --porcelain` is empty.
@@ -2249,7 +2249,7 @@ v24.5.0, pnpm 10.33.0, PyYAML 6.0.1. `JANUS_TEAMCITY_URL` and `JANUS_TEAMCITY_TO
 | 6 | `python3 janus.py run` | < 1 s | 0 | flow ended, `Angular 16 reached in 2 round(s)` |
 | 7 | `python3 janus.py run` | < 1 s | 0 | flow ended, nothing re-executed, journal byte-identical |
 
-Five Codex calls in all, `<s>` s of the `<s>` s the seven runs took: `plan#1/plan#1` `<s>` s,
+Six Codex calls in all, `<s>` s of the `<s>` s the seven runs took: `plan#1/plan#1` `<s>` s,
 `implement#1/implement#1/1` `<s>` s, `review#1/review#1` `<s>` s, `implement#2/implement#1/1` `<s>` s,
 `review#2/review#1` `<s>` s, `testplan#1/testplan#1` `<s>` s. `<Every ralph finished in one
 iteration and every step succeeded on attempt 1, or what happened instead.>`
@@ -2266,8 +2266,8 @@ The visit numbers show the rule of *The nodes*: the second round's implement is 
 review `review#2`, but the human review that approved it is `human_review#2` only because round 1's
 was `human_review#1`; `merge`, `testplan` and `qa` are `#1`, their first visits.
 
-**Token usage.** Every Codex entry has `session` and `usage` (`<5> of 5`). `status` printed
-`tokens: <total> total, <in> in (<cached> cached), <out> out over 5 sessions`. Per step:
+**Token usage.** Every Codex entry has `session` and `usage` (`<6> of 6`). `status` printed
+`tokens: <total> total, <in> in (<cached> cached), <out> out over 6 sessions`. Per step:
 
 ```text
 <the step lines the path script printed>
