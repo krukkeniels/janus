@@ -11,7 +11,7 @@ Two findings from the slice 3 trial drive this:
 
 Both are solved by one change: a flow becomes **a state machine whose states are small Python functions**. Each node declares where it can go. The engine enforces the declaration at runtime, records the map and the path taken in the journal, and the page draws exactly that. The flow stays Python (the decision of 2026-09-22 holds); loops, gates and ralphs are unchanged; they become edges one can see.
 
-Three slices follow, each with its own plan: **slice 4** the engine (nodes, graph, path, `graph` and `init` commands, spec v0.3), **slice 5** the example rewritten as nodes with a real-Codex trial, **slice 6** the page.
+Three slices follow, each with its own plan: **slice 4** the engine (nodes, graph, path, `graph` and `init` commands, token usage per Codex step, the flow-writing skill, spec v0.3), **slice 5** the example rewritten as nodes with a real-Codex trial, **slice 6** the page.
 
 ## 2. Nodes in the engine (slice 4)
 
@@ -169,7 +169,8 @@ def finish(s):
 - Section 4: `node` and `END` added to the primitive list; the Keys paragraph gains the node prefix rule (2.2).
 - Section 5: the journal example gains `graph:` and `path:`; the Replay paragraph gains the path check.
 - Section 6: `graph` and `init`.
-- Section 9: tests 13 to 19 (see 2.7 and 2.9).
+- Section 9: tests 13 to 21 (see 2.7, 2.9, 2.10, 2.11).
+- Section 7: the session id and usage capture (2.10).
 - Section 10 and 14: rewritten in slice 5 (section 3 of this document).
 - Section 13: one line that a flow may stay a script and what it forgoes (graph, page).
 
@@ -188,6 +189,32 @@ All with the fake `codex` and a flow written to `tmp_path` by the test. The exis
 9. `graph` command: prints the mermaid of 2.5 for a node flow; exits 1 with the load-time message for a script flow and calls the fake codex zero times.
 10. `to_mermaid` with `classes` and `counts` renders the class lines and `(n)` labels.
 11. `status` prints the `at:` line for a node journal and nothing new for a script journal.
+
+### 2.10 Token usage per Codex step
+
+Added 2026-09-24: the user wants to see what each Codex session cost, basic for now. Verified on codex-cli 0.155.1: every `codex exec` prints `session id: <uuid>` in its transcript header on stderr, and Codex writes the session to `$CODEX_HOME/sessions/<yyyy>/<mm>/<dd>/rollout-<timestamp>-<uuid>.jsonl` (`CODEX_HOME` defaults to `~/.codex`), where `event_msg` lines with `payload.type == "token_count"` carry `payload.info.total_token_usage` = `{input_tokens, cached_input_tokens, cache_write_input_tokens, output_tokens, reasoning_output_tokens, total_tokens}`; the last such line is the session's total.
+
+- `run_codex` keeps the session id: the first captured stderr line matching `^session id: (\S+)$`. After the process exits it calls `read_usage(session_id)`, which globs `sessions/*/*/*/rollout-*-<id>.jsonl` under `CODEX_HOME`, reads the file line by line, keeps the last `token_count` event and returns `{"input": input_tokens, "cached": cached_input_tokens, "output": output_tokens, "total": total_tokens}`. Any failure (no id in the transcript, no file, bad JSON, missing keys) returns `None`; nothing is printed, nothing stops.
+- The step's journal entry gains `session: <uuid>` when the id was seen and `usage: {...}` when it was read. They sit next to `result`, outside it, so prompts and flows that read the result see no change and the output schema is untouched. `run_step` gets them from `run_codex` through a module-level `LAST_CODEX: Dict[str, Any]` that `run_codex` fills and `run_step` merges into the entry after `execute` returns (for a ralph iteration that is the iteration's own entry). A failed step keeps whatever was captured before the failure.
+- `status` prints one line when any entry has `usage`: `tokens: <total> total, <input> in (<cached> cached), <output> out over <n> sessions`.
+- The page (section 4) shows `usage.total` on each codex row of the tree and the same totals line in the header; `build_state` adds `usage` (the mapping or null) and `session` to each step item and `tokens` = the sums to `totals`.
+- Tests (`tests/test_usage.py`): a fake `CODEX_HOME` under `tmp_path` with a rollout file of three lines (two `token_count` events with rising totals, one unrelated event); the fake codex prints `session id: <uuid>` on stderr via its `stderr` script field; after `run`, the journal entry has `session` and `usage` equal to the last event; a session id with no file gives `session` and no `usage`; a transcript without the id gives neither; `status` prints the totals line. The fake codex needs no change: the test scripts the stderr text.
+
+### 2.11 A Codex skill for writing flows
+
+Added 2026-09-24: the user wants Codex to help write a flow. Codex loads skills from `$CODEX_HOME/skills/<name>/SKILL.md` (verified: `~/.codex/skills/gh-fix-ci/SKILL.md` on this machine, front matter `name`, `description`, `metadata: {short-description}`). The repository ships `skills/janus-flow/SKILL.md`; the user installs it with `cp -r skills/janus-flow ~/.codex/skills/` (the README and `init`'s closing lines say so). It is not written into the goal folder: Codex reads `AGENTS.md` up the directory tree, so anything placed there would leak into every implement prompt.
+
+The skill is self-contained (Codex may be asked in a folder without the spec) and under 200 lines:
+
+1. Front matter: `name: janus-flow`, `description: Write or change a Janus goal folder: the goal in JANUS.md, one prompt per Codex job with an output schema, and flow.py as @node functions with declared edges. Use when asked to create, extend or debug a Janus flow.`, `metadata: {short-description: Write a Janus flow}`.
+2. What a goal folder is (the file list of section 2.7) and the six authoring steps.
+3. The primitives with their signatures and return shapes, copied from spec section 4 as of v0.3, including `node`, `END`, `step`, `log`, `context`, `Exhausted`.
+4. The node rules: one function per stage; `next` as a name, a dict of label to name, or `END`; single-edge nodes return nothing, multi-edge nodes return a label; keep everything for later on `s`; `s` is rebuilt on every run, so never read the journal or the clock to decide an edge; loops are edges backwards with a counter on `s`; anything with a side effect goes in `step(key, fn)`; keys are automatic, explicit keys only when two calls in one visit would otherwise clash.
+5. Prompt rules: `output` front matter with the type vocabulary (`str`, `int`, `float`, `bool`, `list[T]`, nested mapping, `one_of`), all fields required; placeholders and their precedence; `{{previous}}` only inside a ralph; `_preamble.md` sees only `goal`, `attempt` and `context()` values; keep `show` at gates small.
+6. The starter flow of section 2.7 as the worked example, then a second example with a review loop and a decision (the `draft -> check -> approve` flow from the authoring walk-through).
+7. Checks before handing back: `python janus.py graph` prints the map and every intended edge is on it; a dry read of each prompt for undefined placeholders; the flow never catches `SystemExit`.
+
+Test (`tests/test_skill.py`): the file exists, its front matter parses as YAML with the three keys, and every primitive name in the engine's public list (`node`, `END`, `codex`, `ralph`, `ai_gate`, `human_gate`, `decision`, `step`, `log`, `goal`, `context`, `Exhausted`, `JanusError`) appears in it, so the skill cannot silently fall behind the engine's API.
 
 ## 3. The example as nodes (slice 5)
 
@@ -266,9 +293,9 @@ Rules kept from today: a skipped implement task is left out of the round's revie
 | `path` | the journal's `path` list as is, `[]` when absent |
 | `mermaid` | `to_mermaid(graph, classes, counts)` when the journal has `graph`, else null. `classes`: every node with a finished visit is `visited`; the node of the last path entry, when that entry is unfinished, gets `running`, `open` or `failed` after the status of `current` (`running` when there is no current step yet). `counts` come from the finished path entries |
 | `progress`, `decisions` | the lines of those sections after the heading, `[]` when absent |
-| `totals` | `{"steps", "done", "failed", "running", "open", "answered", "codex_seconds"}`; `codex_seconds` sums kinds `codex` and `ai_gate` |
+| `totals` | `{"steps", "done", "failed", "running", "open", "answered", "codex_seconds", "tokens"}`; `codex_seconds` sums kinds `codex` and `ai_gate`; `tokens` = `{"input", "cached", "output", "total", "sessions"}` summed over entries with `usage` (section 2.10) |
 
-A step item: `key`, `kind`, `status`, `attempt` (null for gates), `started`, `finished`, `seconds` (whole seconds; running and open count to `now`; null when `started` is missing or unparsable), `summary` (one line, 160 chars with `...`: `result.summary` or `result.text` when strings for `done`; first line of `answer` for `answered`; of `error` for `failed`; of `question` for `open`; `""` for `running`), `detail` (`yaml.safe_dump` of the entry, `sort_keys=False, allow_unicode=True`).
+A step item: `key`, `kind`, `status`, `attempt` (null for gates), `session` and `usage` (from the entry, null when absent), `started`, `finished`, `seconds` (whole seconds; running and open count to `now`; null when `started` is missing or unparsable), `summary` (one line, 160 chars with `...`: `result.summary` or `result.text` when strings for `done`; first line of `answer` for `answered`; of `error` for `failed`; of `question` for `open`; `""` for `running`), `detail` (`yaml.safe_dump` of the entry, `sort_keys=False, allow_unicode=True`).
 
 The tree: nodes `{"name", "key", "status", "seconds", "next", "children"}` where `key` is the full prefix. A journal key's node carries its status and seconds; a group rolls up `running` if any child is `running` or `open`, else `failed` if any is `failed`, else `done`. A top-level node whose name is `<node>#<visit>` of a path entry gets `next` = that entry's label (`""` for an unlabelled edge, null when unfinished); other nodes have `next` null. Children keep first-appearance order. A key that is both an entry and a prefix keeps its own status and lists its children.
 
@@ -276,10 +303,10 @@ The tree: nodes `{"name", "key", "status", "seconds", "next", "children"}` where
 
 One HTML string `PAGE` at the end of the file; vanilla JS and CSS; the only external resource is mermaid from `https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js`.
 
-- **Header:** folder, flow, started, updated, totals (`12 steps, 10 done, 1 failed, codex 23m10s`), a dot green after a successful poll and red after a failed one (error text as its title); `state.error` in red.
+- **Header:** folder, flow, started, updated, totals (`12 steps, 10 done, 1 failed, codex 23m10s, 1.2M tokens in 9 sessions`), a dot green after a successful poll and red after a failed one (error text as its title); `state.error` in red.
 - **Gate banner:** only when `gate` is set: key, question, `section` in a `<pre>`, and "Answer it in JANUS.md, then run `python janus.py run` again."
 - **Map:** when `mermaid` is set, the rendered diagram; the four classes are styled by the page's CSS as visited green, running blue, open amber, failed red, unvisited grey. Re-rendered only when the mermaid text changes, so the picture does not flicker on every poll. If `window.mermaid` is missing (offline) the mermaid text is shown in a `<pre>` instead. Hidden for a script flow.
-- **Left, the tree:** one row per node, indented by depth, colour by status, label = last key segment, `#n` when attempt > 1, duration as `12s`, `3m04s`, `1h02m`, and for a top-level visit its `next` label as `→ failed`. Groups toggle on click; leaves select. Ancestors of `current` are expanded on load and `current` is highlighted; the user's toggles survive polls (a `Set` of collapsed keys). "nothing has run yet" when `steps` is empty.
+- **Left, the tree:** one row per node, indented by depth, colour by status, label = last key segment, `#n` when attempt > 1, duration as `12s`, `3m04s`, `1h02m`, `usage.total` as `41k tok` on codex rows that have it, and for a top-level visit its `next` label as `→ failed`. Groups toggle on click; leaves select. Ancestors of `current` are expanded on load and `current` is highlighted; the user's toggles survive polls (a `Set` of collapsed keys). "nothing has run yet" when `steps` is empty.
 - **Right, the detail:** the selected step's key, kind, status, attempt, started, finished, seconds and its `detail` in a `<pre>`; falls back to `current`.
 - **Below:** Progress and Decisions, raw lines in a `<pre>` each.
 - **Polling:** `fetch("/state.json")` every 2 s; a failed fetch keeps the last state and reddens the dot. The DOM of the tree, detail and panels is rebuilt from the state on each poll.
