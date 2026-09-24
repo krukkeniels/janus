@@ -29,7 +29,7 @@ def test_init_creates_the_starter_folder_and_refuses_a_second_time(tmp_path, mon
     out = capsys.readouterr().out
     assert out.startswith("created goal\nnext, in this folder:\n  1. edit JANUS.md") and "6. python janus_ui.py" in out
     assert janus.main(["init", "goal"]) == 1
-    assert capsys.readouterr().err == "janus: goal exists and is not empty\n"
+    assert capsys.readouterr().err == "janus: goal exists and is not an empty folder\n"
     assert janus.main(["init"]) == 1
     assert capsys.readouterr().err == "janus: init needs a folder: python janus.py init <folder>\n"
 
@@ -70,3 +70,12 @@ def test_the_starter_flow_has_a_graph_and_runs_to_its_gate_and_to_the_end(tmp_pa
     assert [e["node"] for e in journal["path"]] == ["draft", "approve", "finish"]
     assert "done: wrote the thing" in (goal / "JANUS.md").read_text(encoding="utf-8")
     assert len(fake_codex.calls()) == 1
+
+
+def test_init_refuses_a_path_that_is_a_regular_file(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "taken").write_text("occupied\n", encoding="utf-8")
+    assert janus.main(["init", str(tmp_path / "taken")]) == 1
+    err = capsys.readouterr().err
+    assert "janus: " in err
+    assert "exists and is not an empty folder" in err

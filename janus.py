@@ -741,8 +741,8 @@ def cmd_init(folder: Optional[str]) -> int:
     if not folder:
         raise JanusError("init needs a folder: python janus.py init <folder>")
     target = Path(folder)
-    if target.exists() and any(target.iterdir()):
-        raise JanusError(f"{target} exists and is not empty")
+    if target.exists() and (not target.is_dir() or any(target.iterdir())):
+        raise JanusError(f"{target} exists and is not an empty folder")
     (target / "prompts").mkdir(parents=True, exist_ok=True)
     here = Path(__file__).resolve()
     shutil.copy(str(here), str(target / "janus.py"))
