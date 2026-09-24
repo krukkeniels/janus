@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Janus 4.0: a small durable flow engine for Codex. One file, standard library plus PyYAML.
-A flow imports the primitives with ``from janus import ...``; see janus-4.0-spec.md sections 4 to 9."""
+A flow imports the primitives with ``from janus import ...``; see janus-4.0-spec.md sections 4 to 9.
+``janus_ui.py`` beside this file is the live page of a goal folder (spec section 6); it only reads."""
 from __future__ import annotations
 
 import argparse

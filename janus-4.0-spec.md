@@ -214,6 +214,7 @@ python janus.py status   # open gate if any, last five steps, next action; a nod
 python janus.py reset    # move journal.yaml to journals/<timestamp>.yaml and remove open gates from JANUS.md
 python janus.py graph    # print a node flow's map as mermaid; fails for a script flow
 python /path/to/janus.py init <folder>   # create a goal folder with a starter node flow
+python janus_ui.py [--port N]            # serve a live view of this goal folder at http://127.0.0.1:8765
 ```
 
 `run` imports `flow.py` from the current folder as a module and executes it top to bottom; when it registered nodes, the engine then walks them from the start node. Uncaught exceptions from the flow, including `Exhausted`, are written to `## Progress` with the step key that raised and the run exits with code 1.
@@ -221,6 +222,8 @@ python /path/to/janus.py init <folder>   # create a goal folder with a starter n
 `graph` loads `flow.py` with steps disabled: a script flow's first primitive call fails with `flow.py runs steps at load time; only node flows have a graph`, and so does a file that registers no node. The output is one `flowchart LR` line per edge (`plan --> approve`, `review -- failed --> start_round`) and `END([END])` once when any edge ends the flow; it pastes into a README. `status` prints `at: review#2 (visit 2 of review)` first when the journal has a path, and `tokens: 41559 total, 41083 in (30848 cached), 476 out over 1 sessions` when any step has `usage` (section 7). `graph` leaves `JANUS.md` untouched: `log()` only writes to `## Progress` when it is not run with steps disabled, so a script flow whose module level calls `log(...)` before failing to register a node does not modify the goal file.
 
 `init` creates `<folder>` (an error when it exists and is not an empty folder) with a copy of the running `janus.py` (and of `janus_ui.py` when it sits beside it), a `JANUS.md` with a placeholder goal, a three-node `flow.py` (draft with a ralph, approve with a gate that sends the answer back as findings, finish), `prompts/_preamble.md`, `prompts/draft.md` and a `.gitignore`, then prints the six steps to take next. It does not run `git init`.
+
+`janus_ui.py`, copied into the goal folder by `init`, is a separate program and not part of the engine: `python janus_ui.py` from the goal folder serves a page on loopback only (`--port` changes the default 8765; a port in use prints `janus_ui: port 8765 is in use; try --port 8766` and exits 1) that re-reads `journal.yaml` and `JANUS.md` every two seconds and shows the open gate with its section of `JANUS.md`, the flow's map with the nodes coloured by the path taken (visited, running, open, failed) and the edges counted, the steps as a tree keyed like the journal with durations and token usage, one step's journal entry, and the `## Progress` and `## Decisions` sections. It imports `find_section` and `to_mermaid` from `janus.py`, never writes a file and never runs the flow; it works whether or not a run is in progress, and for a script flow it shows everything but the map. Answers still go into `JANUS.md`; the page says so under the gate.
 
 ## 7. Codex invocation
 
