@@ -142,7 +142,7 @@ Added 2026-09-24 after the authoring walk-through: the user wanted the six autho
 | `JANUS.md` | `# Goal` and one placeholder line: `Describe what Codex must achieve; every prompt sees this text as {{goal}}.` |
 | `flow.py` | the starter flow below |
 | `prompts/_preamble.md` | `{{goal}}` and three standing rules: report blockers instead of guessing, never echo secrets, the work happens in a repository checkout inside this folder (commit there and report the commit) |
-| `prompts/draft.md` | front matter `output: {done: bool, summary: str, blockers: list[str]}`; body asks Codex to do the goal's work in the current folder, with `{{previous}}` for the earlier attempt and `{{findings}}` for what the human asked to change |
+| `prompts/draft.md` | front matter `output: {done: bool, summary: str, blockers: list[str]}`; body asks Codex to do the goal's work in the repository checkout inside the current folder, with `{{previous}}` for the earlier attempt and `{{findings}}` for what the human asked to change |
 | `.gitignore` | `*/`, `!prompts/`, `!journals/` |
 
 The starter flow:

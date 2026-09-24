@@ -31,7 +31,8 @@ def test_init_creates_the_starter_folder_and_refuses_a_second_time(tmp_path, mon
     assert "{{findings}}" in (goal / "prompts" / "draft.md").read_text(encoding="utf-8")
     preamble = (goal / "prompts" / "_preamble.md").read_text(encoding="utf-8")
     assert preamble.startswith("{{goal}}\n")
-    assert "the work happens\nin a repository checkout inside this folder; commit there and report the commit." in preamble
+    assert "the work happens\nin a repository checkout inside this folder; commit there and report the commit." in \
+        preamble
     assert "in the repository checkout inside the current folder; commit there" in \
         (goal / "prompts" / "draft.md").read_text(encoding="utf-8")
     out = capsys.readouterr().out
