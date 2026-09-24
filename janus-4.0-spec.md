@@ -236,7 +236,7 @@ codex exec -C <cwd> --dangerously-bypass-approvals-and-sandbox \
 
 The prompt goes in on stdin, never on the command line. The user's own `~/.codex/config.toml` supplies model and reasoning effort; Janus passes no model flags. Codex runs at full access because the machine Janus runs on is already a sandbox, as decided for Janus 3.0. A non-zero exit, a missing final message or JSON that does not validate against the schema fails the step.
 
-**Session id and token usage.** `codex exec` prints `session id: <uuid>` in its transcript header on stderr, and writes the session to `$CODEX_HOME/sessions/<yyyy>/<mm>/<dd>/rollout-<timestamp>-<uuid>.jsonl` (`CODEX_HOME` defaults to `~/.codex`). After the process exits, the engine keeps the first transcript line matching `^session id: (\S+)$` and reads that file: the last `event_msg` line whose `payload.type` is `token_count` carries `payload.info.total_token_usage`, from which `{input: input_tokens, cached: cached_input_tokens, output: output_tokens, total: total_tokens}` is taken. The step's journal entry gains `session: <uuid>` when the id was seen and `usage: {...}` when the file was read, next to `result` and outside it, so results and output schemas are untouched; a failed step keeps what was captured before the failure. A rollout line that is not JSON is skipped (a killed Codex leaves a truncated last line); no id, no file, no usage event or missing keys leave the fields out without a message. `run_step` consumes the captured session and usage after merging them into the entry (copies, then clears), so when a `step(key, fn)` nests a `codex()` call only the inner entry gets the session and usage; the outer entry finds nothing left to merge and is not double-counted.
+**Session id and token usage.** `codex exec` prints `session id: <uuid>` in its transcript header on stderr, and writes the session to `$CODEX_HOME/sessions/<yyyy>/<mm>/<dd>/rollout-<timestamp>-<uuid>.jsonl` (`CODEX_HOME` defaults to `~/.codex`). After the process exits, the engine keeps the first transcript line matching `^session id: (\S+)$` and reads that file: the last `event_msg` line whose `payload.type` is `token_count` carries `payload.info.total_token_usage`, from which `{input: input_tokens, cached: cached_input_tokens, output: output_tokens, total: total_tokens}` is taken. The step's journal entry gains `session: <uuid>` when the id was seen and `usage: {...}` when the file was read, next to `result` and outside it, so results and output schemas are untouched; a failed step keeps what was captured before the failure. No id, no file, bad JSON or missing keys leave the fields out without a message. `run_step` consumes the captured session and usage after merging them into the entry (copies, then clears), so when a `step(key, fn)` nests a `codex()` call only the inner entry gets the session and usage; the outer entry finds nothing left to merge and is not double-counted.
 
 ## 8. Errors
 
@@ -274,110 +274,97 @@ Coverage required:
 20. Token usage (section 7): with a fake `CODEX_HOME` holding a rollout file and the fake `codex` printing `session id: <uuid>`, a step's entry has `session` and `usage` equal to the last `token_count` event; an id with no file gives `session` only; a transcript without the id gives neither; a failed step keeps them; each ralph iteration has its own; `status` prints the `tokens:` line.
 21. The Codex skill `skills/janus-flow/SKILL.md` exists, its front matter parses with `name`, `description` and `metadata`, it names every public primitive, and `init` prints where to copy it from.
 
-About thirty tests in 4.0; 4.1 adds items 13 to 21, about forty more.
+About thirty tests in v0.2; v0.3 adds items 13 to 21, about forty more.
 
 ## 10. The example: `examples/angular-upgrade/`
 
 Files: `flow.py`, `prompts/_preamble.md`, `prompts/plan.md`, `prompts/implement.md`, `prompts/review.md`, `prompts/fix.md`, `prompts/testplan.md`, `teamcity.py`, `JANUS.md` with a sample goal, `.gitignore`, `README.md`.
 
-The example is the flow drawn on 2026-09-23 as the upgrade practice: Codex plans and upgrades, CI verifies the exact commit, a fresh Codex session reviews the diff, a human reviews, a human merges, Codex proposes a manual test strategy, QA validates, and every "no" along the way sends the work back to Codex with the findings. Each Angular major is one pass through that; the flow moves to the next major after a direction check. In Janus terms it is three nested loops (section 14): `for target in MAJORS` outside, `while True` rounds inside a major, and the task and CI loops inside a round.
+The example is the flow drawn on 2026-09-23 as the upgrade practice: Codex plans and upgrades, CI verifies the exact commit, a fresh Codex session reviews the diff, a human reviews, a human merges, Codex proposes a manual test strategy, QA validates, and every "no" along the way sends the work back to Codex with the findings. Each Angular major is one pass through that; the flow moves to the next major after a direction check. Since v0.3 it is a node flow (section 4): 21 functions, each declaring where it can go, and the three loops of v0.2 are edges backwards: `major_done -- next --> next_major`, the four edges into `start_round`, and `task_done --> next_task`.
+
+The state `s` carries `majors`, `major_index`, `target`, `plan`, `round`, `allowed`, `findings`, `task_index`, `task`, `finished`, `result`, `ci_count`, `build`, `last` (the report of a ralph that gave up), `summary` (the AI review's summary) and `testplan`; every run rebuilds it from the replayed steps.
+
+| Node | `next` | Does |
+|---|---|---|
+| `start` | `next_major` | `s.majors = list(MAJORS)`, `s.major_index = -1` |
+| `next_major` | `plan` | `major_index += 1`, `s.target`, `context(branch=..., target=...)`, `round = 0`, `allowed = MAX_ROUNDS`, `findings = ""` |
+| `plan` | `approve` | `s.plan = codex("prompts/plan.md")` |
+| `approve` | `start_round` | `human_gate` with the plan summary and the task lines as `show` |
+| `start_round` | `go: next_task`, `too_many: blocked` | `too_many` when `round == allowed`; else `round += 1`, `task_index = 0`, `finished = []` |
+| `blocked` | `retry: start_round`, `stop: END` | `decision(..., ["retry", "stop"], show=s.findings)`; `retry` adds `MAX_ROUNDS` to `allowed`; `stop` logs "Angular N stopped by the human after M rounds" |
+| `next_task` | `task: implement`, `all_done: review` | `s.task = tasks[task_index]` when one is left |
+| `implement` | `ci: ci`, `done: task_done`, `gave_up: implement_exhausted` | `ci_count = 0`; ralph `implement.md` with `task`, `done_so_far=s.finished`, `findings`; `ci` when `teamcity.configured()` and `build_type != "none"` |
+| `implement_exhausted` | `retry: start_round`, `skip: next_task`, `stop: END` | `give_up(s, "implement", MAX_IMPLEMENT)`, a helper shared with `fix_exhausted`: the decision with `s.last`'s summary and blockers; `retry` makes the blocker report the findings, `skip` logs and `task_index += 1` |
+| `ci` | `green: task_done`, `red: fix`, `no_verdict: ci_missing`, `still_red: ci_red` | `ci_count += 1`; `step("wait", ...)` around `teamcity.wait_for_build`; logs the verdict; `no_verdict` for `NOT_FOUND` and `TIMEOUT`; `still_red` when red and `ci_count == MAX_CI` |
+| `ci_missing` | `skip: task_done`, `stop: END` | decision: nothing here is fixable by Codex |
+| `fix` | `ci: ci`, `gave_up: fix_exhausted` | ralph `fix.md` with `task`, `build`; updates `s.result` |
+| `fix_exhausted` | `retry: start_round`, `skip: task_done`, `stop: END` | `give_up(s, "fix", MAX_FIX)`; `skip` keeps the commits, red build and all |
+| `ci_red` | `retry: start_round`, `skip: task_done`, `stop: END` | decision after `MAX_CI` red verdicts; `retry` makes the build excerpt the findings |
+| `task_done` | `next_task` | appends the record to `finished`, logs "task X finished", `task_index += 1` |
+| `review` | `passed: human_review`, `failed: start_round` | `codex("prompts/review.md", tasks=s.finished, findings=s.findings)`; keeps `s.summary`; `failed` makes "AI review of round N:\n" + reasons the findings |
+| `human_review` | `approved: merge`, `findings: start_round` | gate with `s.summary` and the task lines; anything but `approved` becomes the findings |
+| `merge` | `testplan` | gate "answer merged" |
+| `testplan` | `qa` | `codex("prompts/testplan.md", tasks=s.finished)` |
+| `qa` | `passed: major_done`, `findings: start_round` | gate; anything but `passed` becomes the findings |
+| `major_done` | `next: next_major`, `stop: END`, `all_done: END` | logs "Angular N reached in M round(s)"; `all_done` when no major is left, else the direction decision |
+
+Three nodes as they are written, the rest follow the same shape:
 
 ```python
-from janus import goal, context, codex, ralph, human_gate, decision, step, log, Exhausted
-import teamcity
+@node(next={"go": "next_task", "too_many": "blocked"})
+def start_round(s):
+    if s.round >= s.allowed:  # the allowance is used up; `blocked` raises it or ends the flow
+        return "too_many"
+    s.round += 1
+    s.task_index, s.finished = 0, []
+    return "go"
 
-MAJORS = [16]           # the majors to reach, in order; [16, 17, 18] walks three upgrades in one goal
-MAX_ROUNDS = 3          # rounds per major before the flow asks whether to keep going
-MAX_IMPLEMENT = 5       # ralph iterations of one implement task
-MAX_CI = 3              # CI verdicts one task may wait for in one round: implement, then each fix
-MAX_FIX = 3             # ralph iterations of one fix
+@node(next={"ci": "ci", "done": "task_done", "gave_up": "implement_exhausted"})
+def implement(s):
+    s.ci_count = 0
+    try:
+        s.result = ralph("prompts/implement.md", until=lambda r: r["done"], max_iter=MAX_IMPLEMENT,
+                         cwd=s.task["repo"], task=s.task, done_so_far=s.finished, findings=s.findings)
+    except Exhausted as exc:
+        s.last = exc.last
+        return "gave_up"
+    if teamcity.configured() and s.task["build_type"] != "none":
+        return "ci"
+    return "done"
 
-for target in MAJORS:
-    prefix = f"v{target}"
-    context(branch=f"ai/angular-{target - 1}-to-{target}", target=target)
-    plan = codex("prompts/plan.md", key=f"{prefix}/plan")
-    human_gate("Approve this plan?", key=f"{prefix}/approve-plan", show=...)
-
-    findings = ""       # why the previous round came back: review reasons, human findings, QA findings, blockers
-    allowed = MAX_ROUNDS
-    rnd = 0
-    while True:
-        rnd += 1
-        if rnd > allowed:
-            if decision(f"{rnd - 1} rounds did not finish Angular {target}. Keep going?", ["retry", "stop"],
-                        key=f"{prefix}/r{rnd}/blocked", show=findings) == "stop":
-                raise SystemExit(1)
-            allowed += MAX_ROUNDS
-        k = f"{prefix}/r{rnd}"
-
-        finished = []
-        for task in plan["tasks"]:
-            # implement: a ralph; Exhausted -> decision retry (next round, blockers become findings) | skip | stop
-            result = ralph("prompts/implement.md", until=lambda r: r["done"], max_iter=MAX_IMPLEMENT,
-                           key=f"{k}/implement/{task['id']}", cwd=task["repo"], task=task,
-                           done_so_far=finished, findings=findings)
-            # CI return loop: wait for the exact commit; a red build gets a fix and the fix commit is waited for too
-            if teamcity.configured() and task["build_type"] != "none":
-                for n in range(1, MAX_CI + 1):
-                    build = step(f"{k}/ci/{task['id']}/{n}",
-                                 lambda: teamcity.wait_for_build(task["build_type"], result["commit"]))
-                    if build["status"] == "SUCCESS":
-                        break
-                    if build["status"] in ("NOT_FOUND", "TIMEOUT"):
-                        ...  # decision skip | stop, keyed f"{k}/ci/{task['id']}/{n}/missing"; nothing for Codex to fix
-                        break
-                    result = ralph("prompts/fix.md", until=lambda r: r["done"], max_iter=MAX_FIX,
-                                   key=f"{k}/fix/{task['id']}/{n}", cwd=task["repo"], task=task, build=build)
-                else:
-                    ...  # MAX_CI verdicts and still red: the blocker report, a decision keyed f"{k}/ci/{task['id']}/red"
-            finished.append({...})
-
-        review = codex("prompts/review.md", key=f"{k}/review", tasks=finished)   # declares passed and reasons itself
-        if not review["passed"]:
-            findings = "AI review of round %d:\n%s" % (rnd, "\n".join(review["reasons"]))
-            log(f"round {rnd}: AI review sent the work back")
-            continue
-        answer = human_gate("Review the pull requests. Answer 'approved', or write your findings.",
-                            key=f"{k}/human-review", show=finished)
-        if answer.strip().lower() != "approved":
-            findings = f"Human review of round {rnd}:\n{answer}"
-            continue
-        human_gate("Merge the pull requests to the release branch, then answer 'merged'.", key=f"{k}/merge")
-        testplan = codex("prompts/testplan.md", key=f"{k}/testplan", tasks=finished)  # read-only
-        answer = human_gate("QA: run the test plan on the release branch. Answer 'passed', or write your findings.",
-                            key=f"{k}/qa", show=testplan["steps"])
-        if answer.strip().lower() != "passed":
-            findings = f"QA of round {rnd}:\n{answer}"
-            continue
-        log(f"Angular {target} reached in {rnd} round(s)")
-        break
-
-    if target != MAJORS[-1] and decision("Direction check: continue to the next major?", ["next", "stop"],
-                                         key=f"{prefix}/direction") == "stop":
-        break
+@node(next={"passed": "human_review", "failed": "start_round"})
+def review(s):
+    review = codex("prompts/review.md", tasks=s.finished, findings=s.findings)
+    s.summary = review["summary"]
+    if review["passed"]:
+        return "passed"
+    send_back(s, "AI review of round %d:\n%s" % (s.round, "\n".join(review["reasons"])))
+    return "failed"
 ```
+
+`send_back(s, findings)` stores the findings and logs `round N of Angular T came back: ...`; every edge into `start_round` other than `approve`'s and `blocked`'s goes through it. Rules kept from v0.2: a skipped implement task is left out of the round's review; `retry` never resets `round`; `findings` is the empty string in round 1. `stop` at any decision ends the flow with exit 0 through `END`, and the `## Progress` line says who stopped it. No `key=` is passed anywhere: inside a visit the engine keys the steps `plan#1`, `implement#1/<n>`, `gate#1`, `decision#1` and `wait` under `<node>#<visit>/`, so the third round's implement of the first task is `implement#3/implement#1/1` with one task per round. `python janus.py graph` prints the map and the README embeds it.
 
 What the diagram's boxes became:
 
 | Diagram | Flow |
 |---|---|
 | Run Controller: start autonomous run | `python janus.py run`; every rerun after a gate is the same run resumed |
-| Codex: plan, upgrade and fix | `{prefix}/plan` once per major; `{k}/implement/<id>/<n>` once per round, with `{{findings}}` from the round before |
-| TeamCity: green for the exact commit? | `{k}/ci/<id>/<n>`, a `step()` around `teamcity.wait_for_build`, keyed per verdict so a fix commit is verified too |
-| Can Codex resolve it within run limits? | `MAX_FIX` iterations of `{k}/fix/<id>/<v>`, where `<v>` is the CI verdict the fix answers, at most `MAX_CI` verdicts; past that, the blocker report |
-| Run Controller: stop and produce blocker report | a `decision` with the last result as `show`: `retry` (next round, blockers become findings), `skip`, `stop` |
-| Fresh Codex session: review full diff | `{k}/review`, a `codex()` whose prompt declares `passed` and `reasons` so the flow can hand the reasons back |
-| Developer: human code review | `{k}/human-review`, a `human_gate`; `approved` moves on, anything else is the findings of the next round |
-| Authorized human: merge | `{k}/merge` |
-| Codex: propose manual test strategy | `{k}/testplan`, read-only, shown at the QA gate |
-| QA: validate on release branch | `{k}/qa`, a `human_gate`; `passed` ends the major, anything else is the findings of the next round |
-| Team: fix tooling; AI lead: update playbook, replan | done by humans while the `blocked` or `exhausted` decision is open; `retry` starts the next round |
-| Architect: direction check | `{prefix}/direction`, a `decision` between majors |
-| AI lead: review metrics, update live playbook | outside the flow; `journal.yaml` and `## Progress` are the metrics |
+| Codex: plan, upgrade and fix | `plan` once per major; `implement` once per task and round, with `{{findings}}` from the round before; `fix` after a red verdict |
+| TeamCity: green for the exact commit? | `ci`, a `step("wait", ...)` around `teamcity.wait_for_build`, one visit per verdict so a fix commit is verified too |
+| Can Codex resolve it within run limits? | `MAX_FIX` iterations of `fix`, at most `MAX_CI` verdicts of `ci`; past that, `ci_red` |
+| Run Controller: stop and produce blocker report | `implement_exhausted`, `fix_exhausted` and `ci_red`: a `decision` with the last result as `show`: `retry` (next round, blockers become findings), `skip`, `stop` |
+| Fresh Codex session: review full diff | `review`, a `codex()` whose prompt declares `passed` and `reasons` so the flow can hand the reasons back, and sees `{{findings}}` so that requested work is not called a defect |
+| Developer: human code review | `human_review`, a `human_gate`; `approved` moves on, anything else is the findings of the next round |
+| Authorized human: merge | `merge` |
+| Codex: propose manual test strategy | `testplan`, read-only, shown at the QA gate |
+| QA: validate on release branch | `qa`, a `human_gate`; `passed` ends the major, anything else is the findings of the next round |
+| Team: fix tooling; AI lead: update playbook, replan | done by humans while `blocked` or a blocker report is open; `retry` starts the next round |
+| Architect: direction check | `major_done`, a `decision` between majors |
+| AI lead: review metrics, update live playbook | outside the flow; `journal.yaml`, its `path` and `## Progress` are the metrics |
 
 `prompts/_preamble.md` carries the rules that Janus 3.0 had in its engine: work only on `{{branch}}`, commit and push your own work and report the commit SHA, never merge or publish a release, never weaken or skip tests, report blockers instead of guessing. `teamcity.py` is about forty lines of `urllib`: find the build for a commit, poll until finished, return status, URL and a failure excerpt. It reads its URL and token from the environment and is used only when those are set.
 
-The example is tried on the throwaway Angular 15 application with a local bare remote and real Codex, without TeamCity. The trial report goes into the example's `README.md`. The slice 3 trial answers the human review of round 1 with a finding, so that round 2 runs with real Codex and the return loop is exercised end to end.
+The example is tried on the throwaway Angular 15 application with a local bare remote and real Codex, without TeamCity. The trial report goes into the example's `README.md`. The slice 3 trial answered the human review of round 1 with a finding, so that round 2 ran with real Codex and the return loop was exercised end to end; the slice 5 trial repeats that with the node flow and checks that the journal's `path` reads as the sequence the map shows, that every Codex entry carries `usage`, and that the round-2 review no longer rejects the edit the human asked for.
 
 ## 11. Slices
 
@@ -405,50 +392,52 @@ A flow may stay a script: plain Python with explicit keys in its loops, as secti
 
 ## 14. Loops and return loops
 
-Every loop in a flow is ordinary Python. The engine has no loop primitive and needs none; what it asks for is that every step inside a loop has a key that names its iteration. These are the patterns, from the simplest to the one the example is built on.
+A loop in a node flow is an edge backwards. The engine has no loop primitive and needs none; the node table says where a stage can go, the flow returns the label, and the engine counts the visits. What the engine asks for is that the flow decide every edge from its own state `s`, rebuilt from the replayed results, never from the journal, the clock or a random source. These are the patterns, from the simplest to the one the example is built on.
 
-**Bounded loop.** A `for` over a known list or range, with the index or the item's id in the key.
-
-```python
-for task in plan["tasks"]:
-    codex("prompts/implement.md", key=f"implement/{task['id']}", task=task)
-for n in range(1, 4):
-    step(f"ci/{n}", lambda: teamcity.wait_for_build(...))
-```
-
-**Ralph loop.** The bounded loop the engine provides for "call Codex until its result satisfies a predicate": `ralph()` keys its iterations `<key>/<n>` and hands each one the previous result as `{{previous}}`.
-
-**Return loop.** The diagram shape "go back to Codex when a later check says no". It is a `while True` around the whole stretch that may be repeated, with a round counter, and every key inside the body carries the round: `f"r{rnd}/..."`. A checkpoint that fails records why in a variable, `findings`, and `continue`s; a checkpoint that passes falls through; the end of the body `break`s.
+**Bounded loop.** A node visited once per item, with the index on `s`: `next_task` picks `s.task = tasks[s.task_index]` and returns `task`, or `all_done` when none is left; `task_done` counts `s.task_index` up and goes back to `next_task`. Each visit has its own keys (`implement#1/...`, `implement#2/...`), so nothing is passed as `key=`.
 
 ```python
-findings = ""                   # a string, empty in the first round, like {{previous}} in a ralph
-rnd = 0
-while True:
-    rnd += 1
-    k = f"r{rnd}"
-    work = ralph("prompts/implement.md", until=lambda r: r["done"], max_iter=5, key=f"{k}/implement",
-                 findings=findings)
-    review = codex("prompts/review.md", key=f"{k}/review", commit=work["commit"])
-    if not review["passed"]:
-        findings = "\n".join(review["reasons"])
-        continue
-    answer = human_gate("Approve, or write your findings.", key=f"{k}/human-review", show=work)
-    if answer.strip().lower() != "approved":
-        findings = answer
-        continue
-    break
+@node(next={"task": "implement", "all_done": "review"})
+def next_task(s):
+    if s.task_index >= len(s.plan["tasks"]):
+        return "all_done"
+    s.task = s.plan["tasks"][s.task_index]
+    return "task"
 ```
 
-Why this works with replay: `run` executes the flow from the top every time. Round 1's steps are `done` and its gate is `answered`, so they return their stored results without executing; the flow takes the same branches it took last time, arrives at round 2 with the same `findings`, and the first key it meets that is not in the journal is the step that runs. A gate inside round 2 opens, exits with code 2, and the next run replays rounds 1 and 2 up to that gate. The round counter is never read from the journal; it is recomputed by the flow from the replayed answers, which is what keeps the keys deterministic (section 5).
+**Ralph loop.** The bounded loop the engine provides for "call Codex until its result satisfies a predicate": `ralph()` keys its iterations `<key>/<n>` under the visit and hands each one the previous result as `{{previous}}`.
 
-**Feeding the reason back.** The next round's Codex must know why the last one came back. Pass it as a call variable and reference it in the prompt (`{{findings}}`), the way `{{previous}}` works inside a ralph. A `human_gate` answer is free text and is the natural carrier: one gate serves both as the approval and as the findings box, the flow only compares the answer with the pass word. When the check is Codex's own, declare `passed` and `reasons` in the prompt's `output` and call `codex()` rather than `ai_gate()`, so the reasons come back to the flow and not only into the journal.
+**Return loop.** The diagram shape "go back to Codex when a later check says no". It is an edge from the checkpoint back to the node that starts the stretch, with a round counter on `s` that the start node advances, and a string `findings` that the checkpoint fills before it returns the label:
 
-**Bounding a return loop.** `while True` needs an exit the flow controls. Count the rounds and, past the limit, open a `decision` keyed with the round (`f"r{rnd}/blocked"`) that offers `retry` or `stop`; `retry` raises the limit and lets the loop go on, so the keys of the rounds that follow stay fresh. Never reset the counter to reuse `r1`: those keys are `done` and would replay.
+```python
+@node(next={"go": "next_task", "too_many": "blocked"})
+def start_round(s):
+    if s.round >= s.allowed:
+        return "too_many"
+    s.round += 1
+    s.task_index, s.finished = 0, []
+    return "go"
 
-**The blocker report.** When a ralph gives up, `Exhausted.last` is the report. Catch it and open a `decision` with the report as `show`. `retry` ends the round and starts the next one with the blockers as `findings`; `skip` keeps what was committed and continues the round; `stop` raises `SystemExit(1)`. The human does the tooling or access work while the gate is open and answers when it is done. `reset` is not the way back: it archives the journal, and every finished round with it.
+@node(next={"approved": "merge", "findings": "start_round"})
+def human_review(s):
+    answer = human_gate("Review the pull requests of round %d. Answer 'approved', or write your findings." % s.round,
+                        show={"summary": s.summary, "tasks": [task_line(t) for t in s.finished]})
+    if answer.strip().lower() == "approved":
+        return "approved"
+    send_back(s, "Human review of round %d:\n%s" % (s.round, answer))
+    return "findings"
+```
 
-**Nested loops.** Loops compose by prefixing keys: a major, a round, a task and a ralph iteration give `v16/r2/implement/ui-kit/3`. Any depth is fine; the journal is a flat mapping and the keys are strings.
+Why this works with replay: `run` executes `flow.py` from the top every time and walks the nodes from `start`. Round 1's steps are `done` and its gate is `answered`, so they return their stored results without executing; the nodes return the same labels, `s` is rebuilt the same way, and the first key the engine meets that is not in the journal is the step that runs: `implement#2/implement#1/1`. A gate inside round 2 opens, exits with code 2, and the next run replays both rounds up to that gate. The engine checks the walk against the journal's `path`: visit `n` must be the node recorded for visit `n`, and a finished visit must return the label it returned before, or the run stops with `flow changed` (section 5). A round number is not part of any key; it lives on `s.round`, in gate questions and in the findings strings.
 
-**Two rules.** Every key in a loop body carries every enclosing loop's counter or id, and the flow derives those counters from its own control flow, never from the journal, the clock or a random source. Break either and a later run replays the wrong step under a reused key, silently.
+**Feeding the reason back.** The next round's Codex must know why the last one came back. Pass `s.findings` as a call variable and reference it in the prompt (`{{findings}}`), the way `{{previous}}` works inside a ralph; pass it to the reviewer's prompt too, so that a change a human asked for is not called a defect. A `human_gate` answer is free text and is the natural carrier: one gate serves both as the approval and as the findings box, the flow only compares the answer with the pass word. When the check is Codex's own, declare `passed` and `reasons` in the prompt's `output` and call `codex()` rather than `ai_gate()`, so the reasons come back to the flow and not only into the journal.
 
-**What is deliberately not there.** No journal compaction: a long loop makes a long journal, and `status` shows the last five steps. No loop primitive: the day a flow needs one that `while` cannot express is the day to add it, as section 13 says.
+**Bounding a return loop.** The start node needs an exit the flow controls. Count the rounds on `s` and, past the allowance, take an edge to a node that opens a `decision` with `retry` and `stop`; `retry` raises the allowance and goes back to the start node, `stop` goes to `END`. The counter is never reset, so every round of a major has its own number in the log.
+
+**The blocker report.** When a ralph gives up, `Exhausted.last` is the report. Catch it in the node, keep it on `s.last`, return a label such as `gave_up`, and let that edge lead to a node that opens a `decision` with the report as `show`: `retry` goes back to the start node with the blockers as `findings`; `skip` keeps what was committed and continues the round; `stop` goes to `END`. The human does the tooling or access work while the gate is open and answers when it is done. `reset` is not the way back: it archives the journal, and every finished round with it.
+
+**Nested loops.** Loops compose by edges: the example has the majors (`major_done -- next --> next_major`), the rounds (four edges into `start_round`) and the tasks (`task_done --> next_task`) with the CI loop inside (`fix -- ci --> ci`). Each node's visit count keeps the keys apart at any depth: the second major's plan is `plan#2/plan#1`, the fourth round's implement of the first task is `implement#4/implement#1/1`.
+
+**One rule.** A node flow needs no explicit keys: the engine keys every step by the node's visit and the call's default. What the flow must do instead is derive every edge from `s`, which it rebuilds from its own control flow and the replayed results, never from the journal, the clock or a random source. Break it and a later run takes another edge, and the engine stops it with `flow changed` rather than replaying the wrong step under a reused key.
+
+**What is deliberately not there.** No journal compaction: a long loop makes a long journal, and `status` shows the last five steps. No loop primitive: the day a flow needs one that an edge cannot express is the day to add it, as section 13 says. A script flow keeps the v0.2 patterns of this section, `while True` with explicit keys that carry the round, as section 13 notes.
