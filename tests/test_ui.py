@@ -1,0 +1,130 @@
+"""The live page (design 2026-09-24 section 4): ``build_state`` from files written by hand, and the server."""
+import http.client
+import json
+import threading
+
+import pytest
+import yaml
+
+import janus_ui
+
+NOW = "2026-09-24T10:10:00"
+T0, T1, T2 = "2026-09-24T10:00:00", "2026-09-24T10:00:12", "2026-09-24T10:03:04"
+GRAPH = {"start": "a", "nodes": [{"name": "a", "next": {"go": "b", "stop": None}}, {"name": "b", "next": {"": "a"}}]}
+CLASSDEFS = ("  classDef visited fill:#1b5e20,stroke:#66bb6a\n  classDef running fill:#0d47a1,stroke:#42a5f5\n"
+             "  classDef open fill:#e65100,stroke:#ffb74d\n  classDef failed fill:#b71c1c,stroke:#ef5350")
+
+
+def entry(kind, status, started=T0, finished=None, **fields):
+    """A journal entry as the engine writes it: gates carry no attempt, finished only once it is set."""
+    e = {"kind": kind, "status": status}
+    if kind not in ("gate", "decision"):
+        e["attempt"] = fields.pop("attempt", 1)
+    e["started"] = started
+    if finished is not None:
+        e["finished"] = finished
+    e.update(fields)
+    return e
+
+
+def write_journal(root, steps, **extra):
+    journal = {"flow": "flow.py", "started": T0, "steps": steps}
+    journal.update(extra)
+    (root / "journal.yaml").write_text(yaml.safe_dump(journal, sort_keys=False, allow_unicode=True), encoding="utf-8")
+
+
+def visit(node, n, next=None):
+    e = {"node": node, "visit": n, "started": T0}
+    if next is not None:
+        e.update(finished=T1, next=next)
+    return e
+
+
+def state(root, **steps):
+    write_journal(root, steps)
+    return janus_ui.build_state(root, now=NOW)
+
+
+def names(nodes):
+    return [(n["name"], names(n["children"])) for n in nodes]
+
+
+# --- 1, 2: no journal, corrupt journal ------------------------------------------
+
+def test_a_missing_journal_gives_the_empty_state(tmp_path):
+    assert janus_ui.build_state(tmp_path, now=NOW) == {
+        "folder": tmp_path.name, "flow": "flow.py", "started": None, "updated": None, "error": None, "goal": "",
+        "steps": [], "tree": [], "current": None, "gate": None, "path": [], "mermaid": None,
+        "progress": [], "decisions": [],
+        "totals": {"steps": 0, "done": 0, "failed": 0, "running": 0, "open": 0, "answered": 0, "codex_seconds": 0,
+                   "tokens": {"input": 0, "cached": 0, "output": 0, "total": 0, "sessions": 0}}}
+
+
+@pytest.mark.parametrize("text, error", [
+    ("[not a mapping", "journal.yaml is not valid YAML: "),
+    ("- a list\n", "journal.yaml is not a mapping"),
+    ("", "journal.yaml is not a mapping"),
+])
+def test_a_corrupt_journal_sets_error_and_reads_as_missing(tmp_path, text, error):
+    (tmp_path / "journal.yaml").write_text(text, encoding="utf-8")
+    st = janus_ui.build_state(tmp_path, now=NOW)
+    assert st["error"].startswith(error) and "\n" not in st["error"]
+    assert (st["steps"], st["tree"], st["current"], st["gate"], st["mermaid"], st["updated"]) == \
+        ([], [], None, None, None, None)
+    assert st["totals"]["steps"] == 0
+
+
+# --- 8: seconds and summaries ---------------------------------------------------------
+
+def test_seconds_and_summaries_per_status(tmp_path):
+    long = "x" * 200
+    st = state(tmp_path, **{
+        "done": entry("codex", "done", finished=T2, result={"summary": "planned\nmore", "text": "no"}),
+        "text": entry("codex", "done", finished=T1, result={"text": long}),
+        "plain": entry("step", "done", finished=T1, result="a string result"),
+        "answered": entry("gate", "answered", finished=T1, answer="yes\nbut later"),
+        "failed": entry("codex", "failed", finished=T1, error="codex exec exited with 3\ntrace"),
+        "running": entry("codex", "running"),
+        "open": entry("gate", "open", question="Merge it?\nSay merged."),
+        "nostart": entry("codex", "running", started=None),
+        "badstart": entry("codex", "done", started="yesterday", finished=T1),
+        "nofinish": entry("codex", "done")})
+    by = {s["key"]: s for s in st["steps"]}
+    assert [s["key"] for s in st["steps"]] == list(by)
+    assert (by["done"]["seconds"], by["done"]["summary"]) == (184, "planned")
+    assert (by["text"]["seconds"], by["text"]["summary"]) == (12, "x" * 157 + "...")
+    assert by["plain"]["summary"] == ""
+    assert (by["answered"]["seconds"], by["answered"]["summary"], by["answered"]["attempt"]) == (12, "yes", None)
+    assert (by["failed"]["seconds"], by["failed"]["summary"]) == (12, "codex exec exited with 3")
+    assert (by["running"]["seconds"], by["running"]["summary"]) == (600, "")
+    assert (by["open"]["seconds"], by["open"]["summary"]) == (600, "Merge it?")
+    assert by["nostart"]["seconds"] is None and by["nostart"]["started"] is None
+    assert by["badstart"]["seconds"] is None and by["nofinish"]["seconds"] is None
+    assert by["done"]["detail"] == yaml.safe_dump(by["done"] and {
+        "kind": "codex", "status": "done", "attempt": 1, "started": T0, "finished": T2,
+        "result": {"summary": "planned\nmore", "text": "no"}}, sort_keys=False, allow_unicode=True)
+    assert (by["done"]["session"], by["done"]["usage"], by["done"]["started"], by["done"]["finished"]) == \
+        (None, None, T0, T2)
+
+
+# --- 9: totals --------------------------------------------------------------------------
+
+def test_totals_count_statuses_codex_seconds_and_tokens(tmp_path):
+    usage = {"input": 100, "cached": 40, "output": 10, "total": 110}
+    st = state(tmp_path, **{
+        "plan#1": entry("codex", "done", finished=T1, session="a", usage=usage),
+        "fix/1": entry("codex", "failed", finished=T2, error="e", session="b"),
+        "fix/2": entry("codex", "done", finished=T1, session="c", usage={"input": 50, "cached": 0, "output": 5,
+                                                                          "total": 55}),
+        "check#1": entry("ai_gate", "done", finished=T1, result=True),
+        "wait": entry("step", "done", finished=T2, result=None),
+        "gate#1": entry("gate", "answered", finished=T1, answer="yes"),
+        "gate#2": entry("gate", "open", question="q"),
+        "now": entry("codex", "running")})
+    assert st["totals"] == {"steps": 8, "done": 4, "failed": 1, "running": 1, "open": 1, "answered": 1,
+                            "codex_seconds": 12 + 184 + 12 + 12 + 600,
+                            "tokens": {"input": 150, "cached": 40, "output": 15, "total": 165, "sessions": 2}}
+    by = {s["key"]: s for s in st["steps"]}
+    assert (by["plan#1"]["session"], by["plan#1"]["usage"]) == ("a", usage)
+    assert (by["fix/1"]["session"], by["fix/1"]["usage"]) == ("b", None)
+    assert st["flow"] == "flow.py" and st["started"] == T0 and st["updated"] is not None and st["error"] is None

@@ -1,0 +1,108 @@
+#!/usr/bin/env python3
+"""Janus UI: a live view of one goal folder in the browser (design 2026-09-24 section 4).
+``python janus_ui.py [--port N]`` from the goal folder serves http://127.0.0.1:8765 on loopback only. It reads
+``journal.yaml`` and ``JANUS.md`` on every poll and never writes, never runs the flow, never commits."""
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+import errno
+import json
+import sys
+from collections import Counter
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+
+import yaml
+
+from janus import find_section, to_mermaid
+
+JOURNAL_FILE = "journal.yaml"
+GOAL_FILE = "JANUS.md"
+SUMMARY_WIDTH = 160
+CODEX_KINDS = ("codex", "ai_gate")
+TOKEN_KEYS = ("input", "cached", "output", "total")
+
+
+# --- state -----------------------------------------------------------------
+
+def read_journal(root: Path) -> Tuple[Dict[str, Any], Optional[str], Optional[str]]:
+    """(journal, updated, error): the mapping, its mtime as ISO seconds, one error line. A missing file gives
+    ({}, None, None); a corrupt one ({}, None, "journal.yaml ...") so the rest reads as for a missing journal."""
+    path = root / JOURNAL_FILE
+    if not path.exists():
+        return {}, None, None
+    try:
+        loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except yaml.YAMLError as exc:
+        return {}, None, f"{JOURNAL_FILE} is not valid YAML: {' '.join(str(exc).split())}"
+    if not isinstance(loaded, dict):
+        return {}, None, f"{JOURNAL_FILE} is not a mapping"
+    return loaded, dt.datetime.fromtimestamp(path.stat().st_mtime).isoformat(timespec="seconds"), None
+
+
+def parse_time(value: Any) -> Optional[dt.datetime]:
+    """An engine timestamp (ISO seconds, a string or already a datetime when YAML resolved it), else None."""
+    if isinstance(value, dt.datetime):
+        return value
+    try:
+        return dt.datetime.fromisoformat(value) if isinstance(value, str) else None
+    except ValueError:
+        return None
+
+
+def seconds(entry: Dict[str, Any], now: dt.datetime) -> Optional[int]:
+    """Whole seconds from ``started`` to ``finished``, or to ``now`` while running or open; None when unparsable."""
+    started = parse_time(entry.get("started"))
+    finished = now if entry.get("status") in ("running", "open") else parse_time(entry.get("finished"))
+    return None if started is None or finished is None else int((finished - started).total_seconds())
+
+
+def summary(entry: Dict[str, Any]) -> str:
+    """One line of at most 160 characters: the result's summary or text, the answer, the error or the question."""
+    status, result = entry.get("status"), entry.get("result")
+    if status == "done":
+        text = next((result[k] for k in ("summary", "text") if isinstance(result, dict)
+                     and isinstance(result.get(k), str)), "")
+    else:
+        field = {"answered": "answer", "failed": "error", "open": "question"}.get(status)
+        text = entry.get(field) if field else ""
+    line = str(text).splitlines()[0] if text else ""
+    return line if len(line) <= SUMMARY_WIDTH else line[:SUMMARY_WIDTH - 3] + "..."
+
+
+def step_item(key: str, entry: Dict[str, Any], now: dt.datetime) -> Dict[str, Any]:
+    usage = entry.get("usage")
+    return {"key": key, "kind": entry.get("kind"), "status": entry.get("status"), "attempt": entry.get("attempt"),
+            "session": entry.get("session"), "usage": usage if isinstance(usage, dict) else None,
+            "started": entry.get("started"), "finished": entry.get("finished"), "seconds": seconds(entry, now),
+            "summary": summary(entry), "detail": yaml.safe_dump(entry, sort_keys=False, allow_unicode=True)}
+
+
+def section_lines(lines: List[str], heading: str) -> List[str]:
+    span = find_section(lines, heading)
+    return [] if span is None else lines[span[0] + 1:span[1]]
+
+
+def build_state(root: Path, now: Any = None) -> Dict[str, Any]:
+    """The page's state from journal.yaml and JANUS.md (design 4.2); ``now`` (ISO string or datetime) for tests."""
+    root, clock = Path(root), parse_time(now) or dt.datetime.now()
+    journal, updated, error = read_journal(root)
+    raw = journal.get("steps") if isinstance(journal.get("steps"), dict) else {}
+    steps = [step_item(str(k), e, clock) for k, e in raw.items() if isinstance(e, dict)]
+    goal_path = root / GOAL_FILE
+    lines = goal_path.read_text(encoding="utf-8").splitlines() if goal_path.exists() else []
+    used = [s["usage"] for s in steps if s["usage"]]
+    tokens = {k: sum(u.get(k, 0) for u in used) for k in TOKEN_KEYS}
+    tokens["sessions"] = len(used)
+    totals = {"steps": len(steps), **{st: sum(1 for s in steps if s["status"] == st)
+                                      for st in ("done", "failed", "running", "open", "answered")},
+              "codex_seconds": sum(s["seconds"] or 0 for s in steps if s["kind"] in CODEX_KINDS), "tokens": tokens}
+    return {"folder": root.resolve().name, "flow": journal.get("flow", "flow.py"), "started": journal.get("started"),
+            "updated": updated, "error": error, "goal": "\n".join(section_lines(lines, "# Goal")).strip(),
+            "steps": steps, "tree": [], "current": None,
+            "gate": None, "path": [],
+            "mermaid": None,
+            "progress": [], "decisions": [],
+            "totals": totals}

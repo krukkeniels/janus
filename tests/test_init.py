@@ -1,8 +1,9 @@
 """`init` (design 2026-09-24 section 2.7): a starter goal folder that runs as it is."""
 import janus
+import janus_ui
 from helpers import read_journal
 
-FILES = {"janus.py", "JANUS.md", "flow.py", "prompts/_preamble.md", "prompts/draft.md", ".gitignore"}
+FILES = {"janus.py", "janus_ui.py", "JANUS.md", "flow.py", "prompts/_preamble.md", "prompts/draft.md", ".gitignore"}
 MERMAID = "flowchart LR\n  draft --> approve\n  approve -- yes --> finish\n  approve -- no --> draft\n" \
           "  finish --> END\n  END([END])\n"
 
@@ -18,6 +19,7 @@ def test_init_creates_the_starter_folder_and_refuses_a_second_time(tmp_path, mon
     goal = tmp_path / "goal"
     assert {str(p.relative_to(goal)) for p in goal.rglob("*") if p.is_file()} == FILES
     assert (goal / "janus.py").read_text(encoding="utf-8") == open(janus.__file__, encoding="utf-8").read()
+    assert (goal / "janus_ui.py").read_text(encoding="utf-8") == open(janus_ui.__file__, encoding="utf-8").read()
     assert (goal / "JANUS.md").read_text(encoding="utf-8") == \
         "# Goal\nDescribe what Codex must achieve; every prompt sees this text as {{goal}}.\n"
     assert (goal / ".gitignore").read_text(encoding="utf-8") == "*/\n!prompts/\n!journals/\n"
