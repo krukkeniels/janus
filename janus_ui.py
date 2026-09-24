@@ -85,12 +85,56 @@ def section_lines(lines: List[str], heading: str) -> List[str]:
     return [] if span is None else lines[span[0] + 1:span[1]]
 
 
+def build_tree(steps: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Keys split on '/': a journal key's node carries its status and seconds, a group rolls its children up
+    (running if any is running or open, else failed if any failed, else done) and sums their seconds."""
+    roots: List[Dict[str, Any]] = []
+    nodes: Dict[str, Dict[str, Any]] = {}
+    for item in steps:
+        siblings, prefix = roots, ""
+        for part in item["key"].split("/"):
+            prefix = f"{prefix}/{part}" if prefix else part
+            if prefix not in nodes:
+                nodes[prefix] = {"name": part, "key": prefix, "status": None, "seconds": None, "next": None,
+                                 "children": []}
+                siblings.append(nodes[prefix])
+            siblings = nodes[prefix]["children"]
+        nodes[item["key"]].update(status=item["status"], seconds=item["seconds"])
+
+    def roll(node: Dict[str, Any]) -> None:
+        for child in node["children"]:
+            roll(child)
+        if node["status"] is None and node["children"]:
+            statuses = [c["status"] for c in node["children"]]
+            node["status"] = ("running" if any(s in ("running", "open") for s in statuses)
+                              else "failed" if "failed" in statuses else "done")
+            timed = [c["seconds"] for c in node["children"] if c["seconds"] is not None]
+            node["seconds"] = sum(timed) if timed else None
+
+    for root in roots:
+        roll(root)
+    return roots
+
+
+def gate_of(steps: List[Dict[str, Any]], raw: Dict[str, Any], lines: List[str]) -> Optional[Dict[str, Any]]:
+    """The first open entry with its verbatim ``## Gate: <key>`` section of JANUS.md (heading included)."""
+    for s in steps:
+        if s["status"] == "open":
+            span = find_section(lines, f"## Gate: {s['key']}")
+            return {"key": s["key"], "kind": s["kind"], "question": raw[s["key"]].get("question"),
+                    "section": "\n".join(lines[span[0]:span[1]]) if span else ""}
+    return None
+
+
 def build_state(root: Path, now: Any = None) -> Dict[str, Any]:
     """The page's state from journal.yaml and JANUS.md (design 4.2); ``now`` (ISO string or datetime) for tests."""
     root, clock = Path(root), parse_time(now) or dt.datetime.now()
     journal, updated, error = read_journal(root)
     raw = journal.get("steps") if isinstance(journal.get("steps"), dict) else {}
     steps = [step_item(str(k), e, clock) for k, e in raw.items() if isinstance(e, dict)]
+    live = [s for s in steps if s["status"] in ("running", "open")]
+    failed = [s for s in steps if s["status"] == "failed"]
+    current = live[0] if live else failed[-1] if failed else None
     goal_path = root / GOAL_FILE
     lines = goal_path.read_text(encoding="utf-8").splitlines() if goal_path.exists() else []
     used = [s["usage"] for s in steps if s["usage"]]
@@ -101,8 +145,8 @@ def build_state(root: Path, now: Any = None) -> Dict[str, Any]:
               "codex_seconds": sum(s["seconds"] or 0 for s in steps if s["kind"] in CODEX_KINDS), "tokens": tokens}
     return {"folder": root.resolve().name, "flow": journal.get("flow", "flow.py"), "started": journal.get("started"),
             "updated": updated, "error": error, "goal": "\n".join(section_lines(lines, "# Goal")).strip(),
-            "steps": steps, "tree": [], "current": None,
-            "gate": None, "path": [],
+            "steps": steps, "tree": build_tree(steps), "current": current["key"] if current else None,
+            "gate": gate_of(steps, raw, lines), "path": [],
             "mermaid": None,
-            "progress": [], "decisions": [],
+            "progress": section_lines(lines, "## Progress"), "decisions": section_lines(lines, "## Decisions"),
             "totals": totals}

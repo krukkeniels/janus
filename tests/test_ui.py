@@ -128,3 +128,81 @@ def test_totals_count_statuses_codex_seconds_and_tokens(tmp_path):
     assert (by["plan#1"]["session"], by["plan#1"]["usage"]) == ("a", usage)
     assert (by["fix/1"]["session"], by["fix/1"]["usage"]) == ("b", None)
     assert st["flow"] == "flow.py" and st["started"] == T0 and st["updated"] is not None and st["error"] is None
+
+
+# --- 3, 4, 5: the tree -------------------------------------------------------------
+
+def test_tree_nests_keys_split_on_slash_in_first_appearance_order(tmp_path):
+    st = state(tmp_path, **{"review#2/review#1": entry("codex", "done", finished=T1),
+                            "implement#1/implement#1/1": entry("codex", "done", finished=T1),
+                            "implement#1/implement#1/2": entry("codex", "done", finished=T2),
+                            "implement#1/wait": entry("step", "done", finished=T1)})
+    assert names(st["tree"]) == [("review#2", [("review#1", [])]),
+                                 ("implement#1", [("implement#1", [("1", []), ("2", [])]), ("wait", [])])]
+    ralph = st["tree"][1]["children"][0]
+    assert ralph["key"] == "implement#1/implement#1" and ralph["children"][1]["key"] == "implement#1/implement#1/2"
+    assert [c["seconds"] for c in ralph["children"]] == [12, 184] and ralph["seconds"] == 196
+    assert st["tree"][1]["seconds"] == 208 and st["tree"][0]["children"][0]["seconds"] == 12
+    assert all(n["next"] is None for n in st["tree"])
+
+
+def test_a_group_rolls_up_running_over_failed_over_done(tmp_path):
+    st = state(tmp_path, **{"a#1/x": entry("codex", "done", finished=T1), "a#1/y": entry("codex", "running"),
+                            "b#1/x": entry("codex", "failed", finished=T1, error="boom"),
+                            "b#1/y": entry("codex", "done", finished=T1),
+                            "c#1/gate#1": entry("gate", "open", question="ok?"),
+                            "d#1/x": entry("codex", "done", finished=T1),
+                            "d#1/gate#1": entry("gate", "answered", finished=T1, answer="yes")})
+    assert [(n["name"], n["status"]) for n in st["tree"]] == \
+        [("a#1", "running"), ("b#1", "failed"), ("c#1", "running"), ("d#1", "done")]
+    assert st["tree"][2]["seconds"] == 600
+
+
+def test_a_key_that_is_both_an_entry_and_a_prefix_keeps_its_status_and_lists_its_children(tmp_path):
+    st = state(tmp_path, **{"build": entry("step", "done", finished=T2, result="built"),
+                            "build/1": entry("codex", "failed", finished=T1, error="no")})
+    assert names(st["tree"]) == [("build", [("1", [])])]
+    assert (st["tree"][0]["status"], st["tree"][0]["seconds"]) == ("done", 184)
+    assert (st["tree"][0]["children"][0]["status"], st["tree"][0]["children"][0]["seconds"]) == ("failed", 12)
+    assert st["current"] == "build/1"
+
+
+# --- 6, 7: current and the gate -----------------------------------------------------
+
+def test_current_is_the_first_running_or_open_else_the_last_failed(tmp_path):
+    done, running = entry("codex", "done", finished=T1), entry("codex", "running")
+    failed, gate = entry("codex", "failed", finished=T1, error="x"), entry("gate", "open", question="q")
+    assert state(tmp_path, a=done, b=failed, c=running, d=gate)["current"] == "c"
+    assert state(tmp_path, a=gate, b=running)["current"] == "a"
+    assert state(tmp_path, a=failed, b=done, c=failed)["current"] == "c"
+    assert state(tmp_path, a=done, b=done)["current"] is None
+    assert state(tmp_path)["current"] is None
+
+
+def test_gate_carries_the_verbatim_section_or_an_empty_string(tmp_path):
+    (tmp_path / "JANUS.md").write_text(
+        "# Goal\nUpgrade the widget.\n\n## Gate: blocked#1/decision#1\nRetry or stop?\n    One of: retry, stop.\n\n"
+        "    round 3 of 3\n\nanswer:\n\n## Progress\n- 2026-09-24T10:00:00 hi\n", encoding="utf-8")
+    st = state(tmp_path, **{"plan#1": entry("codex", "done", finished=T1),
+                            "blocked#1/decision#1": entry("decision", "open", question="Retry or stop?\nOne of: ..."),
+                            "other#1/gate#1": entry("gate", "open", question="second")})
+    assert st["gate"] == {"key": "blocked#1/decision#1", "kind": "decision", "question": "Retry or stop?\nOne of: ...",
+                          "section": "## Gate: blocked#1/decision#1\nRetry or stop?\n    One of: retry, stop.\n\n"
+                                     "    round 3 of 3\n\nanswer:"}
+    assert st["goal"] == "Upgrade the widget." and st["progress"] == ["- 2026-09-24T10:00:00 hi"]
+    (tmp_path / "JANUS.md").unlink()
+    st = janus_ui.build_state(tmp_path, now=NOW)
+    assert st["gate"]["section"] == "" and st["goal"] == "" and st["progress"] == [] and st["decisions"] == []
+    assert state(tmp_path, **{"plan#1": entry("codex", "done", finished=T1)})["gate"] is None
+
+
+# --- 10: progress and decisions -------------------------------------------------------
+
+def test_progress_and_decisions_are_the_section_lines_verbatim(tmp_path):
+    (tmp_path / "JANUS.md").write_text(
+        "# Goal\nDo it.\n\n## Progress\n- 2026-09-24T10:00:00 plan#1: started\n  detail line\n\n"
+        "## Decisions\n- 2026-09-24 gate#1: Merge it?\n  answer: yes\n", encoding="utf-8")
+    st = janus_ui.build_state(tmp_path, now=NOW)
+    assert st["progress"] == ["- 2026-09-24T10:00:00 plan#1: started", "  detail line", ""]
+    assert st["decisions"] == ["- 2026-09-24 gate#1: Merge it?", "  answer: yes"]
+    assert st["goal"] == "Do it."
