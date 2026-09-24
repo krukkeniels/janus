@@ -765,7 +765,8 @@ next, in this folder:
   3. edit flow.py: one function per node, next= says where it goes
   4. python janus.py graph    # print the map
   5. python janus.py run      # run it; answer gates in JANUS.md and run again
-  6. python janus_ui.py       # watch it in the browser"""
+  6. python janus_ui.py       # watch it in the browser
+Codex can help with steps 2 and 3: cp -r <janus repository>/skills/janus-flow ~/.codex/skills/"""
 
 
 def cmd_init(folder: Optional[str]) -> int:
