@@ -109,8 +109,8 @@ Exit codes of `python janus.py run`: 0 the flow ended, 2 a gate is open, 1 a ste
   values from `context()`; the keyword arguments of the call. Pass strings for things that may be empty
   (`findings=""`) and use them whole, never dotted.
 - `{{previous}}` exists only inside a `ralph` (empty in its first iteration).
-- `prompts/_preamble.md` is prepended to every prompt and sees only `goal`, `attempt` and `context()`
-  values, never a call argument.
+- `prompts/_preamble.md` is rendered with the same variables as each prompt it precedes, for every
+  call: keep it to `goal`, `attempt` and `context()` values, or a call that lacks a placeholder fails.
 - `show=` at a gate is rewritten into `JANUS.md` on every stalled run: pass a summary and short lines,
   not whole results.
 
