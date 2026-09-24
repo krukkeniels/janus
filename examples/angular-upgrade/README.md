@@ -597,3 +597,187 @@ replayed `log()` lines and `flow ended`, exited 0 in 1 s and left `journal.yaml`
 The one departure from the plan is that the flow needed three rounds instead of two, because the
 AI review of round 2 sent that round back as well — which §12.9 allows (a round, not round 1) and
 which exercised the return loop twice instead of once.
+
+## Trial 3 (slice 5): the node flow with real Codex, a round sent back, the path as the map, 2026-09-24
+
+Run on one throwaway application, without TeamCity, for design section 3.5 of 2026-09-24: the human
+review of round 1 answers with the same finding as Trial 2, round 2 runs with real Codex under the
+node keys, the finished flow is run once more and the journal does not change. Three things are
+checked that Trial 2 could not: the journal's `path` reads as the sequence the map above shows,
+every Codex entry carries `session` and `usage`, and the round-2 review, which now sees the
+findings, does not reject the edit the human asked for.
+
+**Setup.** Goal folder `/home/race-day/janus-trial/slice5-angular-16`, a Git repository with the
+bare remote `/home/race-day/janus-trial/origin/slice5-angular-16.git`. `janus.py` and
+`janus_ui.py` copied from `main` at commit `9a96139`. The application is `app/`, a clone of
+`/home/race-day/janus-trial/origin/ng15-app-slice5.git`, a bare made from the slice 2 remote's
+`master` alone (`f8dc4e4`, Angular 15.2, three karma specs). Codex is codex-cli 0.155.1, model
+`gpt-5.6-sol` at `xhigh` reasoning from `~/.codex/config.toml`; Janus passes no model flags. Node
+v24.5.0, pnpm 10.33.0, PyYAML 6.0.1. `JANUS_TEAMCITY_URL` and `JANUS_TEAMCITY_TOKEN` were unset, so
+`implement` went to `task_done` directly and no `ci` node was visited. `MAJORS = [16]`. The runs
+were driven by a Claude Code session; the gate answers were written with `sed` after `answer:`.
+
+**Runs.**
+
+| Run | Command | Wall clock | Exit | Stopped at |
+|---|---|---|---|---|
+| 1 | `python3 janus.py run` | 62 s | 2 | gate `approve#1/gate#1` |
+| 2 | `python3 janus.py run` | 261 s | 2 | gate `human_review#1/gate#1` |
+| 3 | `python3 janus.py run` | 176 s | 2 | gate `human_review#2/gate#1` |
+| 4 | `python3 janus.py run` | < 1 s | 2 | gate `merge#1/gate#1` |
+| 5 | `python3 janus.py run` | 71 s | 2 | gate `qa#1/gate#1` |
+| 6 | `python3 janus.py run` | < 1 s | 0 | flow ended, `Angular 16 reached in 2 round(s)` |
+| 7 | `python3 janus.py run` | < 1 s | 0 | flow ended, nothing re-executed, journal byte-identical |
+
+Six Codex calls in all, 570 s of the 570 s the seven runs took: `plan#1/plan#1` 62 s,
+`implement#1/implement#1/1` 92 s, `review#1/review#1` 169 s, `implement#2/implement#1/1` 64 s,
+`review#2/review#1` 112 s, `testplan#1/testplan#1` 71 s. Every ralph finished in one iteration
+and every step succeeded on attempt 1; no gate other than the five expected ones opened.
+
+**The path.** `python3 janus.py status` printed `at: major_done#1 (visit 1 of major_done)` after
+run 6. The journal's `path`, printed as `node#visit (edge)`:
+
+```text
+start#1 -> next_major#1 -> plan#1 -> approve#1 -> start_round#1 (go) -> next_task#1 (task) -> implement#1 (done) -> task_done#1 -> next_task#2 (all_done) -> review#1 (passed) -> human_review#1 (findings) -> start_round#2 (go) -> next_task#3 (task) -> implement#2 (done) -> task_done#2 -> next_task#4 (all_done) -> review#2 (passed) -> human_review#2 (approved) -> merge#1 -> testplan#1 -> qa#1 (passed) -> major_done#1 (all_done)
+```
+
+Every consecutive pair is an edge of the map above and the last visit ends at `END`: 22 visits,
+the exact sequence the plan predicted. The visit numbers show the rule of *The nodes*: the second
+round's implement is `implement#2`, its review `review#2`, and the human review that approved it is
+`human_review#2` because round 1's was `human_review#1`; `merge`, `testplan` and `qa` are `#1`,
+their first visits.
+
+**Token usage.** Every Codex entry has `session` and `usage` (6 of 6). `status` printed
+`tokens: 1284092 total, 1266393 in (1078400 cached), 17699 out over 6 sessions`. Per step:
+
+```text
+plan#1/plan#1                  codex     done      attempt 1  tokens 72513
+approve#1/gate#1               gate      answered  attempt -  tokens -
+implement#1/implement#1/1      codex     done      attempt 1  tokens 375831
+review#1/review#1              codex     done      attempt 1  tokens 358215
+human_review#1/gate#1          gate      answered  attempt -  tokens -
+implement#2/implement#1/1      codex     done      attempt 1  tokens 148624
+review#2/review#1              codex     done      attempt 1  tokens 172538
+human_review#2/gate#1          gate      answered  attempt -  tokens -
+merge#1/gate#1                 gate      answered  attempt -  tokens -
+testplan#1/testplan#1          codex     done      attempt 1  tokens 156371
+qa#1/gate#1                    gate      answered  attempt -  tokens -
+```
+
+Nothing to report about `read_usage`: every session had a rollout file and every file parsed.
+Codex's own `tokens used` line at the end of a transcript is the total minus the cached input
+(run 1: 72,513 minus 49,536 is the 22,977 it printed), so the two numbers agree. Between 84 and 90
+percent of every session's input was cached.
+
+**Gates.**
+
+| Key | Question | Shown | Answer |
+|---|---|---|---|
+| `approve#1/gate#1` | Approve this plan for Angular 16? … | `summary`, one `app [app] …` line | `yes` |
+| `human_review#1/gate#1` | Review the pull requests of round 1. … | `summary`, `tasks` | the finding (below) |
+| `human_review#2/gate#1` | Review the pull requests of round 2. … | `summary`, `tasks` | `approved` |
+| `merge#1/gate#1` | Merge the pull requests of round 2 … | task line with `0daed23` | `merged` |
+| `qa#1/gate#1` | QA: run this test plan … | `summary`, 10 `steps` | `passed` |
+
+The finding written at `human_review#1/gate#1`, the same as Trial 2's: "README.md still says the
+project was generated with Angular CLI version 15.2.11. Change that line to Angular CLI 16 and add
+one line under the title saying the app was upgraded from Angular 15 to 16 on this branch. Also
+confirm in your summary which zone.js version package.json asks for now." There is no pull request
+in this trial, so `merged` stands for the verified push: the bare `ng15-app-slice5.git` carries
+`ai/angular-15-to-16` at `0daed23`, the SHA the merge gate showed.
+
+**The round-2 review.** `passed: true`, `reasons: []`, summary: "app commit
+0daed234cbedcce050c82558245e25c10821d7fd cleanly upgrades to Angular 16, includes the requested
+README update, and is pushed on ai/angular-15-to-16 with no test changes or stray tracked
+artifacts. pnpm install, build, and all three tests pass; package.json requests zone.js ~0.13.3."
+This is the second acceptance point. In Trial 2 the reviewer of round 2 called the "Angular CLI 16"
+line a defect and sent the round back; this time `review.md` rendered the human's finding under
+"The previous round came back with these findings; work that answers them is requested, not a
+defect", and the reviewer named the README update as requested work.
+
+**What Codex did.**
+
+- `plan#1/plan#1`: "The only product repository is `app`, a clean Angular 15.2 application with no
+  dependent repositories or TeamCity configuration. Upgrade it one major to Angular 16 while
+  preserving TypeScript and unrelated dependencies, then verify installation, build, and all three
+  existing tests before committing and pushing the required branch." One task: id `app`, repo
+  `app`, title "Upgrade the application from Angular 15 to Angular 16", build_type `none`.
+- `implement#1/implement#1/1`: `done: true`, commit `739c18b`, "Upgraded all Angular packages
+  from 15 to 16.2, applied every offered migration, preserved TypeScript, committed, and pushed the
+  required branch. `pnpm install` and `pnpm build` succeeded; the exact headless test command
+  passed all 3 specs with none skipped." `blockers: []`.
+- `review#1/review#1`: `passed: true`, `reasons: []`, "Commit 739c18b… cleanly upgrades all
+  Angular dependencies to version 16 while leaving TypeScript and the three existing specs
+  unchanged. Installation, production build, and the exact headless test command all succeed with
+  3/3 tests passing; the working tree is clean and the branch is pushed to origin."
+- `implement#2/implement#1/1`: `done: true`, commit `0daed23`, "Updated README.md to document the
+  Angular 15-to-16 upgrade and Angular CLI 16; package.json requests zone.js ~0.13.3. pnpm install
+  and build succeeded, all 3 tests passed with none skipped, and the commit was pushed to
+  ai/angular-15-to-16." It names the zone.js version, as the finding asked. `blockers: []`.
+- `review#2/review#1`: as above.
+- `testplan#1/testplan#1`: ten steps, from opening the release root URL and checking the welcome
+  page without console errors, through a hard refresh, each Next Steps button changing the
+  terminal text, the Learn Angular card opening in a new tab, to the layout below 575 px. Summary:
+  the main risk is Angular 16 runtime compatibility (bootstrapping, router initialisation, Zone.js
+  change detection) because only framework packages changed. QA could run every step on this app:
+  they name the scaffold's real elements and nothing the app does not have.
+
+**The result in `app/`.**
+
+```text
+* 0daed23 docs: note Angular 16 upgrade
+* 739c18b chore: upgrade Angular to version 16
+* f8dc4e4 initial commit
+
+ README.md      |    4 +-
+ package.json   |   26 +-
+ pnpm-lock.yaml | 2785 +++++++++++++++++++++++++++++++++-----------------------
+ 3 files changed, 1670 insertions(+), 1145 deletions(-)
+```
+
+`README.md` after round 2 begins "# Ng15App", then "This app was upgraded from Angular 15 to
+Angular 16 on this branch.", then "This project was generated with Angular CLI version 16."
+`package.json` asks for `@angular/core ^16.2.12`, `@angular/cli ~16.2.16`, `zone.js ~0.13.3`,
+`typescript ~4.9.4`. `git status --porcelain` is empty; the bare lists `master f8dc4e4` and
+`ai/angular-15-to-16 0daed23`. Nothing under `app/` was edited by hand and no commit of Codex's
+was amended.
+
+**Journal.**
+
+```text
+plan#1/plan#1                  codex     done      attempt 1
+approve#1/gate#1               gate      answered
+implement#1/implement#1/1      codex     done      attempt 1
+review#1/review#1              codex     done      attempt 1
+human_review#1/gate#1          gate      answered
+implement#2/implement#1/1      codex     done      attempt 1
+review#2/review#1              codex     done      attempt 1
+human_review#2/gate#1          gate      answered
+merge#1/gate#1                 gate      answered
+testplan#1/testplan#1          codex     done      attempt 1
+qa#1/gate#1                    gate      answered
+```
+
+Round 1's entries were byte-identical before and after run 3 (4 of 4), and the `path` entries
+recorded before run 3 were unchanged except the last, which finished with `next: findings`. The
+goal folder has one commit per status change plus `janus: run ended`, 25 in all, all pushed, and
+`git status --porcelain` is empty. `janus_ui.py` was served on the folder throughout: it drew the
+21-node map with the path coloured, the `findings (1)` edge back to `start_round` once the human
+review had answered, and the per-step token counts; the header read `running implement#2/...`
+during round 2 and `finished` after run 6.
+
+**Problems.**
+
+- None. Every run stopped where the plan said, every Codex call succeeded on its first attempt,
+  and the fake-codex expectation of the plan (six Codex entries) matched the real run.
+- The only surprise is cost: 1.28 million tokens for one small upgrade, of which 1.08 million were
+  cached input. The reviews are the largest sessions (358k and 173k); each reads the repository
+  and runs install, build and tests itself.
+
+**Engine gaps found.** None; no change was made to `janus.py` for this trial.
+
+**Verdict on design section 3.5.** Met on all three points: the path reads as the map (22 visits,
+every consecutive pair an edge, ending at END); `usage` is on every Codex entry (6 of 6, from real
+session files); the round-2 review passed the edit the human asked for. The open question the
+final review deferred, whether `findings` should accumulate across consecutive send-backs, did not
+arise: no round was sent back twice.
