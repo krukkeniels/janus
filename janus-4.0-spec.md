@@ -119,7 +119,10 @@ node(next) -> decorator
     # that defines nodes is walked by the engine after flow.py has loaded; one that defines none is a
     # script flow and has already run. A duplicate name, a `next` of another shape, an empty dict or
     # a non-string label is a JanusError at decoration; a target that names no node is one before the
-    # first visit; a return value that is not a declared label is one after the node's steps ran.
+    # first visit; a return value that is not a declared label is one after the node's steps ran. A
+    # label must match [A-Za-z_]\w* (mermaid edge text) and a node name may not be a mermaid flowchart
+    # keyword (end, graph, flowchart, subgraph, style, class, classDef, click, linkStyle, direction),
+    # both JanusError at decoration.
 
 END                           # sentinel: the flow ends here
 
@@ -182,7 +185,7 @@ The file is written atomically, through a temporary file and rename, at every st
 
 The flow must produce the same sequence of keys on every run, given the same journal. Explicit keys in loops are how a flow stays deterministic when it is edited.
 
-A node flow is walked from its start node after `flow.py` has loaded, and every visit is checked against `path`: the node of visit `n` must be the node recorded there (`flow changed: visit 2 was b, now c` otherwise), and a finished visit must return the label it returned before (`flow changed: a#1 went to 'right' before, now 'left'`). A finished visit runs again with replayed steps and is not re-recorded; the last, unfinished entry is the interrupted visit and is resumed in place with its visit count and `started` kept. `graph` is rewritten at the start of every run.
+A node flow is walked from its start node after `flow.py` has loaded, and every visit is checked against `path`: the node of visit `n` must be the node recorded there (`flow changed: visit 2 was b, now c` otherwise), and a finished visit must return the label it returned before (`flow changed: a#1 went to 'right' before, now 'left'`). A finished visit runs again with replayed steps and is not re-recorded; the last, unfinished entry is the interrupted visit and is resumed in place with its visit count and `started` kept. `graph` is rewritten at the start of every run. After the walk ends, any `path` entries left over past the last visit are a stale tail from a flow shortened to end earlier, and raise `flow changed: visit N was X, now END` instead of being silently ignored; a freshly recorded visit also resets replay tracking, so a node reached for the first time right after a run of replayed steps still gets its own `log()` calls into `## Progress`.
 
 **Gates in JANUS.md.** An open gate looks like this:
 
@@ -215,7 +218,7 @@ python /path/to/janus.py init <folder>   # create a goal folder with a starter n
 
 `run` imports `flow.py` from the current folder as a module and executes it top to bottom; when it registered nodes, the engine then walks them from the start node. Uncaught exceptions from the flow, including `Exhausted`, are written to `## Progress` with the step key that raised and the run exits with code 1.
 
-`graph` loads `flow.py` with steps disabled: a script flow's first primitive call fails with `flow.py runs steps at load time; only node flows have a graph`, and so does a file that registers no node. The output is one `flowchart LR` line per edge (`plan --> approve`, `review -- failed --> start_round`) and `END([END])` once when any edge ends the flow; it pastes into a README. `status` prints `at: review#2 (visit 2 of review)` first when the journal has a path, and `tokens: 41559 total, 41083 in (30848 cached), 476 out over 1 sessions` when any step has `usage` (section 7).
+`graph` loads `flow.py` with steps disabled: a script flow's first primitive call fails with `flow.py runs steps at load time; only node flows have a graph`, and so does a file that registers no node. The output is one `flowchart LR` line per edge (`plan --> approve`, `review -- failed --> start_round`) and `END([END])` once when any edge ends the flow; it pastes into a README. `status` prints `at: review#2 (visit 2 of review)` first when the journal has a path, and `tokens: 41559 total, 41083 in (30848 cached), 476 out over 1 sessions` when any step has `usage` (section 7). `graph` leaves `JANUS.md` untouched: `log()` only writes to `## Progress` when it is not run with steps disabled, so a script flow whose module level calls `log(...)` before failing to register a node does not modify the goal file.
 
 `init` creates `<folder>` (an error when it exists and is not an empty folder) with a copy of the running `janus.py` (and of `janus_ui.py` when it sits beside it), a `JANUS.md` with a placeholder goal, a three-node `flow.py` (draft with a ralph, approve with a gate that sends the answer back as findings, finish), `prompts/_preamble.md`, `prompts/draft.md` and a `.gitignore`, then prints the six steps to take next. It does not run `git init`.
 
@@ -230,7 +233,7 @@ codex exec -C <cwd> --dangerously-bypass-approvals-and-sandbox \
 
 The prompt goes in on stdin, never on the command line. The user's own `~/.codex/config.toml` supplies model and reasoning effort; Janus passes no model flags. Codex runs at full access because the machine Janus runs on is already a sandbox, as decided for Janus 3.0. A non-zero exit, a missing final message or JSON that does not validate against the schema fails the step.
 
-**Session id and token usage.** `codex exec` prints `session id: <uuid>` in its transcript header on stderr, and writes the session to `$CODEX_HOME/sessions/<yyyy>/<mm>/<dd>/rollout-<timestamp>-<uuid>.jsonl` (`CODEX_HOME` defaults to `~/.codex`). After the process exits, the engine keeps the first transcript line matching `^session id: (\S+)$` and reads that file: the last `event_msg` line whose `payload.type` is `token_count` carries `payload.info.total_token_usage`, from which `{input: input_tokens, cached: cached_input_tokens, output: output_tokens, total: total_tokens}` is taken. The step's journal entry gains `session: <uuid>` when the id was seen and `usage: {...}` when the file was read, next to `result` and outside it, so results and output schemas are untouched; a failed step keeps what was captured before the failure. No id, no file, bad JSON or missing keys leave the fields out without a message.
+**Session id and token usage.** `codex exec` prints `session id: <uuid>` in its transcript header on stderr, and writes the session to `$CODEX_HOME/sessions/<yyyy>/<mm>/<dd>/rollout-<timestamp>-<uuid>.jsonl` (`CODEX_HOME` defaults to `~/.codex`). After the process exits, the engine keeps the first transcript line matching `^session id: (\S+)$` and reads that file: the last `event_msg` line whose `payload.type` is `token_count` carries `payload.info.total_token_usage`, from which `{input: input_tokens, cached: cached_input_tokens, output: output_tokens, total: total_tokens}` is taken. The step's journal entry gains `session: <uuid>` when the id was seen and `usage: {...}` when the file was read, next to `result` and outside it, so results and output schemas are untouched; a failed step keeps what was captured before the failure. No id, no file, bad JSON or missing keys leave the fields out without a message. `run_step` consumes the captured session and usage after merging them into the entry (copies, then clears), so when a `step(key, fn)` nests a `codex()` call only the inner entry gets the session and usage; the outer entry finds nothing left to merge and is not double-counted.
 
 ## 8. Errors
 

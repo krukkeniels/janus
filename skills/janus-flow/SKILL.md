@@ -82,9 +82,9 @@ Exit codes of `python janus.py run`: 0 the flow ended, 2 a gate is open, 1 a ste
   `implement#3/plan#1` and `step("wait", fn)` as `implement#3/wait`. Pass `key=` only when two calls in
   one visit would otherwise get the same key (two `codex("prompts/plan.md")` in one node are `plan#1` and
   `plan#2` already; two `step("wait", ...)` are not).
-- Gates exit the process; do not wrap them in `try`. Never catch `SystemExit`.
-- Catch `Exhausted` around a `ralph` when the flow should ask the human what to do next; `exc.last` is
-  the report to show.
+- Gates exit the process; never catch `SystemExit`. Catch `Exhausted` around a `ralph` when the flow
+  should ask the human what to do next; `exc.last` is the report to show.
+- A label must be an identifier; a node name may not be a mermaid keyword (`end`, `graph`, `style`, `class`, `click`).
 
 ## Prompt rules
 

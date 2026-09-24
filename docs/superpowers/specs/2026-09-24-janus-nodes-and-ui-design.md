@@ -32,6 +32,7 @@ node(next) -> decorator
 - `NODES: Dict[str, Node]` in the engine; `Node = (name, fn, edges)` where `edges: Dict[str, Optional[str]]` is the normalised form: a single edge becomes `{"": target}`, `END` becomes `None`. Normalising at registration keeps the runner and the graph export to one shape.
 - Registration errors are `JanusError` at decoration time: a duplicate node name, `next` of a type not listed above, a dict with a non-string label, an empty dict.
 - Validation errors are `JanusError` before the first visit: a target that names no node.
+- A label becomes mermaid edge text (2.5), so it must match `[A-Za-z_]\w*`; `""`, a label with a space or `--` is a `JanusError` at decoration. A node name becomes a mermaid id, so it may not be one of the flowchart keywords `end`, `graph`, `flowchart`, `subgraph`, `style`, `class`, `classDef`, `click`, `linkStyle`, `direction`, also a `JanusError` at decoration.
 - The state `s` is a `types.SimpleNamespace()` created fresh for each run. The engine never persists it; every run rebuilds it by replaying, exactly as today's counters are rebuilt from control flow.
 - A node function may call every primitive. Gates raise `SystemExit(2)` from inside a node as they do today; the runner lets it through.
 
@@ -64,6 +65,7 @@ while name is not None:
         raise JanusError(f"flow changed: visit {index + 1} was {entry['node']}, now {name}")
     if entry is None:
         entry = {"node": name, "visit": visit, "started": now()}; JOURNAL["path"].append(entry)
+        REPLAYING = False                        # a new visit's own log() must reach Progress too
     NODE = f"{name}#{visit}"; COUNTERS = {}
     label = normalise(fn(s))                    # "" for a single edge, the returned label otherwise
     check label is declared (2.4)
@@ -74,10 +76,13 @@ while name is not None:
         entry.update(finished=now(), next=label)
     name = edges[label]; index += 1
 NODE = None
+if index < len(JOURNAL["path"]):
+    raise JanusError(f"flow changed: visit {index + 1} was {JOURNAL['path'][index]['node']}, now END")
 ```
 
 - A path entry is appended in memory when the visit starts and reaches disk at the next journal write (the first step inside the node saves it, marked `running`) or at the end of the run. `cmd_run`'s `finally` writes the journal (`write_atomic`, then `git_commit("janus: run ended")`) so a run that ends inside step-less nodes still persists its path. Today the `finally` only commits; it gains the write, which happens only when `journal.yaml` already exists or the run recorded a path, so a script flow that ran no step still leaves no journal behind.
 - A finished visit is checked, not re-recorded: on replay the node runs again with replayed results (as every flow does today), and its outcome must match. An entry without `finished` is the visit that was interrupted (crash, gate, failure) and is resumed in place: its `visit` count is trusted, its `started` is kept.
+- After the walk, any `path` entries past `index` are a stale tail from a flow shortened to end earlier; they raise `flow changed: visit N was X, now END` rather than being silently left unchecked. A freshly appended path entry also resets the module-level `REPLAYING` to `False`, so a node reached for the first time right after a run of replayed steps still gets its own `log()` calls into `## Progress`, instead of inheriting `REPLAYING = True` from the last replayed primitive.
 - `JOURNAL["path"]` is created (`setdefault([])`) by the runner, not by `begin()`, so a script flow's journal stays byte-identical to Janus 4.0: no `graph`, no `path`. `status`/`reset` ignore both.
 - `CURRENT` (used by the error log line) keeps holding the last claimed step key, which now carries the node prefix, so the `## Progress` line after a failure names the node.
 
@@ -119,6 +124,8 @@ python janus.py graph    # print the flow's map as mermaid; fails for a script f
 ```
 
 `graph` executes `flow.py` with `DRY = True`. `claim()` raises `JanusError("flow.py runs steps at load time; only node flows have a graph")` when `DRY` is set, so a script flow cannot run a step by accident. If `NODES` is empty after loading, the same message is printed and the exit code is 1. `status` gains one line when the journal has a path: `at: review#2 (visit 2 of review)`.
+
+`graph` is read-only: `log(text)` prints under `DRY` but returns without touching `JANUS.md`, so a script flow whose module level calls `log(...)` (not only `claim`-gated primitives) leaves the goal file untouched when it fails to register any node.
 
 ### 2.7 `init`: a starter goal folder
 
@@ -195,7 +202,7 @@ All with the fake `codex` and a flow written to `tmp_path` by the test. The exis
 Added 2026-09-24: the user wants to see what each Codex session cost, basic for now. Verified on codex-cli 0.155.1: every `codex exec` prints `session id: <uuid>` in its transcript header on stderr, and Codex writes the session to `$CODEX_HOME/sessions/<yyyy>/<mm>/<dd>/rollout-<timestamp>-<uuid>.jsonl` (`CODEX_HOME` defaults to `~/.codex`), where `event_msg` lines with `payload.type == "token_count"` carry `payload.info.total_token_usage` = `{input_tokens, cached_input_tokens, cache_write_input_tokens, output_tokens, reasoning_output_tokens, total_tokens}`; the last such line is the session's total.
 
 - `run_codex` keeps the session id: the first captured stderr line matching `^session id: (\S+)$`. After the process exits it calls `read_usage(session_id)`, which globs `sessions/*/*/*/rollout-*-<id>.jsonl` under `CODEX_HOME`, reads the file line by line, keeps the last `token_count` event and returns `{"input": input_tokens, "cached": cached_input_tokens, "output": output_tokens, "total": total_tokens}`. Any failure (no id in the transcript, no file, bad JSON, missing keys) returns `None`; nothing is printed, nothing stops.
-- The step's journal entry gains `session: <uuid>` when the id was seen and `usage: {...}` when it was read. They sit next to `result`, outside it, so prompts and flows that read the result see no change and the output schema is untouched. `run_step` gets them from `run_codex` through a module-level `LAST_CODEX: Dict[str, Any]` that `run_codex` fills and `run_step` merges into the entry after `execute` returns (for a ralph iteration that is the iteration's own entry). A failed step keeps whatever was captured before the failure.
+- The step's journal entry gains `session: <uuid>` when the id was seen and `usage: {...}` when it was read. They sit next to `result`, outside it, so prompts and flows that read the result see no change and the output schema is untouched. `run_step` gets them from `run_codex` through a module-level `LAST_CODEX: Dict[str, Any]` that `run_codex` fills and `run_step` merges into the entry after `execute` returns (for a ralph iteration that is the iteration's own entry). A failed step keeps whatever was captured before the failure. `run_step` consumes `LAST_CODEX` (copies it into the entry, then clears it) rather than reading it in place, so when a `step(key, fn)` nests a `codex()` call the inner `run_step` claims the session and usage for its own entry and the outer one, finding `LAST_CODEX` already emptied, does not double-count it; `begin()` clears `LAST_CODEX` too, so nothing leaks across runs.
 - `status` prints one line when any entry has `usage`: `tokens: <total> total, <input> in (<cached> cached), <output> out over <n> sessions`.
 - The page (section 4) shows `usage.total` on each codex row of the tree and the same totals line in the header; `build_state` adds `usage` (the mapping or null) and `session` to each step item and `tokens` = the sums to `totals`.
 - Tests (`tests/test_usage.py`): a fake `CODEX_HOME` under `tmp_path` with a rollout file of three lines (two `token_count` events with rising totals, one unrelated event); the fake codex prints `session id: <uuid>` on stderr via its `stderr` script field; after `run`, the journal entry has `session` and `usage` equal to the last event; a session id with no file gives `session` and no `usage`; a transcript without the id gives neither; `status` prints the totals line. The fake codex needs no change: the test scripts the stderr text.
