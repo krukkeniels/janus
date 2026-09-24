@@ -148,7 +148,9 @@ def build_state(root: Path, now: Any = None) -> Dict[str, Any]:
     journal, updated, error = read_journal(root)
     raw = journal.get("steps") if isinstance(journal.get("steps"), dict) else {}
     steps = [step_item(str(k), e, clock) for k, e in raw.items() if isinstance(e, dict)]
-    path = [e for e in journal.get("path", []) if isinstance(e, dict) and "node" in e and "visit" in e] if isinstance(journal.get("path"), list) else []
+    raw_path = journal.get("path")
+    path = ([e for e in raw_path if isinstance(e, dict) and "node" in e and "visit" in e]
+            if isinstance(raw_path, list) else [])
     live = [s for s in steps if s["status"] in ("running", "open")]
     failed = [s for s in steps if s["status"] == "failed"]
     current = live[0] if live else failed[-1] if failed else None
