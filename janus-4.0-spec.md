@@ -1,7 +1,7 @@
 # Janus 4.0
 ## A small durable flow engine for Codex
 
-**Status:** implementation specification, v0.2 (v0.1 superseded Janus 3.0 after the design session on 2026-09-22; v0.2 adds section 14 on loops and reshapes the example around them, 2026-09-23)
+**Status:** implementation specification, v0.3 (v0.1 superseded Janus 3.0 after the design session on 2026-09-22; v0.2 adds section 14 on loops and reshapes the example around them, 2026-09-23; v0.3 adds node flows, where a flow is a state machine of small functions whose edges the engine records and draws, 2026-09-24)
 **Reference example:** upgrade an Angular application from 15 to 16, shipped as `examples/angular-upgrade/`.
 
 ### Why 4.0
@@ -111,11 +111,23 @@ step(key, fn) -> result
 log(text) -> None
     # Appends a line to "## Progress" in JANUS.md and prints it.
 
+node(next) -> decorator
+    # Registers the decorated function as a node named after the function; the first node defined is
+    # the start. `next` is a node name (one edge; the function returns None), END (the flow ends after
+    # this node; the function returns None) or {"label": name_or_END, ...} (the function returns a
+    # label). The function takes the state `s`, a SimpleNamespace made fresh for every run. A flow
+    # that defines nodes is walked by the engine after flow.py has loaded; one that defines none is a
+    # script flow and has already run. A duplicate name, a `next` of another shape, an empty dict or
+    # a non-string label is a JanusError at decoration; a target that names no node is one before the
+    # first visit; a return value that is not a declared label is one after the node's steps ran.
+
+END                           # sentinel: the flow ends here
+
 class Exhausted(Exception):   # .last is the final ralph result
 class JanusError(Exception):  # engine and flow errors that stop the run
 ```
 
-**Keys.** A step key identifies a journal entry. The default key is the prompt file stem followed by `#` and a counter of calls with that stem in this run, so the third `codex("prompts/implement.md")` is `implement#3`. `step` requires an explicit key. Inside loops, flows pass an explicit key that survives edits to the flow, such as `f"implement/{task_id}"`. Ralph iterations are keyed `<key>/<n>` starting at 1. Two live steps with the same key in one run is a `JanusError`.
+**Keys.** A step key identifies a journal entry. The default key is the prompt file stem followed by `#` and a counter of calls with that stem in this run, so the third `codex("prompts/implement.md")` is `implement#3`. `step` requires an explicit key. Inside loops, flows pass an explicit key that survives edits to the flow, such as `f"implement/{task_id}"`. Ralph iterations are keyed `<key>/<n>` starting at 1. Two live steps with the same key in one run is a `JanusError`. Inside a node flow every key, explicit or default, is prefixed with the visit it runs in, `<node>#<visit>/`, and the default counters start again at each visit: the `codex("prompts/plan.md")` in the third visit of `implement` is `implement#3/plan#1`, a `ralph` there iterates `implement#3/implement#1/<n>`, `step("wait", fn)` is `implement#3/wait` and a `human_gate` is `implement#3/gate#1`. Visit counts are replayed with the path, so a node flow needs no explicit keys in loops.
 
 **Rendering.** Placeholders are `{{name}}` and `{{name.field.subfield}}`, with dotted access into dicts and lists by index. Values that are not strings are rendered as YAML. A placeholder that resolves to nothing fails the step before Codex starts. The variables of a render are, in rising precedence: the reserved values `goal`, `attempt` and, in ralph, `previous`; the values from `context()`; the keyword arguments of the call. `previous` is absent in the first ralph iteration and renders as an empty string. If `prompts/_preamble.md` exists it is rendered with the same variables and prepended to the prompt body, separated by a blank line.
 
@@ -146,9 +158,19 @@ steps:
     status: failed
     attempt: 2
     error: "codex exec exited with 1: ..."
+graph:                      # node flows only: the map, {start, nodes: [{name, next: {label: target}}]}
+  start: plan
+  nodes:
+  - name: plan
+    next: {'': approve}     # '' is the one unlabelled edge; null is END
+  - name: approve
+    next: {yes: finish, no: plan}
+path:                       # node flows only: one entry per visit, in order
+- {node: plan, visit: 1, started: ..., finished: ..., next: ''}
+- {node: approve, visit: 1, started: ...}   # no finished: this visit was interrupted and resumes
 ```
 
-The file is written atomically, through a temporary file and rename, at every status change.
+The file is written atomically, through a temporary file and rename, at every status change, and once more when `run` ends so that the path's last entry is saved. A journal written by Janus 4.0, or by a script flow, has no `graph` and no `path`.
 
 **Replay.** `run` loads the journal and executes `flow.py` from the top. Each primitive computes its key and looks it up:
 
@@ -159,6 +181,8 @@ The file is written atomically, through a temporary file and rename, at every st
 - absent: journal `running`, execute, journal `done` with the result.
 
 The flow must produce the same sequence of keys on every run, given the same journal. Explicit keys in loops are how a flow stays deterministic when it is edited.
+
+A node flow is walked from its start node after `flow.py` has loaded, and every visit is checked against `path`: the node of visit `n` must be the node recorded there (`flow changed: visit 2 was b, now c` otherwise), and a finished visit must return the label it returned before (`flow changed: a#1 went to 'right' before, now 'left'`). A finished visit runs again with replayed steps and is not re-recorded; the last, unfinished entry is the interrupted visit and is resumed in place with its visit count and `started` kept. `graph` is rewritten at the start of every run.
 
 **Gates in JANUS.md.** An open gate looks like this:
 
@@ -183,11 +207,17 @@ The human writes the answer after `answer:` on the same line or on the following
 
 ```bash
 python janus.py run      # execute flow.py with replay until end, open gate or failure
-python janus.py status   # open gate if any, last five steps, next action
+python janus.py status   # open gate if any, last five steps, next action; a node flow's current visit first
 python janus.py reset    # move journal.yaml to journals/<timestamp>.yaml and remove open gates from JANUS.md
+python janus.py graph    # print a node flow's map as mermaid; fails for a script flow
+python /path/to/janus.py init <folder>   # create a goal folder with a starter node flow
 ```
 
-`run` imports `flow.py` from the current folder as a module and executes it top to bottom. Uncaught exceptions from the flow, including `Exhausted`, are written to `## Progress` with the step key that raised and the run exits with code 1.
+`run` imports `flow.py` from the current folder as a module and executes it top to bottom; when it registered nodes, the engine then walks them from the start node. Uncaught exceptions from the flow, including `Exhausted`, are written to `## Progress` with the step key that raised and the run exits with code 1.
+
+`graph` loads `flow.py` with steps disabled: a script flow's first primitive call fails with `flow.py runs steps at load time; only node flows have a graph`, and so does a file that registers no node. The output is one `flowchart LR` line per edge (`plan --> approve`, `review -- failed --> start_round`) and `END([END])` once when any edge ends the flow; it pastes into a README. `status` prints `at: review#2 (visit 2 of review)` first when the journal has a path, and `tokens: 41559 total, 41083 in (30848 cached), 476 out over 1 sessions` when any step has `usage` (section 7).
+
+`init` creates `<folder>` (an error when it exists and is not an empty folder) with a copy of the running `janus.py` (and of `janus_ui.py` when it sits beside it), a `JANUS.md` with a placeholder goal, a three-node `flow.py` (draft with a ralph, approve with a gate that sends the answer back as findings, finish), `prompts/_preamble.md`, `prompts/draft.md` and a `.gitignore`, then prints the six steps to take next. It does not run `git init`.
 
 ## 7. Codex invocation
 
@@ -199,6 +229,8 @@ codex exec -C <cwd> --dangerously-bypass-approvals-and-sandbox \
 ```
 
 The prompt goes in on stdin, never on the command line. The user's own `~/.codex/config.toml` supplies model and reasoning effort; Janus passes no model flags. Codex runs at full access because the machine Janus runs on is already a sandbox, as decided for Janus 3.0. A non-zero exit, a missing final message or JSON that does not validate against the schema fails the step.
+
+**Session id and token usage.** `codex exec` prints `session id: <uuid>` in its transcript header on stderr, and writes the session to `$CODEX_HOME/sessions/<yyyy>/<mm>/<dd>/rollout-<timestamp>-<uuid>.jsonl` (`CODEX_HOME` defaults to `~/.codex`). After the process exits, the engine keeps the first transcript line matching `^session id: (\S+)$` and reads that file: the last `event_msg` line whose `payload.type` is `token_count` carries `payload.info.total_token_usage`, from which `{input: input_tokens, cached: cached_input_tokens, output: output_tokens, total: total_tokens}` is taken. The step's journal entry gains `session: <uuid>` when the id was seen and `usage: {...}` when the file was read, next to `result` and outside it, so results and output schemas are untouched; a failed step keeps what was captured before the failure. No id, no file, bad JSON or missing keys leave the fields out without a message.
 
 ## 8. Errors
 
@@ -226,8 +258,17 @@ Coverage required:
 10. `reset` archives the journal and removes open gates.
 11. Duplicate live keys raise `JanusError`.
 12. A return loop (section 14): a `while` flow whose gate answer sends it back to an earlier stage re-executes only the new round's keys on the next run, a gate inside the second round resumes in the second round, and a finished loop replays without executing anything.
+13. Node registration: `graph()` lists nodes in definition order with normalised edges; a duplicate name, a bad `next` and an empty dict raise `JanusError` at decoration; an unknown target fails `run` and `graph` before any visit.
+14. Node walk and keys: `a -> b -> END` runs with keys `a#1/plan#1`, `b#1/plan#1` and two finished path entries; inside a visit every primitive's key carries the `<node>#<visit>/` prefix and the default counters restart.
+15. Return values: a label chosen from a Codex result is recorded as the taken edge; an undeclared label and a value returned by a single-edge node exit 1 with their messages, the node's steps staying `done`.
+16. Loops: `a -> a` three times then END counts visits `a#1`, `a#2`, `a#3`; a second run executes nothing and leaves the path unchanged.
+17. Interruptions in a node: a gate exits 2 under `b#1/gate#1` and the next run resumes in `b`; a failing step leaves the visit without `finished` and runs again as attempt 2; a flow edited so that visit 2 is another node, or a finished visit that takes another edge, exits 1 with `flow changed`.
+18. `graph`: the mermaid of a node flow; the load-time message and exit 1 for a script flow with the fake `codex` never called; `to_mermaid` with classes and counts; `status` prints `at:` for a node journal and nothing new for a script journal.
+19. `init` creates the starter files, refuses a path that is not an empty folder, its `graph` prints the three-node map, and its `run` stops at `approve#1/gate#1` and ends with `finish` in the path after `yes`.
+20. Token usage (section 7): with a fake `CODEX_HOME` holding a rollout file and the fake `codex` printing `session id: <uuid>`, a step's entry has `session` and `usage` equal to the last `token_count` event; an id with no file gives `session` only; a transcript without the id gives neither; a failed step keeps them; each ralph iteration has its own; `status` prints the `tokens:` line.
+21. The Codex skill `skills/janus-flow/SKILL.md` exists, its front matter parses with `name`, `description` and `metadata`, it names every public primitive, and `init` prints where to copy it from.
 
-About thirty tests.
+About thirty tests in 4.0; 4.1 adds items 13 to 21, about forty more.
 
 ## 10. The example: `examples/angular-upgrade/`
 
@@ -353,6 +394,8 @@ The example is tried on the throwaway Angular 15 application with a local bare r
 ## 13. Deliberate trade-off
 
 Janus 4.0 gives the flow author full Python and asks in return that the flow be deterministic in its step keys. The engine does not protect against a flow that forgets `step()` around a side effect, uses a changing default key in a loop, or lets Codex commit to the wrong branch. Those are visible in `flow.py` and the prompts, which is where they can be fixed. Engine features are added only after a real flow shows that prompts and Python cannot express something safely.
+
+A flow may stay a script: plain Python with explicit keys in its loops, as sections 10 and 14 of v0.2 wrote it. It runs exactly as before and forgoes what only nodes give: the map (`graph`), the recorded path, the `at:` line and the live page.
 
 ## 14. Loops and return loops
 
