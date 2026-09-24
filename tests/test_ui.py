@@ -275,7 +275,9 @@ def test_server_serves_the_page_and_the_state_and_404s_the_rest(tmp_path):
         r = conn.getresponse()
         body = r.read().decode("utf-8")
         assert (r.status, r.getheader("Content-Type")) == (200, "text/html; charset=utf-8")
-        assert "<title>" in body
+        assert "<title>" in body and "nothing has run yet" in body and "/state.json" in body
+        assert "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js" in body
+        assert body.count("https://") == 1  # mermaid is the only external resource
         conn.request("GET", "/state.json")
         r = conn.getresponse()
         st = json.loads(r.read().decode("utf-8"))
