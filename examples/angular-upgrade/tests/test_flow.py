@@ -448,3 +448,58 @@ def test_a_build_teamcity_cannot_find_opens_the_missing_decision_instead_of_a_fi
     assert steps["ci_missing#1/decision#1"]["answer"] == "skip" and "ci#2/wait" not in steps
     assert steps["human_review#1/gate#1"]["status"] == "open"
     assert path_of(goal_folder)[7:9] == [("ci", "no_verdict"), ("ci_missing", "skip")]
+
+
+def test_stop_at_the_missing_decision_ends_the_flow_with_exit_0(
+        goal_folder, fake_codex, teamcity_server, monkeypatch):
+    teamcity_server.serve([{"count": 0}])
+    run_to_the_second_gate(goal_folder, fake_codex, monkeypatch, ONE_ROUND)
+    answer(goal_folder, "stop")
+    assert run(goal_folder, monkeypatch) == 0
+    steps = journal_of(goal_folder)["steps"]
+    assert steps["ci_missing#1/decision#1"]["answer"] == "stop"
+    assert path_of(goal_folder)[-1] == ("ci_missing", "stop")
+    assert "task app stopped the run: no CI verdict, as the human decided" \
+        in (goal_folder / "JANUS.md").read_text(encoding="utf-8")
+
+
+def test_stop_at_the_red_decision_ends_the_flow_with_exit_0(
+        goal_folder, fake_codex, teamcity_server, monkeypatch):
+    teamcity_server.serve(RED * 3)
+    run_to_the_second_gate(goal_folder, fake_codex, monkeypatch,
+                            [{"output": DONE}, {"output": FIXED}, {"output": FIXED}])
+    answer(goal_folder, "stop")
+    assert run(goal_folder, monkeypatch) == 0
+    steps = journal_of(goal_folder)["steps"]
+    assert steps["ci_red#1/decision#1"]["answer"] == "stop"
+    assert path_of(goal_folder)[-1] == ("ci_red", "stop")
+    assert "task app stopped the run: still red after 3 CI verdicts, as the human decided" \
+        in (goal_folder / "JANUS.md").read_text(encoding="utf-8")
+
+
+def test_stop_at_the_fix_exhausted_decision_ends_the_flow_with_exit_0(
+        goal_folder, fake_codex, teamcity_server, monkeypatch):
+    teamcity_server.serve(RED)
+    run_to_the_second_gate(goal_folder, fake_codex, monkeypatch, [{"output": DONE}] + [{"output": NOT_DONE}] * 3)
+    answer(goal_folder, "stop")
+    assert run(goal_folder, monkeypatch) == 0
+    steps = journal_of(goal_folder)["steps"]
+    assert steps["fix_exhausted#1/decision#1"]["answer"] == "stop"
+    assert path_of(goal_folder)[-1] == ("fix_exhausted", "stop")
+    assert "task app stopped the run at fix, as the human decided" \
+        in (goal_folder / "JANUS.md").read_text(encoding="utf-8")
+
+
+def test_retry_at_the_fix_exhausted_decision_starts_round_2_with_the_blockers_as_findings(
+        goal_folder, fake_codex, teamcity_server, monkeypatch):
+    teamcity_server.serve(RED + GREEN)
+    run_to_the_second_gate(goal_folder, fake_codex, monkeypatch,
+                            [{"output": DONE}] + [{"output": NOT_DONE}] * 3
+                            + [{"output": DONE_2}] + ONE_ROUND[1:])
+    answer(goal_folder, "retry")
+    assert run(goal_folder, monkeypatch) == 2
+    steps = journal_of(goal_folder)["steps"]
+    assert steps["fix_exhausted#1/decision#1"]["answer"] == "retry"
+    round_2 = fake_codex.calls()[5]["prompt"]
+    assert "Task app gave up at fix:\napp.component.ts does not compile" in round_2
+    assert path_of(goal_folder)[8:11] == [("fix", "gave_up"), ("fix_exhausted", "retry"), ("start_round", "go")]
