@@ -757,8 +757,8 @@ def finish(s):
 STARTER_PREAMBLE = '''\
 {{goal}}
 
-Rules: report blockers instead of guessing; never echo secrets (tokens, passwords, keys); commit your own
-work and report the commit.
+Rules: report blockers instead of guessing; never echo secrets (tokens, passwords, keys); the work happens
+in a repository checkout inside this folder; commit there and report the commit.
 '''
 
 STARTER_DRAFT = '''\
@@ -768,7 +768,8 @@ output:
   summary: str
   blockers: list[str]
 ---
-Do the work the goal describes, in the current folder.
+Do the work the goal describes, in the repository checkout inside the current folder; commit there and
+name the commit in your summary.
 
 Your earlier attempt (empty on the first attempt):
 {{previous}}

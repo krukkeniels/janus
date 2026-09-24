@@ -141,7 +141,7 @@ Added 2026-09-24 after the authoring walk-through: the user wanted the six autho
 | `janus_ui.py` | a copy, when it sits next to the running `janus.py`; silently skipped otherwise (slice 4 ships before the page) |
 | `JANUS.md` | `# Goal` and one placeholder line: `Describe what Codex must achieve; every prompt sees this text as {{goal}}.` |
 | `flow.py` | the starter flow below |
-| `prompts/_preamble.md` | `{{goal}}` and three standing rules: report blockers instead of guessing, never echo secrets, commit your own work and report the commit |
+| `prompts/_preamble.md` | `{{goal}}` and three standing rules: report blockers instead of guessing, never echo secrets, the work happens in a repository checkout inside this folder (commit there and report the commit) |
 | `prompts/draft.md` | front matter `output: {done: bool, summary: str, blockers: list[str]}`; body asks Codex to do the goal's work in the current folder, with `{{previous}}` for the earlier attempt and `{{findings}}` for what the human asked to change |
 | `.gitignore` | `*/`, `!prompts/`, `!journals/` |
 

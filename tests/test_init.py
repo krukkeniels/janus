@@ -29,7 +29,11 @@ def test_init_creates_the_starter_folder_and_refuses_a_second_time(tmp_path, mon
         "---\noutput:\n  done: bool\n  summary: str\n  blockers: list[str]\n---\n")
     assert "{{previous}}" in (goal / "prompts" / "draft.md").read_text(encoding="utf-8")
     assert "{{findings}}" in (goal / "prompts" / "draft.md").read_text(encoding="utf-8")
-    assert (goal / "prompts" / "_preamble.md").read_text(encoding="utf-8").startswith("{{goal}}\n")
+    preamble = (goal / "prompts" / "_preamble.md").read_text(encoding="utf-8")
+    assert preamble.startswith("{{goal}}\n")
+    assert "the work happens\nin a repository checkout inside this folder; commit there and report the commit." in preamble
+    assert "in the repository checkout inside the current folder; commit there" in \
+        (goal / "prompts" / "draft.md").read_text(encoding="utf-8")
     out = capsys.readouterr().out
     assert out.startswith("created goal\nnext, in this folder:\n  1. edit JANUS.md") and "6. python janus_ui.py" in out
     assert janus.main(["init", "goal"]) == 1
@@ -67,7 +71,7 @@ def test_the_starter_flow_has_a_graph_and_runs_to_its_gate_and_to_the_end(tmp_pa
         in (goal / "JANUS.md").read_text(encoding="utf-8")
     prompt = fake_codex.calls()[0]["prompt"]
     assert prompt.startswith("Describe what Codex must achieve; every prompt sees this text as {{goal}}.\n\nRules:")
-    assert "Do the work the goal describes, in the current folder." in prompt
+    assert "Do the work the goal describes, in the repository checkout inside the current folder" in prompt
     answer(goal, "yes")
     assert janus.main(["run"]) == 0
     journal = read_journal(goal)
