@@ -11,7 +11,7 @@ Two findings from the slice 3 trial drive this:
 
 Both are solved by one change: a flow becomes **a state machine whose states are small Python functions**. Each node declares where it can go. The engine enforces the declaration at runtime, records the map and the path taken in the journal, and the page draws exactly that. The flow stays Python (the decision of 2026-09-22 holds); loops, gates and ralphs are unchanged; they become edges one can see.
 
-Three slices follow, each with its own plan: **slice 4** the engine (nodes, graph, path, `graph` command, spec v0.3), **slice 5** the example rewritten as nodes with a real-Codex trial, **slice 6** the page.
+Three slices follow, each with its own plan: **slice 4** the engine (nodes, graph, path, `graph` and `init` commands, spec v0.3), **slice 5** the example rewritten as nodes with a real-Codex trial, **slice 6** the page.
 
 ## 2. Nodes in the engine (slice 4)
 
@@ -118,17 +118,60 @@ python janus.py graph    # print the flow's map as mermaid; fails for a script f
 
 `graph` executes `flow.py` with `DRY = True`. `claim()` raises `JanusError("flow.py runs steps at load time; only node flows have a graph")` when `DRY` is set, so a script flow cannot run a step by accident. If `NODES` is empty after loading, the same message is printed and the exit code is 1. `status` gains one line when the journal has a path: `at: review#2 (visit 2 of review)`.
 
-### 2.7 Spec v0.3 edits to `janus-4.0-spec.md`
+### 2.7 `init`: a starter goal folder
+
+```bash
+python /path/to/janus/janus.py init <folder>   # create a goal folder with a starter node flow
+```
+
+Added 2026-09-24 after the authoring walk-through: the user wanted the six authoring steps to start from something that already runs. `init` creates `<folder>` (a `JanusError` when it exists and is not empty) and writes:
+
+| File | Content |
+|---|---|
+| `janus.py` | a copy of the running file (`Path(__file__)`) |
+| `janus_ui.py` | a copy, when it sits next to the running `janus.py`; silently skipped otherwise (slice 4 ships before the page) |
+| `JANUS.md` | `# Goal` and one placeholder line: `Describe what Codex must achieve; every prompt sees this text as {{goal}}.` |
+| `flow.py` | the starter flow below |
+| `prompts/_preamble.md` | `{{goal}}` and three standing rules: report blockers instead of guessing, never echo secrets, commit your own work and report the commit |
+| `prompts/draft.md` | front matter `output: {done: bool, summary: str, blockers: list[str]}`; body asks Codex to do the goal's work in the current folder, with `{{previous}}` for the earlier attempt and `{{findings}}` for what the human asked to change |
+| `.gitignore` | `*/`, `!prompts/`, `!journals/` |
+
+The starter flow:
+
+```python
+from janus import END, human_gate, log, node, ralph
+
+@node(next="approve")
+def draft(s):
+    s.result = ralph("prompts/draft.md", until=lambda r: r["done"], max_iter=3,
+                     findings=getattr(s, "findings", ""))
+
+@node(next={"yes": "finish", "no": "draft"})
+def approve(s):
+    answer = human_gate("Is this done? Answer yes, or write what to change.", show=s.result["summary"])
+    if answer.strip().lower() == "yes":
+        return "yes"
+    s.findings = answer
+    return "no"
+
+@node(next=END)
+def finish(s):
+    log("done: " + s.result["summary"])
+```
+
+`init` ends by printing the six steps: edit the goal, edit or add prompts, edit `flow.py`, `graph`, `run`, `janus_ui.py`. It does not run `git init`; the README says when to. Test (`tests/test_init.py`): `init` into `tmp_path/goal` creates the files listed; a second `init` into the same folder raises; `graph` in the folder prints the three-node map; `run` with the fake codex answering `done: true` exits 2 at `approve#1/gate#1`, and after `yes` a second run exits 0 with `finish` in the path.
+
+### 2.8 Spec v0.3 edits to `janus-4.0-spec.md`
 
 - Header: v0.3, one sentence on nodes.
 - Section 4: `node` and `END` added to the primitive list; the Keys paragraph gains the node prefix rule (2.2).
 - Section 5: the journal example gains `graph:` and `path:`; the Replay paragraph gains the path check.
-- Section 6: `graph`.
-- Section 9: tests 13 to 18 (see 2.8).
+- Section 6: `graph` and `init`.
+- Section 9: tests 13 to 19 (see 2.7 and 2.9).
 - Section 10 and 14: rewritten in slice 5 (section 3 of this document).
 - Section 13: one line that a flow may stay a script and what it forgoes (graph, page).
 
-### 2.8 Tests (`tests/test_nodes.py`)
+### 2.9 Tests (`tests/test_nodes.py`)
 
 All with the fake `codex` and a flow written to `tmp_path` by the test. The existing suite must stay green unchanged, which is the proof that script flows are untouched.
 
@@ -150,7 +193,7 @@ All with the fake `codex` and a flow written to `tmp_path` by the test. The exis
 
 ### 3.1 State
 
-`s` carries: `majors` (copy of `MAJORS`), `major_index`, `target`, `plan`, `round`, `allowed`, `findings`, `task_index`, `task`, `finished`, `result`, `ci_count`, `build`, `last` (the report of a ralph that gave up).
+`s` carries: `majors` (copy of `MAJORS`), `major_index`, `target`, `plan`, `round`, `allowed`, `findings`, `task_index`, `task`, `finished`, `result`, `ci_count`, `build`, `last` (the report of a ralph that gave up), `summary` (the AI review's summary), `testplan`.
 
 ### 3.2 Nodes
 
@@ -164,14 +207,14 @@ All with the fake `codex` and a flow written to `tmp_path` by the test. The exis
 | `blocked` | `retry: start_round`, `stop: END` | `decision(..., ["retry", "stop"], show=s.findings)`; `retry` adds `MAX_ROUNDS` to `allowed`; `stop` logs "Angular N stopped by the human after M rounds" |
 | `next_task` | `task: implement`, `all_done: review` | `s.task = tasks[task_index]` when one is left |
 | `implement` | `ci: ci`, `done: task_done`, `gave_up: implement_exhausted` | `s.ci_count = 0`; ralph `implement.md` with `task`, `done_so_far=s.finished`, `findings`; `ci` when `teamcity.configured()` and `build_type != "none"` |
-| `implement_exhausted` | `retry: start_round`, `skip: next_task`, `stop: END` | decision with `s.last` summary and blockers; `retry` sets `findings` to the blocker report; `skip` logs and `task_index += 1` |
+| `implement_exhausted` | `retry: start_round`, `skip: next_task`, `stop: END` | `give_up(s, "implement", MAX_IMPLEMENT)`, a plain helper shared with `fix_exhausted`: decision with `s.last` summary and blockers; `retry` sets `findings` to the blocker report; `skip` logs and `task_index += 1`; returns the choice |
 | `ci` | `green: task_done`, `red: fix`, `no_verdict: ci_missing`, `still_red: ci_red` | `ci_count += 1`; `step("wait", ...)`; logs the verdict; `still_red` when red and `ci_count == MAX_CI` |
 | `ci_missing` | `skip: task_done`, `stop: END` | decision as today |
 | `fix` | `ci: ci`, `gave_up: fix_exhausted` | ralph `fix.md` with `task`, `build`; updates `s.result` |
-| `fix_exhausted` | `retry: start_round`, `skip: task_done`, `stop: END` | as `implement_exhausted`; `skip` keeps the commits |
+| `fix_exhausted` | `retry: start_round`, `skip: task_done`, `stop: END` | `give_up(s, "fix", MAX_FIX)`; `skip` keeps the commits |
 | `ci_red` | `retry: start_round`, `skip: task_done`, `stop: END` | decision as today; `retry` sets `findings` from the build excerpt |
 | `task_done` | `next_task` | appends the record to `finished`, logs "task X finished", `task_index += 1` |
-| `review` | `passed: human_review`, `failed: start_round` | `codex("prompts/review.md", tasks=s.finished, findings=s.findings)`; `failed` sets `findings = "AI review of round N:\n" + reasons` |
+| `review` | `passed: human_review`, `failed: start_round` | `codex("prompts/review.md", tasks=s.finished, findings=s.findings)`; `failed` sets `findings = "AI review of round N:\n" + reasons`; `passed` keeps `s.summary` for the human review's `show` |
 | `human_review` | `approved: merge`, `findings: start_round` | gate as today; anything but `approved` becomes `findings` |
 | `merge` | `testplan` | gate "answer merged" |
 | `testplan` | `qa` | `codex("prompts/testplan.md", tasks=s.finished)` |
