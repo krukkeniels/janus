@@ -379,3 +379,23 @@ def test_to_mermaid_with_classes_and_counts(root):
         "  classDef open fill:#e65100,stroke:#ffb74d\n"
         "  classDef failed fill:#b71c1c,stroke:#ef5350")
     assert janus.to_mermaid({"start": "a", "nodes": [{"name": "a", "next": {"": "a"}}]}) == "flowchart LR\n  a --> a"
+
+
+def test_status_prints_the_at_line_for_a_node_journal_only(root, monkeypatch, capsys):
+    (root / "journal.yaml").write_text(
+        "flow: flow.py\nstarted: x\nsteps:\n  review#2/review#1: {kind: codex, status: running, attempt: 1}\n"
+        "graph: {start: review, nodes: [{name: review, next: {'': null}}]}\n"
+        "path:\n- {node: review, visit: 1, started: x, finished: x, next: ''}\n"
+        "- {node: review, visit: 2, started: x}\n", encoding="utf-8")
+    assert run(root, monkeypatch, "status") == 0
+    assert capsys.readouterr().out == (
+        "at: review#2 (visit 2 of review)\n"
+        "no open gate\n"
+        "last steps:\n"
+        "  review#2/review#1: codex running (attempt 1)\n"
+        "next: python janus.py run (re-executes review#2/review#1)\n")
+    (root / "journal.yaml").write_text(
+        "flow: flow.py\nstarted: x\nsteps:\n  plan#1: {kind: codex, status: done, attempt: 1}\n", encoding="utf-8")
+    assert run(root, monkeypatch, "status") == 0
+    assert capsys.readouterr().out == (
+        "no open gate\nlast steps:\n  plan#1: codex done (attempt 1)\nnext: python janus.py run\n")

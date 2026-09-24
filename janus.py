@@ -641,6 +641,9 @@ def cmd_status() -> int:
     if not (ROOT / JOURNAL_FILE).exists():
         print("no journal; nothing has run yet\nnext: python janus.py run")
         return 0
+    if JOURNAL.get("path"):
+        last = JOURNAL["path"][-1]
+        print(f"at: {last['node']}#{last['visit']} (visit {last['visit']} of {last['node']})")
     steps: Dict[str, Any] = JOURNAL["steps"]
     gates = [k for k, e in steps.items() if e.get("status") == "open"]
     unfinished = [k for k, e in steps.items() if e.get("status") in ("running", "failed")]
