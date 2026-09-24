@@ -2,13 +2,13 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make a flow a state machine of small Python functions: `@node(next=...)` and `END` register the nodes, the engine walks them, prefixes every key with the visit (`implement#3/plan#1`), records the map (`graph`) and the path taken in `journal.yaml` and checks a rerun against that path; `python janus.py graph` prints the map as mermaid, `status` names the current visit, `python janus.py init <folder>` writes a goal folder that already runs, and `janus-4.0-spec.md` becomes v0.3.
+**Goal:** Make a flow a state machine of small Python functions: `@node(next=...)` and `END` register the nodes, the engine walks them, prefixes every key with the visit (`implement#3/plan#1`), records the map (`graph`) and the path taken in `journal.yaml` and checks a rerun against that path; `python janus.py graph` prints the map as mermaid, `status` names the current visit, `python janus.py init <folder>` writes a goal folder that already runs, `janus-4.0-spec.md` becomes v0.3; every Codex step also records its session id and token usage next to its result, `status` sums them, and the repository ships a Codex skill (`skills/janus-flow/SKILL.md`) that teaches Codex to write flows.
 
-**Architecture:** Everything is an addition to `janus.py`, in the order a run meets it. A `NODES` registry filled by the `node` decorator while `flow.py` loads (Task 1); a `NODE` global that `make_key` prepends to every key while the runner is inside a visit, with `COUNTERS` emptied per visit so the default counters restart (Task 2); a `run_nodes()` walker that `cmd_run` calls after `flow.py` loaded when `NODES` is not empty, inside the same `try` so gates, `Exhausted` and other exceptions are handled by the existing handlers, with a journal write added to the `finally` so the path's last entry reaches disk (Task 3); `to_mermaid` and a `graph` command that loads `flow.py` with `DRY = True` so `claim()` refuses to run a step (Task 4); one `at:` line in `status` (Task 5); `init` with the starter files as string constants (Task 6); the spec edits (Task 7). Script flows never set `NODE`, never get a `path`, and the 128 existing tests run unchanged.
+**Architecture:** Everything is an addition to `janus.py`, in the order a run meets it. A `NODES` registry filled by the `node` decorator while `flow.py` loads (Task 1); a `NODE` global that `make_key` prepends to every key while the runner is inside a visit, with `COUNTERS` emptied per visit so the default counters restart (Task 2); a `run_nodes()` walker that `cmd_run` calls after `flow.py` loaded when `NODES` is not empty, inside the same `try` so gates, `Exhausted` and other exceptions are handled by the existing handlers, with a journal write added to the `finally` so the path's last entry reaches disk (Task 3); `to_mermaid` and a `graph` command that loads `flow.py` with `DRY = True` so `claim()` refuses to run a step (Task 4); one `at:` line in `status` (Task 5); `init` with the starter files as string constants (Task 6); the spec edits (Task 7); `run_codex` keeping the `session id:` line of the transcript and `read_usage()` reading the last `token_count` event of the session's rollout file under `CODEX_HOME`, handed to `run_step` through a module-level `LAST_CODEX` mapping that is merged into the journal entry, plus a `tokens:` line in `status` (Task 8); the skill file, its test, and one closing line in `init` saying where to copy it from (Task 9). Script flows never set `NODE`, never get a `path`, and the 128 existing tests run unchanged.
 
 **Tech Stack:** Python 3.9+ (f-strings are fine in the engine; `from __future__ import annotations` stays), PyYAML 6, pytest via `uv` (`/snap/bin/uv`), git 2.43.0. No new dependency: `types.SimpleNamespace` is standard library.
 
-**Spec:** `docs/superpowers/specs/2026-09-24-janus-nodes-and-ui-design.md`, sections 1 and 2 (2.1 to 2.9). Sections 3 (the example as nodes) and 4 (the page) are slices 5 and 6 and are **not** planned here, but they consume what this slice produces: section 3.2's node table needs labelled edges, `END` inside a dict and the `<node>#<visit>/` keys; section 4.2 consumes `to_mermaid(graph, classes, counts)` and the journal's `graph` and `path` fields exactly as Tasks 3 and 4 shape them. The engine spec `janus-4.0-spec.md` v0.2 (sections 4, 5, 6, 9, 13) is edited to v0.3 in Task 7. Executors read both documents.
+**Spec:** `docs/superpowers/specs/2026-09-24-janus-nodes-and-ui-design.md` at `9462136`, sections 1 and 2 (2.1 to 2.11). Sections 3 (the example as nodes) and 4 (the page) are slices 5 and 6 and are **not** planned here, but they consume what this slice produces: section 3.2's node table needs labelled edges, `END` inside a dict and the `<node>#<visit>/` keys; section 4.2 consumes `to_mermaid(graph, classes, counts)`, the journal's `graph` and `path` fields exactly as Tasks 3 and 4 shape them, and the `session`/`usage` fields of Task 8. The engine spec `janus-4.0-spec.md` v0.2 (sections 4, 5, 6, 7, 9, 13) is edited to v0.3 in Task 7. Executors read both documents.
 
 **Where the work happens:** a git worktree at `.worktrees/slice4-nodes` on branch `slice4-nodes`, created from the repository root with `git worktree add .worktrees/slice4-nodes -b slice4-nodes` (`.worktrees/` is already in `.git/info/exclude`). **Every path in this plan is relative to that worktree root**; `uv run pytest -q` is run from it.
 
@@ -27,11 +27,13 @@ Copied from the design spec where it binds this slice; every task's requirements
 - Design §2.6: "`graph` executes `flow.py` with `DRY = True`. `claim()` raises `JanusError("flow.py runs steps at load time; only node flows have a graph")` when `DRY` is set ... If `NODES` is empty after loading, the same message is printed and the exit code is 1. `status` gains one line when the journal has a path: `at: review#2 (visit 2 of review)`."
 - Design §2.7: `init` "creates `<folder>` (a `JanusError` when it exists and is not empty)" and writes `janus.py` (a copy of `Path(__file__)`), `janus_ui.py` ("a copy, when it sits next to the running `janus.py`; silently skipped otherwise"), `JANUS.md`, `flow.py` (the starter flow, verbatim from the spec), `prompts/_preamble.md`, `prompts/draft.md`, `.gitignore` (`*/`, `!prompts/`, `!journals/`). "`init` ends by printing the six steps ... It does not run `git init`."
 - Design §2.9: "The existing suite must stay green unchanged, which is the proof that script flows are untouched." No existing test file is edited by this plan.
+- Design §2.10: "`run_codex` keeps the session id: the first captured stderr line matching `^session id: (\S+)$`. After the process exits it calls `read_usage(session_id)`, which globs `sessions/*/*/*/rollout-*-<id>.jsonl` under `CODEX_HOME`, reads the file line by line, keeps the last `token_count` event and returns `{"input": input_tokens, "cached": cached_input_tokens, "output": output_tokens, "total": total_tokens}`. Any failure (no id in the transcript, no file, bad JSON, missing keys) returns `None`; nothing is printed, nothing stops." "The step's journal entry gains `session: <uuid>` when the id was seen and `usage: {...}` when it was read. They sit next to `result`, outside it ... `run_step` gets them from `run_codex` through a module-level `LAST_CODEX: Dict[str, Any]` that `run_codex` fills and `run_step` merges into the entry after `execute` returns (for a ralph iteration that is the iteration's own entry). A failed step keeps whatever was captured before the failure." "`status` prints one line when any entry has `usage`: `tokens: <total> total, <input> in (<cached> cached), <output> out over <n> sessions`." "The fake codex needs no change: the test scripts the stderr text."
+- Design §2.11: "The repository ships `skills/janus-flow/SKILL.md`; the user installs it with `cp -r skills/janus-flow ~/.codex/skills/` (the README and `init`'s closing lines say so). It is not written into the goal folder". "The skill is self-contained (Codex may be asked in a folder without the spec) and under 200 lines", with the seven points 1 to 7 of §2.11 (front matter `name: janus-flow`, the given `description`, `metadata: {short-description: Write a Janus flow}`; the goal folder and six steps; the primitives "copied from spec section 4 as of v0.3"; the node rules; the prompt rules; the two examples; the checks). Test: "the file exists, its front matter parses as YAML with the three keys, and every primitive name in the engine's public list (`node`, `END`, `codex`, `ralph`, `ai_gate`, `human_gate`, `decision`, `step`, `log`, `goal`, `context`, `Exhausted`, `JanusError`) appears in it".
 - Engine spec §12.6 and §12.8: `janus.py` stays one file with only the standard library and PyYAML, and contains no reference to Git branches, pull requests, TeamCity, Bitbucket or Angular. The starter prompts in Task 6 talk about "the goal" and "commits", nothing domain-specific.
-- Size: the controller's target is "under about 700 lines" for `janus.py`. This plan lands at **776 lines** (562 + 214); see *Design decisions* for why and what could be cut. Prefer small additions over restructuring: no existing function is reshaped except `cmd_run` (its `runpy` call moves into `load_flow()` so `graph` can share it) and `save_journal` (its write moves into `write_journal()` so the `finally` can share it).
-- Tooling: `uv run pytest -q` from the worktree root is the verification command of every task. The suite is **128 passed** before this plan and **160 passed** after it (128 → 138 after Task 1 → 140 after Task 2 → 151 after Task 3 → 156 after Task 4 → 157 after Task 5 → 160 after Task 6; Task 7 adds none).
-- Commits: `type(scope): subject`, scopes `engine` (janus.py and its tests) and `spec` (the engine spec). Two-`-m` form so the trailer has a blank line before it: `git commit -m "type(scope): subject" -m "Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"`.
-- No line over 120 characters in `janus.py`, `tests/test_nodes.py` or `tests/test_init.py` (checked in *Self-review notes*).
+- Size: the controller's target is "under about 700 lines" for `janus.py`. This plan lands at **776 lines** after Task 6 and **809** after Task 9 (562 + 247); see *Design decisions* for why and what could be cut. Prefer small additions over restructuring: no existing function is reshaped except `cmd_run` (its `runpy` call moves into `load_flow()` so `graph` can share it), `save_journal` (its write moves into `write_journal()` so the `finally` can share it) and, in Task 8, the exit-code check of `run_codex` (the session capture is inserted between `proc.wait()` and the raise).
+- Tooling: `uv run pytest -q` from the worktree root is the verification command of every task. The suite is **128 passed** before this plan and **172 passed** after it (128 → 138 after Task 1 → 140 after Task 2 → 151 after Task 3 → 156 after Task 4 → 157 after Task 5 → 160 after Task 6; Task 7 adds none; → 169 after Task 8 → 172 after Task 9).
+- Commits: `type(scope): subject`, scopes `engine` (janus.py and its tests), `spec` (the engine spec) and `skill` (the Codex skill). Two-`-m` form so the trailer has a blank line before it: `git commit -m "type(scope): subject" -m "Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"`.
+- No line over 120 characters in `janus.py`, `tests/test_nodes.py`, `tests/test_init.py`, `tests/test_usage.py` or `tests/test_skill.py`; in `skills/janus-flow/SKILL.md` only the front-matter `description` line is longer (it is one YAML scalar and is kept on one line so Codex's front-matter parser reads it whole).
 
 ## Verified facts about this machine
 
@@ -41,12 +43,16 @@ Checked on 2026-09-24 while writing this plan; the numbers are observed, not ass
 - `python3` is 3.12.3. The whole engine suite of this plan (`tests/`, 131 tests without the example's) also passes under Python 3.9 (`uv run --python 3.9 --isolated --with pyyaml --with pytest pytest -q tests`: **131 passed**), so the nested f-string in `to_mermaid` and `types.SimpleNamespace` are within the floor.
 - Engine facts this plan builds on, read from `janus.py` at `67f6917`: `begin()` (line 64) resets `ROOT, JOURNAL, CONTEXT, COUNTERS, LIVE, CURRENT, REPLAYING` and is called by every command; `make_key(prompt, key)` (line 253) returns the explicit key or `<stem>#<n>` from `COUNTERS`; `claim(key)` (line 262) is the first thing both `run_step` and `gate` do; `step(key, fn)` (line 294) passes its key straight to `run_step`; `ralph` (line 365) keys iterations `f"{key}/{n}"` under `make_key(prompt, key)`; `human_gate` uses `make_key("gate", key)` and `decision` `make_key("decision", key)`; `cmd_run` (line 479) runs `runpy.run_path` inside `try` with handlers for `SystemExit`, `Exhausted` and `Exception` and a `finally` that only commits; `cmd_status` (line 508) prints `open gate`/`no open gate` first; `main` (line 547) parses one positional `command` from `sorted(COMMANDS)` and turns `JanusError` into `janus: <message>` on stderr with exit 1.
 - Test conventions, from `tests/conftest.py` and `tests/helpers.py`: the `root` fixture writes `JANUS.md` (`# Goal\nUpgrade the widget.\n`) and `prompts/` into `tmp_path` and calls `janus.begin(tmp_path)`; `fake_codex` puts a scripted `codex` on `PATH` with `.script([...])` (each step `{"output": {...}}` or `{"text": "..."}`, the last step repeats) and `.calls()` (list of `{"argv", "cwd", "prompt", "schema"}`); `read_journal(root)`; `write_prompt(root, stem, body, output=None)`. Flows are written by the tests to `root / "flow.py"` and run with `monkeypatch.chdir(root)` then `janus.main(["run"])`, as `tests/test_run.py` and `tests/test_loops.py` do.
-- All code in this plan was assembled in a copy of the repository under the session scratchpad and replayed from a clean clone task by task: each task's tests were run red on the previous task's engine, the edits applied, the tests run green and the whole suite run; the final `janus.py` of the replay is byte-identical to the rehearsal's. The observed red and green outputs are quoted in the steps. The real repository was not modified.
+- Codex facts for Task 8, verified on this machine with codex-cli 0.155.1 by the controller (quoted, not re-measured here): the stderr transcript header contains a line exactly like `session id: 01a0cee3-47d2-70a3-99ad-1bcfbb00efdc`; the rollout file is `$CODEX_HOME/sessions/2026/09/23/rollout-2026-09-23T19-35-40-01a0cf56-62a3-7972-ba18-fa8c73d313b2.jsonl` (three date levels, then `rollout-<timestamp>-<uuid>.jsonl`); a usage line is `{"timestamp":"2026-09-23T17:36:38.958Z","ordinal":28,"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":41083,"cached_input_tokens":30848,"cache_write_input_tokens":0,"output_tokens":476,"reasoning_output_tokens":67,"total_tokens":41559},"last_token_usage":{...},"model_context_window":258400},"rate_limits":{...}}}`; other lines have other `type`/`payload.type` values and some `token_count` events lack `info` (treated as absent). `~/.codex/skills/gh-fix-ci/SKILL.md` exists with front matter `name`, `description`, `metadata: {short-description: ...}`, which is the shape Task 9's file follows. The fake `codex` in `tests/conftest.py` writes its `stderr` script field to stderr followed by a newline, so a scripted `"stderr": "session id: <uuid>"` arrives as one transcript line.
+- There is **no README at the repository root** (`ls /home/race-day/janus`: `docs examples janus-4.0-spec.md janus.py pyproject.toml tests uv.lock`), so §2.11's README note has nowhere to go in this slice and is skipped; `init`'s closing line carries it (Task 9). The example README is slice 5's.
+- All code in this plan was assembled in a copy of the repository under the session scratchpad and replayed from a clean clone task by task: each task's tests were run red on the previous task's engine, the edits applied, the tests run green and the whole suite run; the final `janus.py` of the replay is byte-identical to the rehearsal's. Tasks 8 and 9 were rehearsed the same way on top of the Task 7 state (red with the tests alone, green after the edits, whole suite), with the fake `codex` running end to end for the usage tests. The observed red and green outputs are quoted in the steps. The real repository was not modified.
 
 ## Design decisions fixed here (where the spec leaves room)
 
-- **`path` is created by the runner, not by `begin()`.** Design §2.3 says both that "`JOURNAL["path"]` defaults to `[]` in `begin()` like `steps`" and that "a script flow never writes them [`graph` and `path`]". With the new journal write in `finally` (which fires whenever `journal.yaml` exists), a `begin()` default would put `path: []` into every script flow's journal. The plan therefore sets `JOURNAL.setdefault("path", [])` inside `run_nodes()`; a script journal stays byte-identical to 4.0 and `tests/test_loops.py`'s byte-for-byte replay assertion keeps passing.
-- **A finished visit is not touched on replay.** Design §2.3's pseudocode does `entry.update(finished=now(), next=label)` for every visit, but the bullet below it says "A finished visit is checked, not re-recorded", and test 5 asks that a second run leaves "the path unchanged". The runner updates `finished`/`next` only when the entry has no `finished`; a finished entry is compared and left alone.
+- **`path` is created by the runner, not by `begin()`.** Design §2.3 (as aligned at `9382d6f`) says "`JOURNAL["path"]` is created (`setdefault([])`) by the runner, not by `begin()`, so a script flow's journal stays byte-identical to Janus 4.0". The reason: the new journal write in `finally` fires whenever `journal.yaml` exists, so a `begin()` default would put `path: []` into every script flow's journal. `run_nodes()` does `JOURNAL.setdefault("path", [])`; `tests/test_loops.py`'s byte-for-byte replay assertion keeps passing.
+- **A finished visit is not touched on replay.** Design §2.3's pseudocode (as aligned at `9382d6f`) updates `finished`/`next` only for an entry without `finished` ("a finished visit is checked, never re-recorded"), and test 5 asks that a second run leaves "the path unchanged". The runner does exactly that.
+- **Token usage (Task 8).** `LAST_CODEX` is emptied by `run_step` right before `execute(attempt)`, not by `run_codex`, so a `step()` or a gate that follows a Codex step never inherits its session, and each ralph iteration (one `run_step` each) gets its own. The capture happens in `run_codex` after `proc.wait()` and before the non-zero-exit raise, so a failed process still records its session and usage ("keeps whatever was captured before the failure"); the raise then uses the stored exit code. `read_usage` takes the first file the glob yields, treats a `token_count` event without `info` as absent (keeps the previous totals), and returns `None` from a single `except Exception` for every failure the spec lists (and any other). The `tokens:` line is printed right after the `at:` line (before `open gate`/`no open gate`), counts as sessions only the entries that have `usage`, and sums with `.get(k, 0)` so a hand-edited entry with a missing field does not crash `status`.
+- **The skill (Task 9).** `SKILL.md` is 199 lines. Its primitive block is the v0.3 primitive list that Task 7 writes into spec §4, with every signature kept as written there and the comments of `goal`, `context` and `log` shortened to one line; `node`'s comment keeps the first four lines of Task 7's text and drops the two sentences on errors, which the "Node rules" section states in prose. Example 1 is the starter flow of §2.7 verbatim; example 2 (`start -> draft -> check -> approve -> finish` with `blocked` as the bound, a `decision` and an `Exhausted` catch) is written for this plan from §2.11's description ("the `draft -> check -> approve` flow from the authoring walk-through"), since that walk-through is not in the repository. The install note is one unnumbered closing line of `INIT_STEPS`: `Codex can help with steps 2 and 3: cp -r <janus repository>/skills/janus-flow ~/.codex/skills/`; `init` cannot know where the repository is when it runs from a copied `janus.py`, so the path is a placeholder. `tests/test_skill.py` locates the file relative to `janus.__file__` (`skills/janus-flow/SKILL.md` beside the engine) and also asserts `getattr(janus, name)` for every public name, so the list itself cannot name something the engine lacks.
 - **Visit counts are a local dict in `run_nodes()`** (`visits`), not a module global `VISITS`: nothing outside the walker reads them, and replay recomputes them from the start every run.
 - **`END` is `object()`**, compared by identity; `Node` is a `Tuple[str, Callable, Dict[str, Optional[str]]]` alias used only for the `NODES` annotation.
 - **Messages the spec leaves open** (all `JanusError`): bad `next` → `node next must be a name, END or a non-empty dict of label -> name or END: <repr>`, raised by `node(next)` itself, which runs when the decorator line is evaluated, that is at decoration time; duplicate → `duplicate node name: <name>`; unknown target → `node <name> goes to '<target>', which is not a node`; `init` without a folder → `init needs a folder: python janus.py init <folder>`; `init` into a non-empty folder → `<folder> exists and is not empty`. A dict with a non-string *value* (`{"go": 3}`) is treated as "`next` of a type not listed" and gets the bad-`next` message.
@@ -56,7 +62,7 @@ Checked on 2026-09-24 while writing this plan; the numbers are observed, not ass
 - **The `at:` line is the first line of `status`** (before `open gate`/`no open gate`), taken from the last path entry whether or not it is finished.
 - **`init` takes its folder from a second, optional positional** (`parser.add_argument("folder", nargs="?")`); `main` calls `cmd_init(args.folder)` for `init` and the other commands as before. `init` does not call `begin()` (it needs no journal and no goal folder of its own). `init` into an existing empty folder is allowed.
 - **The starter prompts** are short: `_preamble.md` is `{{goal}}` and one "Rules:" paragraph with the three rules of §2.7; `draft.md` declares `done`, `summary`, `blockers`, asks for the goal's work in the current folder and renders `{{previous}}` and `{{findings}}` on their own lines. The starter `flow.py` is the spec's text verbatim.
-- **Size.** The engine lands at 776 lines: nodes and runner about 90, mermaid and `graph` about 40, `init` with its five templates about 75, the rest small edits. The templates cannot be shortened much (the starter flow is fixed by the spec and the draft prompt must carry two placeholders and three fields). If the controller wants the 700 target met, the candidates are moving `to_mermaid`'s `CLASS_STYLES` into the page (slice 6 owns the colours anyway) and shortening docstrings; this plan does not do it.
+- **Size.** The engine lands at 776 lines after Task 6 and 809 after Task 9: nodes and runner about 90, mermaid and `graph` about 40, `init` with its five templates about 75, usage capture about 30, the rest small edits. The templates cannot be shortened much (the starter flow is fixed by the spec and the draft prompt must carry two placeholders and three fields). If the controller wants the 700 target met, the candidates are moving `to_mermaid`'s `CLASS_STYLES` into the page (slice 6 owns the colours anyway) and shortening docstrings; this plan does not do it.
 - **Loop test and the `flow changed` tests** use `step()` and `human_gate()` where Codex adds nothing, and the fake `codex` only where a label must come from a result (spec 2.9 item 3), a prompt with `output: {go: str}` supplying it.
 
 ## File structure
@@ -71,11 +77,16 @@ Checked on 2026-09-24 while writing this plan; the numbers are observed, not ass
 | `janus.py` | `STARTER_FLOW`, `STARTER_PREAMBLE`, `STARTER_DRAFT`, `STARTER_FILES`, `INIT_STEPS`, `cmd_init()`, `main` folder argument | 6 |
 | `tests/test_nodes.py` | New. Registration (10 tests, Task 1), keys (2, Task 2), runner (11, Task 3), graph/mermaid (5, Task 4), status (1, Task 5): 29 tests. | 1–5 |
 | `tests/test_init.py` | New. 3 tests. | 6 |
-| `janus-4.0-spec.md` | v0.3: header, §4, §5, §6, §9, §13. | 7 |
+| `janus-4.0-spec.md` | v0.3: header, §4, §5, §6, §7, §9, §13. | 7 |
+| `janus.py` | `LAST_CODEX`, `SESSION_LINE`, `read_usage()`, the capture in `run_codex`, the merge in `run_step`, the `tokens:` line in `cmd_status` | 8 |
+| `tests/test_usage.py` | New. 9 tests. | 8 |
+| `skills/janus-flow/SKILL.md` | New. The Codex skill, 199 lines. | 9 |
+| `tests/test_skill.py` | New. 3 tests. | 9 |
+| `janus.py` | `INIT_STEPS` closing line | 9 |
 
 Unchanged: `tests/conftest.py`, `tests/helpers.py`, every existing test file, `examples/angular-upgrade/` (slice 5), `pyproject.toml`.
 
-Names used across tasks. Engine globals: `END`, `Node`, `NODES: Dict[str, Node]`, `NODE: Optional[str]`, `DRY: bool`, `DRY_MESSAGE: str`, `CLASS_STYLES: Dict[str, str]`. Engine functions: `node(next) -> decorator`, `graph() -> dict`, `validate_nodes() -> None`, `check_label(name, edges, returned) -> str`, `run_nodes() -> None`, `write_journal() -> None`, `load_flow() -> None`, `to_mermaid(graph, classes=None, counts=None) -> str`, `cmd_graph() -> int`, `cmd_init(folder: Optional[str]) -> int`. Journal fields: `graph` (`{"start": str, "nodes": [{"name": str, "next": {str: Optional[str]}}]}`), `path` (list of `{"node": str, "visit": int, "started": str}` plus `"finished": str, "next": str` once the visit returned). Test helpers in `tests/test_nodes.py`: `run(root, monkeypatch, *argv)`, `answer(root, text)`; flow constants `WALK`, `LABELS`, `LOOP`, `GATE`, `MERMAID_FLOW`, `MERMAID`. In `tests/test_init.py`: `answer(root, text)`, constants `FILES`, `MERMAID`.
+Names used across tasks. Engine globals: `END`, `Node`, `NODES: Dict[str, Node]`, `NODE: Optional[str]`, `DRY: bool`, `DRY_MESSAGE: str`, `CLASS_STYLES: Dict[str, str]`, `LAST_CODEX: Dict[str, Any]`, `SESSION_LINE: re.Pattern`. Engine functions: `node(next) -> decorator`, `graph() -> dict`, `validate_nodes() -> None`, `check_label(name, edges, returned) -> str`, `run_nodes() -> None`, `write_journal() -> None`, `load_flow() -> None`, `to_mermaid(graph, classes=None, counts=None) -> str`, `cmd_graph() -> int`, `cmd_init(folder: Optional[str]) -> int`, `read_usage(session_id: str) -> Optional[Dict[str, int]]`. Journal fields: `graph` (`{"start": str, "nodes": [{"name": str, "next": {str: Optional[str]}}]}`), `path` (list of `{"node": str, "visit": int, "started": str}` plus `"finished": str, "next": str` once the visit returned); on a codex entry `session: str` and `usage: {"input", "cached", "output", "total"}` after `result`. Test helpers in `tests/test_nodes.py`: `run(root, monkeypatch, *argv)`, `answer(root, text)`; flow constants `WALK`, `LABELS`, `LOOP`, `GATE`, `MERMAID_FLOW`, `MERMAID`. In `tests/test_init.py`: `answer(root, text)`, constants `FILES`, `MERMAID`. In `tests/test_usage.py`: `usage_event(...)`, `ROLLOUT`, `SESSION`, `OTHER`, fixture `codex_home` (sets `CODEX_HOME`, returns a writer `write(session, text, day=...)`). In `tests/test_skill.py`: `SKILL`, `PUBLIC`.
 
 ---
 
@@ -1471,7 +1482,7 @@ git commit -m "feat(engine): init creates a starter goal folder" -m "Co-Authored
 
 ### Task 7: Spec v0.3
 
-Design §2.8: header (v0.3, one sentence on nodes); §4 (`node` and `END` in the primitive list, the node prefix rule in the Keys paragraph); §5 (the journal example gains `graph:` and `path:`, the Replay paragraph gains the path check); §6 (`graph` and `init`); §9 (tests 13 to 19); §13 (one line on staying a script). Sections 10 and 14 are slice 5's and are not touched.
+Design §2.8: header (v0.3, one sentence on nodes); §4 (`node` and `END` in the primitive list, the node prefix rule in the Keys paragraph); §5 (the journal example gains `graph:` and `path:`, the Replay paragraph gains the path check); §6 (`graph` and `init`, the `tokens:` status line); §7 (the session id and usage capture of §2.10); §9 (tests 13 to 21); §13 (one line on staying a script). Sections 10 and 14 are slice 5's and are not touched. Task 9 copies the primitive block that Step 2 writes, so this task runs before it.
 
 **Files:**
 - Modify: `janus-4.0-spec.md`
@@ -1611,12 +1622,28 @@ python /path/to/janus.py init <folder>   # create a goal folder with a starter n
 
 `run` imports `flow.py` from the current folder as a module and executes it top to bottom; when it registered nodes, the engine then walks them from the start node. Uncaught exceptions from the flow, including `Exhausted`, are written to `## Progress` with the step key that raised and the run exits with code 1.
 
-`graph` loads `flow.py` with steps disabled: a script flow's first primitive call fails with `flow.py runs steps at load time; only node flows have a graph`, and so does a file that registers no node. The output is one `flowchart LR` line per edge (`plan --> approve`, `review -- failed --> start_round`) and `END([END])` once when any edge ends the flow; it pastes into a README. `status` prints `at: review#2 (visit 2 of review)` first when the journal has a path.
+`graph` loads `flow.py` with steps disabled: a script flow's first primitive call fails with `flow.py runs steps at load time; only node flows have a graph`, and so does a file that registers no node. The output is one `flowchart LR` line per edge (`plan --> approve`, `review -- failed --> start_round`) and `END([END])` once when any edge ends the flow; it pastes into a README. `status` prints `at: review#2 (visit 2 of review)` first when the journal has a path, and `tokens: 41559 total, 41083 in (30848 cached), 476 out over 1 sessions` when any step has `usage` (section 7).
 
 `init` creates `<folder>` (an error when it exists and is not empty) with a copy of the running `janus.py` (and of `janus_ui.py` when it sits beside it), a `JANUS.md` with a placeholder goal, a three-node `flow.py` (draft with a ralph, approve with a gate that sends the answer back as findings, finish), `prompts/_preamble.md`, `prompts/draft.md` and a `.gitignore`, then prints the six steps to take next. It does not run `git init`.
 ````
 
-- [ ] **Step 5: Section 9, tests 13 to 19**
+- [ ] **Step 5: Section 7, the session id and token usage**
+
+Replace
+
+```markdown
+The prompt goes in on stdin, never on the command line. The user's own `~/.codex/config.toml` supplies model and reasoning effort; Janus passes no model flags. Codex runs at full access because the machine Janus runs on is already a sandbox, as decided for Janus 3.0. A non-zero exit, a missing final message or JSON that does not validate against the schema fails the step.
+```
+
+with
+
+```markdown
+The prompt goes in on stdin, never on the command line. The user's own `~/.codex/config.toml` supplies model and reasoning effort; Janus passes no model flags. Codex runs at full access because the machine Janus runs on is already a sandbox, as decided for Janus 3.0. A non-zero exit, a missing final message or JSON that does not validate against the schema fails the step.
+
+**Session id and token usage.** `codex exec` prints `session id: <uuid>` in its transcript header on stderr, and writes the session to `$CODEX_HOME/sessions/<yyyy>/<mm>/<dd>/rollout-<timestamp>-<uuid>.jsonl` (`CODEX_HOME` defaults to `~/.codex`). After the process exits, the engine keeps the first transcript line matching `^session id: (\S+)$` and reads that file: the last `event_msg` line whose `payload.type` is `token_count` carries `payload.info.total_token_usage`, from which `{input: input_tokens, cached: cached_input_tokens, output: output_tokens, total: total_tokens}` is taken. The step's journal entry gains `session: <uuid>` when the id was seen and `usage: {...}` when the file was read, next to `result` and outside it, so results and output schemas are untouched; a failed step keeps what was captured before the failure. No id, no file, bad JSON or missing keys leave the fields out without a message.
+```
+
+- [ ] **Step 6: Section 9, tests 13 to 21**
 
 Replace
 
@@ -1637,11 +1664,13 @@ with
 17. Interruptions in a node: a gate exits 2 under `b#1/gate#1` and the next run resumes in `b`; a failing step leaves the visit without `finished` and runs again as attempt 2; a flow edited so that visit 2 is another node, or a finished visit that takes another edge, exits 1 with `flow changed`.
 18. `graph`: the mermaid of a node flow; the load-time message and exit 1 for a script flow with the fake `codex` never called; `to_mermaid` with classes and counts; `status` prints `at:` for a node journal and nothing new for a script journal.
 19. `init` creates the starter files, refuses a non-empty folder, its `graph` prints the three-node map, and its `run` stops at `approve#1/gate#1` and ends with `finish` in the path after `yes`.
+20. Token usage (section 7): with a fake `CODEX_HOME` holding a rollout file and the fake `codex` printing `session id: <uuid>`, a step's entry has `session` and `usage` equal to the last `token_count` event; an id with no file gives `session` only; a transcript without the id gives neither; a failed step keeps them; each ralph iteration has its own; `status` prints the `tokens:` line.
+21. The Codex skill `skills/janus-flow/SKILL.md` exists, its front matter parses with `name`, `description` and `metadata`, it names every public primitive, and `init` prints where to copy it from.
 
-About thirty tests in 4.0; sixty after 4.1.
+About thirty tests in 4.0; 4.1 adds items 13 to 21, about forty more.
 ```
 
-- [ ] **Step 6: Section 13, staying a script**
+- [ ] **Step 7: Section 13, staying a script**
 
 Replace
 
@@ -1657,25 +1686,639 @@ Janus 4.0 gives the flow author full Python and asks in return that the flow be 
 A flow may stay a script: plain Python with explicit keys in its loops, as sections 10 and 14 of v0.2 wrote it. It runs exactly as before and forgoes what only nodes give: the map (`graph`), the recorded path, the `at:` line and the live page.
 ```
 
-- [ ] **Step 7: Check and commit**
+- [ ] **Step 8: Check and commit**
 
 Run: `git diff --stat janus-4.0-spec.md`
-Expected: `1 file changed, 45 insertions(+), 6 deletions(-)`; `grep -c "v0.3" janus-4.0-spec.md` prints `1`; `grep -n "^13\. Node registration\|^19\. \`init\`" janus-4.0-spec.md` prints both lines.
+Expected: `1 file changed, 50 insertions(+), 7 deletions(-)`; `grep -c "v0.3" janus-4.0-spec.md` prints `1`; `grep -n "^13\. Node registration\|^21\. The Codex skill\|^\*\*Session id and token usage" janus-4.0-spec.md` prints three lines.
 
 Run: `uv run pytest -q`
 Expected: `160 passed` (nothing but the spec changed).
 
 ```bash
 git add janus-4.0-spec.md
-git commit -m "docs(spec): v0.3, node flows: node and END, visit-prefixed keys, graph and path, graph and init" -m "Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+git commit -m "docs(spec): v0.3, node flows: node and END, visit-prefixed keys, graph and path, graph and init, token usage" -m "Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+```
+
+---
+
+### Task 8: The Codex session id and token usage in the journal
+
+Design §2.10 (quoted in *Global Constraints*): `run_codex` keeps the `session id:` line, `read_usage(session_id)` reads the rollout file under `CODEX_HOME`, `LAST_CODEX` carries both to `run_step`, which merges them into the entry after `execute` returns (also on failure), and `status` prints the `tokens:` line. Slice 6's `build_state` will read `session` and `usage` from each step item.
+
+**Files:**
+- Modify: `janus.py` (`LAST_CODEX` and `SESSION_LINE` globals, `run_step`, `read_usage` before `run_codex`, the capture in `run_codex`, the line in `cmd_status`)
+- Create: `tests/test_usage.py`
+
+**Interfaces:**
+- Consumes: `run_step`, `run_codex` (its `lines` list of stderr), `cmd_status`, the `fake_codex` fixture's `stderr` and `exit` script fields, the `root` fixture.
+- Produces: `LAST_CODEX: Dict[str, Any]`, `SESSION_LINE`, `read_usage(session_id) -> Optional[Dict[str, int]]` with keys `input`, `cached`, `output`, `total`; journal entry fields `session` and `usage` after `result` (or after `error`); the `status` line `tokens: <total> total, <input> in (<cached> cached), <output> out over <n> sessions` printed after the `at:` line and before the gate line.
+
+- [ ] **Step 1: Write the failing tests**
+
+Create `tests/test_usage.py`:
+
+```python
+"""Token usage per Codex step (design 2026-09-24 section 2.10): the session id from the transcript, the
+totals from the rollout file under CODEX_HOME, both next to ``result`` in the journal entry."""
+import json
+
+import pytest
+
+import janus
+from helpers import read_journal, write_prompt
+
+SESSION = "01a0cf56-62a3-7972-ba18-fa8c73d313b2"
+OTHER = "0199aaaa-bbbb-7ccc-8ddd-eeeeeeeeeeee"
+
+
+def usage_event(input_tokens, cached, output, total, info=True):
+    payload = {"type": "token_count"}
+    if info:
+        payload["info"] = {"total_token_usage": {
+            "input_tokens": input_tokens, "cached_input_tokens": cached, "cache_write_input_tokens": 0,
+            "output_tokens": output, "reasoning_output_tokens": 7, "total_tokens": total},
+            "last_token_usage": {}, "model_context_window": 258400}
+        payload["rate_limits"] = {}
+    return json.dumps({"timestamp": "2026-09-23T17:36:38.958Z", "ordinal": 28, "type": "event_msg", "payload": payload})
+
+
+ROLLOUT = "\n".join([
+    usage_event(1000, 100, 50, 1050),
+    json.dumps({"timestamp": "x", "type": "response_item", "payload": {"type": "message", "content": []}}),
+    usage_event(41083, 30848, 476, 41559),
+]) + "\n"
+
+
+@pytest.fixture
+def codex_home(tmp_path, monkeypatch):
+    """A CODEX_HOME with one session rollout; returns a writer for more."""
+    home = tmp_path / "codex-home"
+    monkeypatch.setenv("CODEX_HOME", str(home))
+
+    def write(session, text, day="2026/09/23"):
+        folder = home / "sessions" / day
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / f"rollout-2026-09-23T19-35-40-{session}.jsonl").write_text(text, encoding="utf-8")
+
+    write(SESSION, ROLLOUT)
+    return write
+
+
+def test_read_usage_returns_the_last_token_count_event(codex_home):
+    assert janus.read_usage(SESSION) == {"input": 41083, "cached": 30848, "output": 476, "total": 41559}
+
+
+def test_read_usage_returns_none_for_a_missing_file_bad_json_or_missing_keys(codex_home):
+    assert janus.read_usage(OTHER) is None
+    codex_home(OTHER, "not json\n")
+    assert janus.read_usage(OTHER) is None
+    codex_home(OTHER, json.dumps({"type": "event_msg", "payload": {"type": "token_count", "info": {"x": 1}}}) + "\n")
+    assert janus.read_usage(OTHER) is None
+    codex_home(OTHER, json.dumps({"type": "event_msg", "payload": {"type": "turn_complete"}}) + "\n")
+    assert janus.read_usage(OTHER) is None
+
+
+def test_read_usage_skips_a_token_count_event_without_info(codex_home):
+    codex_home(OTHER, usage_event(10, 0, 5, 15) + "\n" + usage_event(0, 0, 0, 0, info=False) + "\n")
+    assert janus.read_usage(OTHER) == {"input": 10, "cached": 0, "output": 5, "total": 15}
+
+
+def test_codex_step_records_session_and_usage_next_to_the_result(root, fake_codex, codex_home):
+    write_prompt(root, "plan", "Plan {{goal}}", output={"summary": "str"})
+    fake_codex.script([{"output": {"summary": "ok"}, "stderr": f"session id: {SESSION}"}])
+    assert janus.codex("prompts/plan.md") == {"summary": "ok"}
+    entry = read_journal(root)["steps"]["plan#1"]
+    assert list(entry) == ["kind", "status", "attempt", "started", "finished", "result", "session", "usage"]
+    assert entry["session"] == SESSION
+    assert entry["usage"] == {"input": 41083, "cached": 30848, "output": 476, "total": 41559}
+    assert entry["result"] == {"summary": "ok"}
+
+
+def test_a_session_without_a_rollout_file_records_the_id_only(root, fake_codex, codex_home):
+    write_prompt(root, "plan", "Plan", output={"summary": "str"})
+    fake_codex.script([{"output": {"summary": "ok"}, "stderr": f"session id: {OTHER}"}])
+    janus.codex("prompts/plan.md")
+    entry = read_journal(root)["steps"]["plan#1"]
+    assert entry["session"] == OTHER and "usage" not in entry
+
+
+def test_a_transcript_without_a_session_id_records_neither(root, fake_codex, codex_home):
+    write_prompt(root, "plan", "Plan", output={"summary": "str"})
+    fake_codex.script([{"output": {"summary": "ok"}, "stderr": "thinking...\nsession id is not on its own line"}])
+    janus.codex("prompts/plan.md")
+    entry = read_journal(root)["steps"]["plan#1"]
+    assert "session" not in entry and "usage" not in entry
+
+
+def test_a_failed_codex_step_keeps_the_session_and_usage_it_captured(root, fake_codex, codex_home):
+    write_prompt(root, "plan", "Plan", output={"summary": "str"})
+    fake_codex.script([{"exit": 3, "stderr": f"session id: {SESSION}\nboom"}])
+    with pytest.raises(janus.JanusError, match="codex exec exited with 3"):
+        janus.codex("prompts/plan.md")
+    entry = read_journal(root)["steps"]["plan#1"]
+    assert entry["status"] == "failed" and entry["session"] == SESSION and entry["usage"]["total"] == 41559
+
+
+def test_each_ralph_iteration_records_its_own_session_and_a_step_records_none(root, fake_codex, codex_home):
+    codex_home(OTHER, usage_event(5, 0, 1, 6) + "\n")
+    write_prompt(root, "fix", "fix", output={"done": "bool"})
+    fake_codex.script([{"output": {"done": False}, "stderr": f"session id: {SESSION}"},
+                       {"output": {"done": True}, "stderr": f"session id: {OTHER}"}])
+    janus.ralph("prompts/fix.md", until=lambda r: r["done"], max_iter=2, key="fix")
+    janus.step("push", lambda: "pushed")
+    steps = read_journal(root)["steps"]
+    assert (steps["fix/1"]["session"], steps["fix/1"]["usage"]["total"]) == (SESSION, 41559)
+    assert (steps["fix/2"]["session"], steps["fix/2"]["usage"]["total"]) == (OTHER, 6)
+    assert "session" not in steps["push"] and "usage" not in steps["push"]
+
+
+def test_status_prints_the_tokens_line_when_any_entry_has_usage(root, monkeypatch, capsys):
+    (root / "journal.yaml").write_text(
+        "flow: flow.py\nstarted: x\nsteps:\n"
+        "  plan#1: {kind: codex, status: done, attempt: 1, session: a,\n"
+        "           usage: {input: 100, cached: 40, output: 10, total: 110}}\n"
+        "  fix/1: {kind: codex, status: failed, attempt: 1, session: b}\n"
+        "  fix/2: {kind: codex, status: done, attempt: 1, session: c,\n"
+        "          usage: {input: 50, cached: 0, output: 5, total: 55}}\n",
+        encoding="utf-8")
+    monkeypatch.chdir(root)
+    assert janus.main(["status"]) == 0
+    out = capsys.readouterr().out
+    assert out.startswith("tokens: 165 total, 150 in (40 cached), 15 out over 2 sessions\nno open gate\n")
+    (root / "journal.yaml").write_text(
+        "flow: flow.py\nstarted: x\nsteps:\n  plan#1: {kind: codex, status: done, attempt: 1}\n", encoding="utf-8")
+    assert janus.main(["status"]) == 0
+    assert capsys.readouterr().out.startswith("no open gate\n")
+```
+
+`ROLLOUT` is the three-line file of §2.10 (two `token_count` events with rising totals and one unrelated event) in the exact JSON shape verified on codex-cli 0.155.1; `usage_event(..., info=False)` is a `token_count` event without `info`. The fake `codex` prints the `stderr` field followed by a newline, so `session id: <uuid>` is one transcript line and the third test's `session id is not on its own line` is not matched by `^session id: (\S+)$` (it has more than one word after the colon). The `status` test hand-writes a journal with two `usage` entries and one without to pin the sums and the session count.
+
+- [ ] **Step 2: Run the tests to see them fail**
+
+Run: `uv run pytest -q tests/test_usage.py`
+Expected: `8 failed, 1 passed`: the three `read_usage` tests with `AttributeError: module 'janus' has no attribute 'read_usage'`, the four journal tests with `KeyError: 'session'`, the `status` test with the missing first line; `test_a_transcript_without_a_session_id_records_neither` passes already (nothing is recorded today) and must keep passing.
+
+- [ ] **Step 3: Add the globals and the merge in `run_step`**
+
+In `janus.py`, replace
+
+```python
+DRY_MESSAGE = "flow.py runs steps at load time; only node flows have a graph"
+```
+
+with
+
+```python
+DRY_MESSAGE = "flow.py runs steps at load time; only node flows have a graph"
+LAST_CODEX: Dict[str, Any] = {}  # session id and token usage of the last codex exec; run_step merges it into the entry
+SESSION_LINE = re.compile(r"^session id: (\S+)$")
+```
+
+In `run_step`, replace
+
+```python
+    save_journal(key, "running")
+    try:
+        result = execute(attempt)
+        yaml.safe_dump(result)  # a result that is not YAML-serialisable fails the step here
+    except Exception as exc:
+        error = str(exc) if isinstance(exc, JanusError) else f"{type(exc).__name__}: {exc}"
+        entry.update(status="failed", finished=now(), error=error)
+        save_journal(key, "failed")
+        raise
+    entry.update(status="done", finished=now(), result=copy.deepcopy(result))
+    save_journal(key, "done")
+    return copy.deepcopy(result)
+```
+
+with
+
+```python
+    save_journal(key, "running")
+    LAST_CODEX.clear()
+    try:
+        result = execute(attempt)
+        yaml.safe_dump(result)  # a result that is not YAML-serialisable fails the step here
+    except Exception as exc:
+        error = str(exc) if isinstance(exc, JanusError) else f"{type(exc).__name__}: {exc}"
+        entry.update(status="failed", finished=now(), error=error, **LAST_CODEX)  # keeps what was captured
+        save_journal(key, "failed")
+        raise
+    entry.update(status="done", finished=now(), result=copy.deepcopy(result), **LAST_CODEX)
+    save_journal(key, "done")
+    return copy.deepcopy(result)
+```
+
+`LAST_CODEX` is emptied here, before `execute`, so a `step()` that follows a Codex step records nothing and every ralph iteration (one `run_step` each) gets its own session.
+
+- [ ] **Step 4: Add `read_usage` and the capture in `run_codex`**
+
+In `janus.py`, replace
+
+```python
+# --- codex -----------------------------------------------------------------
+
+def run_codex(cwd: Path, prompt: str, schema: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+```
+
+with
+
+```python
+# --- codex -----------------------------------------------------------------
+
+def read_usage(session_id: str) -> Optional[Dict[str, int]]:
+    """Token usage of a Codex session from its rollout file under CODEX_HOME (design 2.10): the last
+    ``token_count`` event's totals, or None when anything about the file is missing or malformed."""
+    home = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
+    totals = None
+    try:
+        rollout = next(iter(home.glob(f"sessions/*/*/*/rollout-*-{session_id}.jsonl")))
+        for line in rollout.read_text(encoding="utf-8").splitlines():
+            event = json.loads(line)
+            if event.get("type") == "event_msg" and event["payload"].get("type") == "token_count":
+                totals = (event["payload"].get("info") or {}).get("total_token_usage", totals)
+        return {"input": totals["input_tokens"], "cached": totals["cached_input_tokens"],
+                "output": totals["output_tokens"], "total": totals["total_tokens"]}
+    except Exception:
+        return None
+
+
+def run_codex(cwd: Path, prompt: str, schema: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+```
+
+Still in `janus.py`, in `run_codex`, replace
+
+```python
+        tail = "\n".join(lines[-20:])
+        if proc.wait() != 0:
+            raise JanusError(f"codex exec exited with {proc.returncode}: {tail}")
+```
+
+with
+
+```python
+        tail = "\n".join(lines[-20:])
+        code = proc.wait()
+        session = next((m.group(1) for m in map(SESSION_LINE.match, lines) if m), None)
+        if session:  # the rollout file is complete once the process has exited
+            LAST_CODEX["session"] = session
+            usage = read_usage(session)
+            if usage is not None:
+                LAST_CODEX["usage"] = usage
+        if code != 0:
+            raise JanusError(f"codex exec exited with {code}: {tail}")
+```
+
+`lines` already holds every stderr line of the transcript (the loop above writes each one through and keeps it); the match is anchored so only a line that is exactly `session id: <one token>` counts. Every failure inside `read_usage` (no file from the glob → `StopIteration`, bad JSON → `ValueError`, a non-mapping payload or missing key → `TypeError`/`KeyError`, `totals` still `None` → `TypeError`) is caught by the one `except Exception` and yields `None`, as §2.10 asks; nothing is printed.
+
+- [ ] **Step 5: Print the `tokens:` line in `status`**
+
+In `janus.py`, in `cmd_status`, replace
+
+```python
+        print(f"at: {last['node']}#{last['visit']} (visit {last['visit']} of {last['node']})")
+    steps: Dict[str, Any] = JOURNAL["steps"]
+```
+
+with
+
+```python
+        print(f"at: {last['node']}#{last['visit']} (visit {last['visit']} of {last['node']})")
+    steps: Dict[str, Any] = JOURNAL["steps"]
+    used = [e["usage"] for e in steps.values() if isinstance(e, dict) and isinstance(e.get("usage"), dict)]
+    if used:
+        t = {k: sum(u.get(k, 0) for u in used) for k in ("total", "input", "cached", "output")}
+        print(f"tokens: {t['total']} total, {t['input']} in ({t['cached']} cached), {t['output']} out "
+              f"over {len(used)} sessions")
+```
+
+- [ ] **Step 6: Run the tests to see them pass, then the whole suite**
+
+Run: `uv run pytest -q tests/test_usage.py`
+Expected: `9 passed`.
+
+Run: `uv run pytest -q`
+Expected: `169 passed`. The existing `tests/test_codex.py` tests keep passing: their fake `codex` prints no `session id:` line, so no entry gains a field. `janus.py` is 808 lines.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add janus.py tests/test_usage.py
+git commit -m "feat(engine): record the codex session id and token usage in the journal" -m "Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+```
+
+---
+
+### Task 9: A Codex skill for writing flows
+
+Design §2.11 (quoted in *Global Constraints*): `skills/janus-flow/SKILL.md`, self-contained and under 200 lines, with the seven points; `tests/test_skill.py`; the install note in `init`'s closing lines. There is no README at the repository root (see *Verified facts*), so no README edit.
+
+**Files:**
+- Create: `skills/janus-flow/SKILL.md`
+- Create: `tests/test_skill.py`
+- Modify: `janus.py` (`INIT_STEPS`)
+
+**Interfaces:**
+- Consumes: the v0.3 primitive list of Task 7 Step 2 (copied into the skill), `INIT_STEPS` and `cmd_init` of Task 6, the public names `node`, `END`, `codex`, `ralph`, `ai_gate`, `human_gate`, `decision`, `step`, `log`, `goal`, `context`, `Exhausted`, `JanusError`.
+- Produces: the skill file at `skills/janus-flow/SKILL.md`, installed by the user with `cp -r skills/janus-flow ~/.codex/skills/`; `init` prints `Codex can help with steps 2 and 3: cp -r <janus repository>/skills/janus-flow ~/.codex/skills/` as its last line.
+
+- [ ] **Step 1: Write the failing tests**
+
+Create `tests/test_skill.py`:
+
+```python
+"""The Codex skill for writing flows (design 2026-09-24 section 2.11) cannot fall behind the engine's API."""
+from pathlib import Path
+
+import yaml
+
+import janus
+
+SKILL = Path(janus.__file__).resolve().parent / "skills" / "janus-flow" / "SKILL.md"
+PUBLIC = ["node", "END", "codex", "ralph", "ai_gate", "human_gate", "decision", "step", "log", "goal", "context",
+          "Exhausted", "JanusError"]
+
+
+def test_skill_file_has_the_codex_front_matter():
+    text = SKILL.read_text(encoding="utf-8")
+    assert text.startswith("---\n")
+    front = yaml.safe_load(text.split("\n---\n", 1)[0][4:])
+    assert front["name"] == "janus-flow"
+    assert front["description"].startswith("Write or change a Janus goal folder")
+    assert front["metadata"] == {"short-description": "Write a Janus flow"}
+
+
+def test_skill_names_every_public_primitive_and_stays_short():
+    text = SKILL.read_text(encoding="utf-8")
+    for name in PUBLIC:
+        assert name in text, name
+        assert getattr(janus, name) is not None
+    assert len(text.splitlines()) < 200
+
+
+def test_init_tells_where_the_skill_is(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    assert janus.main(["init", "goal"]) == 0
+    assert "cp -r <janus repository>/skills/janus-flow ~/.codex/skills/" in capsys.readouterr().out
+```
+
+- [ ] **Step 2: Run the tests to see them fail**
+
+Run: `uv run pytest -q tests/test_skill.py`
+Expected: `3 failed`: the first two with `FileNotFoundError: [Errno 2] No such file or directory: '.../skills/janus-flow/SKILL.md'`, the third with `AssertionError: assert 'cp -r <janus repository>/skills/janus-flow ~/.codex/skills/' in 'created goal\nnext, in this folder:\n ...'`.
+
+- [ ] **Step 3: Write the skill**
+
+Create `skills/janus-flow/SKILL.md` with exactly this content (199 lines):
+
+````markdown
+---
+name: janus-flow
+description: "Write or change a Janus goal folder: the goal in JANUS.md, one prompt per Codex job with an output schema, and flow.py as @node functions with declared edges. Use when asked to create, extend or debug a Janus flow."
+metadata:
+  short-description: Write a Janus flow
+---
+
+# Writing a Janus flow
+
+Janus is a small durable flow engine for Codex: one file, `janus.py`, in a goal folder. The human writes
+the goal, the prompts and the flow; Janus runs fresh `codex exec` processes, journals every step in
+`journal.yaml`, stops at human gates (the question goes into `JANUS.md`, the human answers there and runs
+again) and resumes by replay: finished steps return their stored results, only unfinished work executes.
+
+## A goal folder
+
+```text
+janus.py              # the engine, copied in by `python /path/to/janus/janus.py init <folder>`
+janus_ui.py           # optional live view: python janus_ui.py
+JANUS.md              # "# Goal" (every prompt sees it as {{goal}}), then gates, decisions and progress
+flow.py               # the flow: @node functions
+prompts/_preamble.md  # optional; prepended to every prompt
+prompts/<job>.md      # one file per Codex job, with an `output` schema in YAML front matter
+journal.yaml          # written by Janus; never edit it
+.gitignore            # "*/", "!prompts/", "!journals/": product checkouts inside the folder are ignored
+```
+
+The six authoring steps: 1. edit the goal in `JANUS.md`; 2. edit or add prompts; 3. edit `flow.py`;
+4. `python janus.py graph` to see the map; 5. `python janus.py run`, answer gates in `JANUS.md`, run
+again; 6. `python janus_ui.py` to watch. `python janus.py status` shows where a run stands.
+
+## Primitives (`from janus import ...`)
+
+```python
+goal() -> str                 # the text of the "# Goal" section of JANUS.md
+context(**vars) -> None       # values available to every prompt render from now on
+codex(prompt, key=None, cwd=".", **vars) -> dict
+    # One fresh `codex exec` in cwd. The prompt file is rendered with vars, the result is shaped by the
+    # prompt's output schema, journaled under key and returned as a dict.
+ralph(prompt, until, max_iter, key=None, cwd=".", **vars) -> dict
+    # codex() repeated until `until(result)` is true. Each iteration is a fresh process and sees the
+    # previous result as {{previous}}. Returns the result that satisfied `until`. Raises Exhausted(last)
+    # after max_iter iterations without success.
+human_gate(question, key=None, show=None) -> str
+    # Writes a "## Gate: <key>" section with the question and `show` to JANUS.md, journals the gate as
+    # open and exits with code 2. On a later run, returns the human's answer.
+decision(question, options, key=None, show=None) -> str
+    # human_gate whose answer must be one of options. Any other answer keeps the gate open with a note.
+ai_gate(prompt, key=None, cwd=".", **vars) -> bool
+    # codex() with the fields {passed: bool, reasons: list[str]} added to the prompt's output schema.
+    # Returns passed. The whole result is in the journal.
+step(key, fn) -> result
+    # Runs fn() once and journals its return value, which must be YAML-serialisable. Replay returns the
+    # stored value without calling fn. Use it for every side effect that must not repeat: a push, a
+    # test run, a CI poll.
+log(text) -> None             # appends a line to "## Progress" in JANUS.md and prints it
+node(next) -> decorator
+    # Registers the decorated function as a node named after the function; the first node defined is
+    # the start. `next` is a node name (one edge; the function returns None), END (the flow ends after
+    # this node; the function returns None) or {"label": name_or_END, ...} (the function returns a
+    # label). The function takes the state `s`, a SimpleNamespace made fresh for every run.
+END                           # sentinel: the flow ends here
+class Exhausted(Exception)    # .last is the final ralph result
+class JanusError(Exception)   # engine and flow errors that stop the run
+```
+
+Exit codes of `python janus.py run`: 0 the flow ended, 2 a gate is open, 1 a step failed or the flow raised.
+
+## Node rules
+
+- One function per stage of the work, decorated with `@node(next=...)`; the first one defined starts.
+- `next` is a node name, a dict of label to node name (a value may be `END`), or `END`.
+- A single-edge node returns nothing. A multi-edge node returns one of its labels, and only a label:
+  `return "passed" if result["passed"] else "failed"`. Returning anything else stops the run.
+- Keep everything a later node needs on `s` (`s.plan`, `s.findings`, `s.round`). `s` is rebuilt on every
+  run by replaying the nodes, so never read `journal.yaml`, the clock or a random source to choose an
+  edge: the same journal must give the same path.
+- A loop is an edge backwards, `{"again": "draft", "done": "finish"}`, with a counter on `s` that bounds it;
+  past the bound go to a node that opens a `decision(["retry", "stop"])`.
+- Anything with a side effect that must not repeat (a push, a test run, a poll) goes in `step(key, fn)`.
+- Keys are automatic: inside the third visit of `implement`, `codex("prompts/plan.md")` is journaled as
+  `implement#3/plan#1` and `step("wait", fn)` as `implement#3/wait`. Pass `key=` only when two calls in
+  one visit would otherwise get the same key (two `codex("prompts/plan.md")` in one node are `plan#1` and
+  `plan#2` already; two `step("wait", ...)` are not).
+- Gates exit the process; do not wrap them in `try`. Never catch `SystemExit`.
+- Catch `Exhausted` around a `ralph` when the flow should ask the human what to do next; `exc.last` is
+  the report to show.
+
+## Prompt rules
+
+- Front matter declares the fields Codex must return, all required, no extras:
+  ```yaml
+  ---
+  output:
+    done: bool
+    summary: str
+    blockers: list[str]
+    verdict: {one_of: [passed, failed]}
+    tasks:
+      - {id: str, title: str}
+  ---
+  ```
+  Types: `str`, `int`, `float`, `bool`, `list[T]` (`T` a scalar), a one-item list of a mapping for a list
+  of objects, a nested mapping for an object, `one_of: [a, b, c]` for an enumerated string. A prompt
+  without `output` returns `{"text": <final message>}`.
+- Placeholders: `{{name}}` and `{{name.field}}` with dotted access into dicts and lists by index; a
+  non-string renders as YAML; a placeholder that resolves to nothing fails the step before Codex starts.
+  Variables in rising precedence: the reserved `goal`, `attempt` and (inside a ralph) `previous`; the
+  values from `context()`; the keyword arguments of the call. Pass strings for things that may be empty
+  (`findings=""`) and use them whole, never dotted.
+- `{{previous}}` exists only inside a `ralph` (empty in its first iteration).
+- `prompts/_preamble.md` is prepended to every prompt and sees only `goal`, `attempt` and `context()`
+  values, never a call argument.
+- `show=` at a gate is rewritten into `JANUS.md` on every stalled run: pass a summary and short lines,
+  not whole results.
+
+## Example 1: draft, approve, finish (what `init` writes)
+
+```python
+from janus import END, human_gate, log, node, ralph
+
+@node(next="approve")
+def draft(s):
+    s.result = ralph("prompts/draft.md", until=lambda r: r["done"], max_iter=3,
+                     findings=getattr(s, "findings", ""))
+
+@node(next={"yes": "finish", "no": "draft"})
+def approve(s):
+    answer = human_gate("Is this done? Answer yes, or write what to change.", show=s.result["summary"])
+    if answer.strip().lower() == "yes":
+        return "yes"
+    s.findings = answer
+    return "no"
+
+@node(next=END)
+def finish(s):
+    log("done: " + s.result["summary"])
+```
+
+`prompts/draft.md` declares `done: bool`, `summary: str`, `blockers: list[str]` and uses `{{findings}}`
+and `{{previous}}`. The map (`python janus.py graph`): `draft --> approve`, `approve -- yes --> finish`,
+`approve -- no --> draft`, `finish --> END`.
+
+## Example 2: a review loop with a bound
+
+```python
+from janus import END, Exhausted, codex, decision, human_gate, log, node, ralph
+
+MAX_ROUNDS = 3
+
+@node(next="draft")
+def start(s):
+    s.round, s.findings = 0, ""
+
+@node(next={"ok": "check", "gave_up": "blocked"})
+def draft(s):
+    s.round += 1
+    try:
+        s.result = ralph("prompts/draft.md", until=lambda r: r["done"], max_iter=3, findings=s.findings)
+    except Exhausted as exc:
+        s.findings = "the draft gave up:\n" + "\n".join(exc.last["blockers"])
+        return "gave_up"
+    return "ok"
+
+@node(next={"passed": "approve", "failed": "draft", "too_many": "blocked"})
+def check(s):
+    review = codex("prompts/check.md", summary=s.result["summary"])   # output: passed: bool, reasons: list[str]
+    if review["passed"]:
+        return "passed"
+    s.findings = "review of round %d:\n%s" % (s.round, "\n".join(review["reasons"]))
+    return "failed" if s.round < MAX_ROUNDS else "too_many"
+
+@node(next={"retry": "draft", "stop": END})
+def blocked(s):
+    return decision("Keep going?", ["retry", "stop"], show=s.findings)
+
+@node(next={"yes": "finish", "no": "draft"})
+def approve(s):
+    answer = human_gate("Is this done? Answer yes, or write what to change.", show=s.result["summary"])
+    if answer.strip().lower() == "yes":
+        return "yes"
+    s.findings = answer
+    return "no"
+
+@node(next=END)
+def finish(s):
+    log("done in %d round(s): %s" % (s.round, s.result["summary"]))
+```
+
+`retry` at `blocked` goes back to `draft`, which is visit 4 of `draft` with fresh keys; the round counter
+is only ever advanced by the flow itself.
+
+## Before handing back
+
+1. `python janus.py graph` prints the map; every edge you intended is on it and nothing is unreachable.
+2. Read each prompt against the variables its call passes (plus `goal`, `attempt`, `context()` values and,
+   in a ralph, `previous`): no placeholder may be undefined, and every field the flow reads is declared.
+3. `flow.py` catches `Exhausted` where a human should decide, and never catches `SystemExit`.
+4. `python janus.py run` with the gates answered in `JANUS.md` reaches `END`; a second run executes nothing.
+````
+
+Point by point against §2.11: 1 the front matter; 2 "A goal folder" and the six steps; 3 "Primitives", the v0.3 list of Task 7 Step 2 with the comments shortened where they exceed one line; 4 "Node rules"; 5 "Prompt rules"; 6 the two examples; 7 "Before handing back".
+
+- [ ] **Step 4: Add the closing line to `init`**
+
+In `janus.py`, in `INIT_STEPS`, replace
+
+```python
+  6. python janus_ui.py       # watch it in the browser"""
+```
+
+with
+
+```python
+  6. python janus_ui.py       # watch it in the browser
+Codex can help with steps 2 and 3: cp -r <janus repository>/skills/janus-flow ~/.codex/skills/"""
+```
+
+`tests/test_init.py` keeps passing: it asserts the output starts with the first step and contains `6. python janus_ui.py`.
+
+- [ ] **Step 5: Run the tests to see them pass, then the whole suite**
+
+Run: `uv run pytest -q tests/test_skill.py`
+Expected: `3 passed`.
+
+Run: `uv run pytest -q`
+Expected: `172 passed`. `janus.py` is 809 lines; `wc -l skills/janus-flow/SKILL.md` prints `199`.
+
+- [ ] **Step 6: Try the skill's front matter the way Codex reads it**
+
+Run from the worktree root: `python3 -c "import yaml; t = open('skills/janus-flow/SKILL.md').read(); print(yaml.safe_load(t.split('\n---\n', 1)[0][4:]))"`
+Expected: `{'name': 'janus-flow', 'description': 'Write or change a Janus goal folder: ...', 'metadata': {'short-description': 'Write a Janus flow'}}`. Installing it (`cp -r skills/janus-flow ~/.codex/skills/`) is the user's step, not this task's.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add skills/janus-flow/SKILL.md tests/test_skill.py janus.py
+git commit -m "docs(skill): a codex skill for writing janus flows" -m "Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 ```
 
 ---
 
 ## Self-review notes
 
+- **Spec coverage, §2.10 and §2.11.** §2.10 `run_codex` keeps the first `^session id: (\S+)$` line → Task 8 Step 4 (`SESSION_LINE`, `next(... map(SESSION_LINE.match, lines) ...)`); `read_usage` globbing `sessions/*/*/*/rollout-*-<id>.jsonl`, last `token_count` event, the four-key mapping, `None` on any failure → Task 8 Step 4 and the three `read_usage` tests; `session`/`usage` next to `result`, `LAST_CODEX` merged after `execute`, per ralph iteration, kept on failure → Task 8 Step 3 and the four journal tests (the entry's key order is asserted); the `tokens:` line → Task 8 Step 5 and its test; "the fake codex needs no change" → the tests script `stderr` only. §2.11 file location and install command → Task 9 (`skills/janus-flow/SKILL.md`, `INIT_STEPS` line); the README note → skipped, no root README (see *Verified facts*); not written into the goal folder → `STARTER_FILES` untouched; the seven points → Step 3 (mapped point by point below the file); the test's three checks → `tests/test_skill.py`. §2.8's new bullets (section 7; items 20 and 21) → Task 7 Steps 5 and 6.
 - **Spec coverage.** §2.1 primitives, normalisation, registration errors → Task 1; validation before the first visit → Task 1 (`validate_nodes`), Task 3 (`run`), Task 4 (`graph`); the fresh `SimpleNamespace` and "gates raise `SystemExit(2)` ... the runner lets it through" → Task 3 (`s` in `run_nodes`, `test_a_gate_inside_a_node_...`). §2.2 the key table → Task 2 (`test_inside_a_node_visit_...` asserts all five rows), `NODE = None` outside the runner → Task 2 (`begin()` reset, `test_outside_the_runner_...`) and Task 3 (`NODE = None` after the walk), `COUNTERS` emptied per visit → Task 3 (`NODE, COUNTERS = ..., {}`; the loop test's `a#2/plan#1` proves the counter restarts). §2.3 the walk, both `flow changed` messages, path entries with `started`/`finished`/`next`, the resumed unfinished entry, the `finally` write and its condition, `CURRENT` with the prefix in the Progress line → Task 3 (every one has a test; the Progress lines are asserted with their keys). §2.4 the table → Task 3 (`check_label`, `test_an_undeclared_label_...`, `test_a_single_edge_...`; the dict-returns-`None` row is covered by `check_label`'s last branch, `returned` not a declared string). §2.5 `graph()` shape and storage, `to_mermaid` with counts, `END([END])` once, `class`/`classDef` only with `classes` → Tasks 1, 3, 4. §2.6 `graph`, `DRY`, the message for both cases, `status` `at:` → Tasks 4, 5. §2.7 files, starter flow verbatim, six steps, no `git init`, the four-part test → Task 6. §2.8 all six bullets → Task 7. §2.9 tests 1 to 11 → tests in Tasks 1 to 5 as mapped in each task's commentary. Sections 3 and 4 are not planned; what they consume (labelled edges with `END` in a dict, `to_mermaid(graph, classes, counts)`, `graph`/`path` in the journal, `find_section` unchanged) exists after Task 4.
-- **The code was assembled and replayed.** Every engine edit and every test in this plan was applied by script to a clean clone at `67f6917`, task by task, running the new tests red on the previous task's engine and green after the edits, then the whole suite: Task 1 red `10 failed` (`AttributeError: module 'janus' has no attribute 'node'`), green `10 passed`, suite `138 passed`, 600 lines; Task 2 red `2 failed, 10 passed` (`has no attribute 'NODE'`), suite `140 passed`, 602 lines; Task 3 red `10 failed, 13 passed` (`assert 0 == 1`, `assert 0 == 2`, `FileNotFoundError` on `journal.yaml`), suite `151 passed`, 653 lines; Task 4 red `5 failed, 23 passed` (`invalid choice: 'graph'`, `has no attribute 'to_mermaid'`), suite `156 passed`, 693 lines; Task 5 red `1 failed, 28 passed`, suite `157 passed`, 696 lines; Task 6 red `3 failed` (`invalid choice: 'init'`), suite `160 passed in 12.99s`, 776 lines. The replayed `janus.py` is byte-identical to the rehearsal copy that the manual checks of Tasks 4 and 6 were run against (`init` as a subprocess, then `graph`, `status`, a second `init`, and `graph` on a script flow: outputs as the steps state). The spec edits of Task 7 were applied by the same script method (`45 insertions(+), 6 deletions(-)`). The engine tests also pass under Python 3.9. `awk 'length > 120'` prints nothing for `janus.py`, `tests/test_nodes.py` and `tests/test_init.py`.
-- **Type and name consistency.** `node(next)`, `graph()`, `validate_nodes()`, `check_label(name, edges, returned)`, `run_nodes()`, `write_journal()`, `load_flow()`, `to_mermaid(graph, classes=None, counts=None)`, `cmd_graph()`, `cmd_init(folder)` are defined once and called with those names and arities in every later task; `NODES[name]` is the `(name, fn, edges)` tuple everywhere it is unpacked; the journal fields `graph`, `path`, `node`, `visit`, `started`, `finished`, `next` are the same strings in `run_nodes`, `cmd_status`, the spec example of Task 7 and every test; the error strings in the engine, the tests and the spec's §5 and §6 are identical.
-- **Placeholder scan.** No "TBD", "TODO", "handle edge cases" or "similar to Task N": every code step carries its code in full and every edit quotes the old and the new text. The old texts of Tasks 2 to 6 are the new texts of the tasks before them, so the tasks must be executed in order.
-- **Deliberate limitations.** `graph` runs `flow.py`'s module-level code, so a script flow that calls `log()` before its first step writes one Progress line before the refusal; the spec only asks that no step runs. `init` copies the engine with `shutil.copy` and does not chmod it; it is run with `python janus.py`, not as an executable. The starter `draft.md` cannot be tried against real Codex in this slice (no trial is planned here); its schema and placeholders are checked by the `init` test through the fake `codex`. The 700-line target is missed by 76 lines, explained under *Design decisions*.
+- **The code was assembled and replayed.** Every engine edit and every test in this plan was applied by script to a clean clone at `67f6917`, task by task, running the new tests red on the previous task's engine and green after the edits, then the whole suite: Task 1 red `10 failed` (`AttributeError: module 'janus' has no attribute 'node'`), green `10 passed`, suite `138 passed`, 600 lines; Task 2 red `2 failed, 10 passed` (`has no attribute 'NODE'`), suite `140 passed`, 602 lines; Task 3 red `10 failed, 13 passed` (`assert 0 == 1`, `assert 0 == 2`, `FileNotFoundError` on `journal.yaml`), suite `151 passed`, 653 lines; Task 4 red `5 failed, 23 passed` (`invalid choice: 'graph'`, `has no attribute 'to_mermaid'`), suite `156 passed`, 693 lines; Task 5 red `1 failed, 28 passed`, suite `157 passed`, 696 lines; Task 6 red `3 failed` (`invalid choice: 'init'`), suite `160 passed in 12.99s`, 776 lines. The replayed `janus.py` is byte-identical to the rehearsal copy that the manual checks of Tasks 4 and 6 were run against (`init` as a subprocess, then `graph`, `status`, a second `init`, and `graph` on a script flow: outputs as the steps state). The spec edits of Task 7 were applied by the same script method (`50 insertions(+), 7 deletions(-)` with the section 6, 7 and 9 additions). Tasks 8 and 9 were rehearsed on top of that state with the fake `codex` running end to end: Task 8 red `8 failed, 1 passed` (`has no attribute 'read_usage'`, `KeyError: 'session'`, the missing `tokens:` line), green `9 passed`, suite `169 passed`, 808 lines; Task 9 red `3 failed` (`FileNotFoundError` for the skill file twice, the missing `init` line), green `3 passed`, suite `172 passed in 12.47s`, 809 lines, `SKILL.md` 199 lines and its front matter loads with PyYAML as the three-key mapping. The engine tests of Tasks 1 to 6 also pass under Python 3.9 (Tasks 8 and 9 use nothing newer: `re`, `json`, `os.environ`, `Path.glob`). `awk 'length > 120'` prints nothing for `janus.py`, `tests/test_nodes.py`, `tests/test_init.py`, `tests/test_usage.py` and `tests/test_skill.py`, and only the front-matter `description` line for `SKILL.md`. Every fenced code block of this plan was checked by script to appear verbatim in the file state it describes (the engine after each task, the tests, the skill, the spec before and after).
+- **Type and name consistency.** `node(next)`, `graph()`, `validate_nodes()`, `check_label(name, edges, returned)`, `run_nodes()`, `write_journal()`, `load_flow()`, `to_mermaid(graph, classes=None, counts=None)`, `cmd_graph()`, `cmd_init(folder)`, `read_usage(session_id)` are defined once and called with those names and arities in every later task; `LAST_CODEX` is filled by `run_codex` with the keys `session` and `usage` and merged by `run_step` with `**LAST_CODEX`, and the `status` and skill tests read those same keys; the skill's primitive block copies the signatures of spec §4 as it stands and, for `node` and `END`, the signature, the `END` line and the first four comment lines of Task 7 Step 2's text (the two sentences on errors are left out to fit); `Exhausted` and `JanusError` are listed with their one-line comments; `NODES[name]` is the `(name, fn, edges)` tuple everywhere it is unpacked; the journal fields `graph`, `path`, `node`, `visit`, `started`, `finished`, `next` are the same strings in `run_nodes`, `cmd_status`, the spec example of Task 7 and every test; the error strings in the engine, the tests and the spec's §5 and §6 are identical.
+- **Placeholder scan.** No "TBD", "TODO", "handle edge cases" or "similar to Task N": every code step carries its code in full and every edit quotes the old and the new text. The old texts of Tasks 2 to 6, 8 and 9 are the new texts of the tasks before them, so the tasks must be executed in order (Task 8's `DRY_MESSAGE` anchor comes from Task 4, Task 9's `INIT_STEPS` anchor from Task 6, and Task 9 copies Task 7's spec text).
+- **Deliberate limitations.** `graph` runs `flow.py`'s module-level code, so a script flow that calls `log()` before its first step writes one Progress line before the refusal; the spec only asks that no step runs. `init` copies the engine with `shutil.copy` and does not chmod it; it is run with `python janus.py`, not as an executable. The starter `draft.md` cannot be tried against real Codex in this slice (no trial is planned here); its schema and placeholders are checked by the `init` test through the fake `codex`. Task 8 was verified only against the fake `codex` and a hand-written rollout in the shape the controller measured on codex-cli 0.155.1; a real `codex exec` was not run for this plan, so the first real run of the slice should be checked for a `session:` and `usage:` in its journal (if the header line or the rollout layout changes in a later codex-cli, the fields simply stay absent, by design). `read_usage` reads the whole rollout into memory (`read_text().splitlines()`); rollouts are megabytes at most. The 700-line target is missed by 109 lines after Task 9, explained under *Design decisions*. The skill's example 2 is not executed by any test; its shape follows the node rules it teaches and the engine tests of Task 3 cover each construct it uses.
