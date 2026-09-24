@@ -131,15 +131,49 @@ def gate_of(steps: List[Dict[str, Any]], raw: Dict[str, Any], lines: List[str]) 
 
 def mermaid_of(graph: Any, path: List[Dict[str, Any]], current: Optional[Dict[str, Any]]) -> Optional[str]:
     """The map with every finished visit's node ``visited``, the unfinished last visit's node after ``current``'s
-    status (``running`` without a current step), and ``(n)`` counts on the edges the finished visits took."""
+    status (``failed`` when there is no current step: the run stopped inside that node), and ``(n)`` counts on
+    the edges the finished visits took."""
     if not isinstance(graph, dict) or not isinstance(graph.get("nodes"), list):
         return None
     finished = [e for e in path if e.get("finished")]
     classes = {e["node"]: "visited" for e in finished}
     if path and not path[-1].get("finished"):
-        status = current["status"] if current else "running"
-        classes[path[-1]["node"]] = status if status in ("running", "open", "failed") else "running"
+        classes[path[-1]["node"]] = current["status"] if current else "failed"
     return to_mermaid(graph, classes, dict(Counter((e["node"], e.get("next", "")) for e in finished)))
+
+
+def duration(total_seconds: Optional[int]) -> str:
+    """A duration formatted like the page's durations: ``12s``, ``3m04s``, ``1h02m``; ``""`` when null."""
+    if total_seconds is None:
+        return ""
+    if total_seconds < 60:
+        return f"{total_seconds}s"
+    if total_seconds < 3600:
+        return f"{total_seconds // 60}m{total_seconds % 60:02d}s"
+    return f"{total_seconds // 3600}h{total_seconds % 3600 // 60:02d}m"
+
+
+def phase_of(current: Optional[Dict[str, Any]], gate: Optional[Dict[str, Any]], path: List[Dict[str, Any]],
+             graph: Any, steps: List[Dict[str, Any]]) -> Tuple[str, str]:
+    """(phase, headline) for the header (design 4.2), computed after ``current``, ``gate`` and ``path``."""
+    if gate:
+        return "gate", f"at gate {gate['key']}"
+    if current and current["status"] == "running":
+        return "running", f"running {current['key']} for {duration(current['seconds'])}"
+    if current and current["status"] == "failed":
+        return "failed", f"failed at {current['key']}"
+    if path and not path[-1].get("finished"):
+        return "stopped", f"stopped in {path[-1]['node']}#{path[-1]['visit']}, see Progress"
+    if path and path[-1].get("finished"):
+        last = path[-1]
+        nodes = graph.get("nodes") if isinstance(graph, dict) else None
+        node = next((n for n in nodes if n.get("name") == last["node"]), None) if isinstance(nodes, list) else None
+        next_map = node.get("next") if isinstance(node, dict) else None
+        if isinstance(next_map, dict) and last.get("next") in next_map and next_map[last.get("next")] is None:
+            return "finished", "finished"
+    if steps:
+        return "idle", "idle"
+    return "empty", "nothing has run yet"
 
 
 def build_state(root: Path, now: Any = None) -> Dict[str, Any]:
@@ -162,13 +196,14 @@ def build_state(root: Path, now: Any = None) -> Dict[str, Any]:
     totals = {"steps": len(steps), **{st: sum(1 for s in steps if s["status"] == st)
                                       for st in ("done", "failed", "running", "open", "answered")},
               "codex_seconds": sum(s["seconds"] or 0 for s in steps if s["kind"] in CODEX_KINDS), "tokens": tokens}
+    gate = gate_of(steps, raw, lines)
+    phase, headline = phase_of(current, gate, path, journal.get("graph"), steps)
     return {"folder": root.resolve().name, "flow": journal.get("flow", "flow.py"), "started": journal.get("started"),
             "updated": updated, "error": error, "goal": "\n".join(section_lines(lines, "# Goal")).strip(),
             "steps": steps, "tree": build_tree(steps, path), "current": current["key"] if current else None,
-            "gate": gate_of(steps, raw, lines), "path": path,
-            "mermaid": mermaid_of(journal.get("graph"), path, current),
+            "gate": gate, "path": path, "mermaid": mermaid_of(journal.get("graph"), path, current),
             "progress": section_lines(lines, "## Progress"), "decisions": section_lines(lines, "## Decisions"),
-            "totals": totals}
+            "totals": totals, "phase": phase, "headline": headline}
 
 
 # --- server ----------------------------------------------------------------
@@ -177,6 +212,11 @@ class Handler(BaseHTTPRequestHandler):
     root = Path(".")  # make_server sets it on a subclass
 
     def do_GET(self) -> None:
+        port = self.server.server_address[1]
+        allowed = {f"127.0.0.1:{port}", f"localhost:{port}", "127.0.0.1", "localhost"}
+        if self.headers.get("Host") not in allowed:  # DNS-rebinding guard: only loopback names may ask
+            self.reply(403, "text/plain; charset=utf-8", b"forbidden host\n")
+            return
         route = self.path.split("?")[0]
         if route == "/":
             self.reply(200, "text/html; charset=utf-8", PAGE.encode("utf-8"))
@@ -249,9 +289,12 @@ PAGE = r"""<!DOCTYPE html>
   #dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: var(--dim); }
   #dot.ok { background: var(--done); } #dot.bad { background: var(--failed); }
   .meta { color: var(--dim); } #error { color: var(--failed); }
+  #headline.running { color: var(--running); } #headline.gate { color: var(--open); }
+  #headline.failed, #headline.stopped { color: var(--failed); } #headline.finished { color: var(--done); }
+  #headline.idle, #headline.empty { color: var(--dim); }
   #gate { border: 1px solid var(--open); background: #2a2113; padding: 10px 12px; margin-top: 14px; }
   #gate b { color: var(--open); }
-  #map { margin-top: 8px; } #map svg { max-width: 100%; height: auto; }
+  #map { margin-top: 8px; overflow-x: auto; } #map svg { max-width: none; height: auto; }
   #cols { display: grid; grid-template-columns: minmax(360px, 1fr) 2fr; gap: 20px; margin-top: 4px; }
   .row { display: flex; gap: 8px; padding: 2px 6px; cursor: pointer; border-radius: 3px; white-space: nowrap; }
   .row:hover { background: var(--panel); } .row.current { outline: 1px solid var(--running); }
@@ -267,7 +310,7 @@ PAGE = r"""<!DOCTYPE html>
 </head>
 <body>
 <div id="head"><h1 id="folder">Janus</h1><span id="dot" title="waiting for the first poll"></span>
-  <span id="totals" class="meta"></span><span id="error"></span></div>
+  <span id="headline"></span><span id="totals" class="meta"></span><span id="error"></span></div>
 <div id="meta" class="meta"></div>
 <div id="gate" hidden></div>
 <div id="mapwrap" hidden><h2>Map</h2><div id="map"></div></div>
@@ -283,7 +326,8 @@ PAGE = r"""<!DOCTYPE html>
 <script>
 "use strict";
 const collapsed = new Set();   // the user's toggles survive polls
-let selected = null, lastMermaid = null, renders = 0, loaded = false;
+let selected = null, lastMermaid = null, renders = 0, loaded = false, lastCurrent = null;
+let lastDetailKey, lastDetailText, lastGateKey, lastGateSection;
 const $ = (id) => document.getElementById(id);
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls;
                                  if (text !== undefined) e.textContent = text; return e; };
@@ -300,10 +344,12 @@ function ancestors(key) {  // "a/b/c" -> ["a", "a/b"]
 
 function renderHeader(st) {
   $("folder").textContent = st.folder;
+  const head = $("headline"); head.textContent = st.headline; head.className = st.phase;
   const t = st.totals, bits = [t.steps + " steps", t.done + " done"];
   for (const k of ["failed", "running", "open", "answered"]) if (t[k]) bits.push(t[k] + " " + k);
   if (t.codex_seconds) bits.push("codex " + dur(t.codex_seconds));
-  if (t.tokens.sessions) bits.push(tok(t.tokens.total) + " tokens in " + t.tokens.sessions + " sessions");
+  if (t.tokens.sessions) bits.push(tok(t.tokens.total) + " tokens in " + t.tokens.sessions
+                                   + (t.tokens.sessions === 1 ? " session" : " sessions"));
   $("totals").textContent = bits.join(", ");
   $("error").textContent = st.error || "";
   $("meta").textContent = st.flow + (st.started ? ", started " + st.started : "")
@@ -312,10 +358,14 @@ function renderHeader(st) {
 
 function renderGate(g) {
   const box = $("gate");
-  box.hidden = !g; box.replaceChildren();
-  if (!g) return;
-  box.append(el("div", "", ""), el("div", "", g.question || ""), el("pre", "", g.section || ""),
-             el("div", "meta", "Answer it in JANUS.md, then run `python janus.py run` again."));
+  box.hidden = !g;
+  if (!g) { lastGateKey = null; lastGateSection = null; return; }
+  if (g.key === lastGateKey && g.section === lastGateSection) return;   // keep the DOM: scroll survives polls
+  lastGateKey = g.key; lastGateSection = g.section;
+  box.replaceChildren();
+  const note = el("div", "meta", "Answer it in JANUS.md, then run ");
+  note.append(el("code", "", "python janus.py run"), document.createTextNode(" again."));
+  box.append(el("div", "", ""), el("div", "", g.question || ""), el("pre", "", g.section || ""), note);
   box.firstChild.append(el("b", "", "Gate " + g.key), el("span", "meta", "  (" + g.kind + ")"));
 }
 
@@ -363,7 +413,9 @@ function renderTree(st) {
 
 function renderDetail(st) {
   const box = $("detail"), key = selected || st.current;
-  const step = st.steps.find((s) => s.key === key);
+  const step = st.steps.find((s) => s.key === key), text = step ? step.detail : null;
+  if (key === lastDetailKey && text === lastDetailText) return;   // keep the DOM: scroll and selection survive
+  lastDetailKey = key; lastDetailText = text;
   box.replaceChildren();
   if (!step) { box.append(el("div", "meta", key ? key : "select a step")); return; }
   const dl = el("dl");
@@ -381,7 +433,10 @@ function render(st) {
     const mark = (nodes) => { for (const n of nodes) { if (n.children.length && !keep.has(n.key)) collapsed.add(n.key);
                                                        mark(n.children); } };
     mark(st.tree);
+  } else if (st.current !== lastCurrent) {   // the run moved on: uncollapse its ancestors so it stays visible
+    for (const k of ancestors(st.current || "")) collapsed.delete(k);
   }
+  lastCurrent = st.current;
   renderHeader(st); renderGate(st.gate); renderMap(st.mermaid); renderTree(st); renderDetail(st);
   $("progress").textContent = st.progress.join("\n"); $("decisions").textContent = st.decisions.join("\n");
 }

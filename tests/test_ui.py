@@ -57,7 +57,8 @@ def test_a_missing_journal_gives_the_empty_state(tmp_path):
         "steps": [], "tree": [], "current": None, "gate": None, "path": [], "mermaid": None,
         "progress": [], "decisions": [],
         "totals": {"steps": 0, "done": 0, "failed": 0, "running": 0, "open": 0, "answered": 0, "codex_seconds": 0,
-                   "tokens": {"input": 0, "cached": 0, "output": 0, "total": 0, "sessions": 0}}}
+                   "tokens": {"input": 0, "cached": 0, "output": 0, "total": 0, "sessions": 0}},
+        "phase": "empty", "headline": "nothing has run yet"}
 
 
 @pytest.mark.parametrize("text, error", [
@@ -216,7 +217,7 @@ def test_mermaid_is_null_for_a_script_journal(tmp_path):
 
 
 @pytest.mark.parametrize("steps, cls", [
-    ({}, "running"),
+    ({}, "failed"),
     ({"b#2/plan#1": entry("codex", "running")}, "running"),
     ({"b#2/gate#1": entry("gate", "open", question="q")}, "open"),
     ({"b#2/plan#1": entry("codex", "failed", finished=T1, error="e")}, "failed"),
@@ -228,6 +229,39 @@ def test_mermaid_classes_follow_the_path_and_current(tmp_path, steps, cls):
     assert st["path"] == path
     assert st["mermaid"] == ("flowchart LR\n  a -- go (2) --> b\n  a -- stop --> END\n  b -- (1) --> a\n  END([END])\n"
                              f"  class a visited\n  class b {cls}\n" + CLASSDEFS)
+
+
+# --- phase and headline -------------------------------------------------------------
+
+@pytest.mark.parametrize("phase, headline", [
+    ("gate", "at gate a#1/gate#1"),
+    ("running", "running a#1/plan#1 for 10m00s"),
+    ("failed", "failed at a#1/plan#1"),
+    ("stopped", "stopped in a#1, see Progress"),
+    ("finished", "finished"),
+    ("idle", "idle"),
+    ("empty", "nothing has run yet"),
+])
+def test_phase_and_headline(tmp_path, phase, headline):
+    if phase == "gate":
+        st = state(tmp_path, **{"a#1/gate#1": entry("gate", "open", question="q")})
+    elif phase == "running":
+        st = state(tmp_path, **{"a#1/plan#1": entry("codex", "running")})
+    elif phase == "failed":
+        st = state(tmp_path, **{"a#1/plan#1": entry("codex", "failed", finished=T1, error="e")})
+    elif phase == "stopped":
+        write_journal(tmp_path, {}, graph=GRAPH, path=[visit("a", 1)])
+        st = janus_ui.build_state(tmp_path, now=NOW)
+    elif phase == "finished":
+        write_journal(tmp_path, {}, graph=GRAPH, path=[visit("a", 1, "stop")])
+        st = janus_ui.build_state(tmp_path, now=NOW)
+    elif phase == "idle":
+        st = state(tmp_path, **{"plan#1": entry("codex", "done", finished=T1)})
+    else:
+        st = janus_ui.build_state(tmp_path, now=NOW)
+    assert (st["phase"], st["headline"]) == (phase, headline)
+    if phase == "stopped":
+        assert "class a failed" in st["mermaid"]
 
 
 def test_mermaid_after_the_flow_ended_marks_every_node_visited(tmp_path):
@@ -288,6 +322,23 @@ def test_server_serves_the_page_and_the_state_and_404s_the_rest(tmp_path):
         r = conn.getresponse()
         r.read()
         assert r.status == 404
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_a_forged_host_header_is_rejected(tmp_path):
+    write_journal(tmp_path, {"plan#1": entry("codex", "done", finished=T1, result={"summary": "ok"})})
+    server = janus_ui.make_server(tmp_path, 0)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = http.client.HTTPConnection("127.0.0.1", server.server_address[1], timeout=5)
+        conn.request("GET", "/state.json", headers={"Host": "evil.example"})
+        r = conn.getresponse()
+        body = r.read().decode("utf-8")
+        assert (r.status, r.getheader("Content-Type"), body) == (403, "text/plain; charset=utf-8", "forbidden host\n")
     finally:
         server.shutdown()
         server.server_close()

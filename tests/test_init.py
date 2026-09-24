@@ -1,4 +1,6 @@
 """`init` (design 2026-09-24 section 2.7): a starter goal folder that runs as it is."""
+from pathlib import Path
+
 import janus
 import janus_ui
 from helpers import read_journal
@@ -18,8 +20,8 @@ def test_init_creates_the_starter_folder_and_refuses_a_second_time(tmp_path, mon
     assert janus.main(["init", "goal"]) == 0
     goal = tmp_path / "goal"
     assert {str(p.relative_to(goal)) for p in goal.rglob("*") if p.is_file()} == FILES
-    assert (goal / "janus.py").read_text(encoding="utf-8") == open(janus.__file__, encoding="utf-8").read()
-    assert (goal / "janus_ui.py").read_text(encoding="utf-8") == open(janus_ui.__file__, encoding="utf-8").read()
+    assert (goal / "janus.py").read_bytes() == Path(janus.__file__).read_bytes()
+    assert (goal / "janus_ui.py").read_bytes() == Path(janus_ui.__file__).read_bytes()
     assert (goal / "JANUS.md").read_text(encoding="utf-8") == \
         "# Goal\nDescribe what Codex must achieve; every prompt sees this text as {{goal}}.\n"
     assert (goal / ".gitignore").read_text(encoding="utf-8") == "*/\n!prompts/\n!journals/\n"
