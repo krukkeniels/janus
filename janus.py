@@ -675,18 +675,98 @@ def cmd_reset() -> int:
     return 0
 
 
-COMMANDS = {"run": cmd_run, "status": cmd_status, "reset": cmd_reset, "graph": cmd_graph}
+STARTER_FLOW = '''\
+from janus import END, human_gate, log, node, ralph
+
+@node(next="approve")
+def draft(s):
+    s.result = ralph("prompts/draft.md", until=lambda r: r["done"], max_iter=3,
+                     findings=getattr(s, "findings", ""))
+
+@node(next={"yes": "finish", "no": "draft"})
+def approve(s):
+    answer = human_gate("Is this done? Answer yes, or write what to change.", show=s.result["summary"])
+    if answer.strip().lower() == "yes":
+        return "yes"
+    s.findings = answer
+    return "no"
+
+@node(next=END)
+def finish(s):
+    log("done: " + s.result["summary"])
+'''
+
+STARTER_PREAMBLE = '''\
+{{goal}}
+
+Rules: report blockers instead of guessing; never echo secrets (tokens, passwords, keys); commit your own
+work and report the commit.
+'''
+
+STARTER_DRAFT = '''\
+---
+output:
+  done: bool
+  summary: str
+  blockers: list[str]
+---
+Do the work the goal describes, in the current folder.
+
+Your earlier attempt (empty on the first attempt):
+{{previous}}
+
+What the human asked to change (empty on the first draft):
+{{findings}}
+
+When the work is complete answer done: true with a summary of what you did and where; otherwise answer
+done: false, say in summary how far you got and list in blockers what stops you.
+'''
+
+STARTER_FILES = {"JANUS.md": "# Goal\nDescribe what Codex must achieve; every prompt sees this text as {{goal}}.\n",
+                 "flow.py": STARTER_FLOW, "prompts/_preamble.md": STARTER_PREAMBLE,
+                 "prompts/draft.md": STARTER_DRAFT, ".gitignore": "*/\n!prompts/\n!journals/\n"}
+
+INIT_STEPS = """\
+next, in this folder:
+  1. edit JANUS.md: describe the goal under # Goal
+  2. edit prompts/draft.md, or add prompts; each declares its output fields in front matter
+  3. edit flow.py: one function per node, next= says where it goes
+  4. python janus.py graph    # print the map
+  5. python janus.py run      # run it; answer gates in JANUS.md and run again
+  6. python janus_ui.py       # watch it in the browser"""
+
+
+def cmd_init(folder: Optional[str]) -> int:
+    """Create a goal folder with a copy of this engine and the starter node flow (design 2.7)."""
+    if not folder:
+        raise JanusError("init needs a folder: python janus.py init <folder>")
+    target = Path(folder)
+    if target.exists() and any(target.iterdir()):
+        raise JanusError(f"{target} exists and is not empty")
+    (target / "prompts").mkdir(parents=True, exist_ok=True)
+    here = Path(__file__).resolve()
+    shutil.copy(str(here), str(target / "janus.py"))
+    if (here.parent / "janus_ui.py").exists():
+        shutil.copy(str(here.parent / "janus_ui.py"), str(target / "janus_ui.py"))
+    for name, text in STARTER_FILES.items():
+        (target / name).write_text(text, encoding="utf-8")
+    print(f"created {target}\n{INIT_STEPS}")
+    return 0
+
+
+COMMANDS = {"run": cmd_run, "status": cmd_status, "reset": cmd_reset, "graph": cmd_graph, "init": cmd_init}
 
 
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(prog="janus.py", description="Janus 4.0: a small durable flow engine for Codex")
     parser.add_argument("command", choices=sorted(COMMANDS))
+    parser.add_argument("folder", nargs="?", help="init: the goal folder to create")
     try:
         args = parser.parse_args(argv)
     except SystemExit as exc:  # argparse's usual exit 2 collides with "2 = a gate is open" (finding 7)
         return 0 if exc.code in (0, None) else 1
     try:
-        return COMMANDS[args.command]()
+        return cmd_init(args.folder) if args.command == "init" else COMMANDS[args.command]()
     except JanusError as exc:  # e.g. begin() found a corrupt journal.yaml (finding 6)
         print(f"janus: {exc}", file=sys.stderr)
         return 1
