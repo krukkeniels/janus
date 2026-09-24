@@ -325,14 +325,19 @@ def step(key: str, fn: Callable[[], Any]) -> Any:
 
 def read_usage(session_id: str) -> Optional[Dict[str, int]]:
     """Token usage of a Codex session from its rollout file under CODEX_HOME (design 2.10): the last
-    ``token_count`` event's totals, or None when anything about the file is missing or malformed."""
+    ``token_count`` event's totals. A line that is not JSON is skipped (a killed Codex leaves a truncated
+    last line); None when the file is missing or no usage event could be read from it."""
     home = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
     totals = None
     try:
         rollout = next(iter(home.glob(f"sessions/*/*/*/rollout-*-{session_id}.jsonl")))
         for line in rollout.read_text(encoding="utf-8").splitlines():
-            event = json.loads(line)
-            if event.get("type") == "event_msg" and event["payload"].get("type") == "token_count":
+            try:
+                event = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(event, dict) and event.get("type") == "event_msg" \
+                    and (event.get("payload") or {}).get("type") == "token_count":
                 totals = (event["payload"].get("info") or {}).get("total_token_usage", totals)
         return {"input": totals["input_tokens"], "cached": totals["cached_input_tokens"],
                 "output": totals["output_tokens"], "total": totals["total_tokens"]}

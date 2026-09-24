@@ -63,6 +63,14 @@ def test_read_usage_skips_a_token_count_event_without_info(codex_home):
     assert janus.read_usage(OTHER) == {"input": 10, "cached": 0, "output": 5, "total": 15}
 
 
+def test_read_usage_skips_an_unparsable_line_and_keeps_the_events_around_it(codex_home):
+    truncated = '{"timestamp": "2026-09-24T10:00:00.000Z", "type": "event_msg", "payload": {"type": "token_co'
+    codex_home(OTHER, usage_event(10, 0, 5, 15) + "\n" + usage_event(20, 1, 6, 27) + "\n" + truncated)
+    assert janus.read_usage(OTHER) == {"input": 20, "cached": 1, "output": 6, "total": 27}
+    codex_home(OTHER, "not json\n42\n" + usage_event(3, 0, 1, 4) + "\n")
+    assert janus.read_usage(OTHER) == {"input": 3, "cached": 0, "output": 1, "total": 4}
+
+
 def test_codex_step_records_session_and_usage_next_to_the_result(root, fake_codex, codex_home):
     write_prompt(root, "plan", "Plan {{goal}}", output={"summary": "str"})
     fake_codex.script([{"output": {"summary": "ok"}, "stderr": f"session id: {SESSION}"}])
