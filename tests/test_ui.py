@@ -206,3 +206,47 @@ def test_progress_and_decisions_are_the_section_lines_verbatim(tmp_path):
     assert st["progress"] == ["- 2026-09-24T10:00:00 plan#1: started", "  detail line", ""]
     assert st["decisions"] == ["- 2026-09-24 gate#1: Merge it?", "  answer: yes"]
     assert st["goal"] == "Do it."
+
+
+# --- 11, 12: mermaid classes and counts, tree next labels ----------------------------
+
+def test_mermaid_is_null_for_a_script_journal(tmp_path):
+    st = state(tmp_path, **{"plan#1": entry("codex", "done", finished=T1)})
+    assert st["mermaid"] is None and st["path"] == []
+
+
+@pytest.mark.parametrize("steps, cls", [
+    ({}, "running"),
+    ({"b#2/plan#1": entry("codex", "running")}, "running"),
+    ({"b#2/gate#1": entry("gate", "open", question="q")}, "open"),
+    ({"b#2/plan#1": entry("codex", "failed", finished=T1, error="e")}, "failed"),
+])
+def test_mermaid_classes_follow_the_path_and_current(tmp_path, steps, cls):
+    path = [visit("a", 1, "go"), visit("b", 1, ""), visit("a", 2, "go"), visit("b", 2)]
+    write_journal(tmp_path, steps, graph=GRAPH, path=path)
+    st = janus_ui.build_state(tmp_path, now=NOW)
+    assert st["path"] == path
+    assert st["mermaid"] == ("flowchart LR\n  a -- go (2) --> b\n  a -- stop --> END\n  b -- (1) --> a\n  END([END])\n"
+                             f"  class a visited\n  class b {cls}\n" + CLASSDEFS)
+
+
+def test_mermaid_after_the_flow_ended_marks_every_node_visited(tmp_path):
+    write_journal(tmp_path, {"a#1/plan#1": entry("codex", "done", finished=T1)}, graph=GRAPH,
+                  path=[visit("a", 1, "stop")])
+    assert janus_ui.build_state(tmp_path, now=NOW)["mermaid"] == \
+        ("flowchart LR\n  a -- go --> b\n  a -- stop (1) --> END\n  b --> a\n  END([END])\n  class a visited\n"
+         + CLASSDEFS)
+
+
+def test_tree_next_labels_come_from_the_finished_path_entries(tmp_path):
+    write_journal(tmp_path, {"a#1/plan#1": entry("codex", "done", finished=T1),
+                             "b#1/gate#1": entry("gate", "answered", finished=T1, answer="ok"),
+                             "a#2/plan#1": entry("codex", "done", finished=T1),
+                             "b#2/plan#1": entry("codex", "running"),
+                             "loose": entry("step", "done", finished=T1)},
+                  graph=GRAPH, path=[visit("a", 1, "go"), visit("b", 1, ""), visit("a", 2, "go"), visit("b", 2)])
+    st = janus_ui.build_state(tmp_path, now=NOW)
+    assert [(n["name"], n["next"]) for n in st["tree"]] == \
+        [("a#1", "go"), ("b#1", ""), ("a#2", "go"), ("b#2", None), ("loose", None)]
+    assert all(c["next"] is None for n in st["tree"] for c in n["children"])
+    assert st["current"] == "b#2/plan#1"

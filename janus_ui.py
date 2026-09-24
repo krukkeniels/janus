@@ -85,9 +85,10 @@ def section_lines(lines: List[str], heading: str) -> List[str]:
     return [] if span is None else lines[span[0] + 1:span[1]]
 
 
-def build_tree(steps: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def build_tree(steps: List[Dict[str, Any]], path: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Keys split on '/': a journal key's node carries its status and seconds, a group rolls its children up
-    (running if any is running or open, else failed if any failed, else done) and sums their seconds."""
+    (running if any is running or open, else failed if any failed, else done) and sums their seconds; a top-level
+    node named after a finished path visit gets that visit's label as ``next``."""
     roots: List[Dict[str, Any]] = []
     nodes: Dict[str, Dict[str, Any]] = {}
     for item in steps:
@@ -111,8 +112,10 @@ def build_tree(steps: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             timed = [c["seconds"] for c in node["children"] if c["seconds"] is not None]
             node["seconds"] = sum(timed) if timed else None
 
+    labels = {f"{e['node']}#{e['visit']}": e.get("next") for e in path if e.get("finished")}
     for root in roots:
         roll(root)
+        root["next"] = labels.get(root["key"])
     return roots
 
 
@@ -126,12 +129,26 @@ def gate_of(steps: List[Dict[str, Any]], raw: Dict[str, Any], lines: List[str]) 
     return None
 
 
+def mermaid_of(graph: Any, path: List[Dict[str, Any]], current: Optional[Dict[str, Any]]) -> Optional[str]:
+    """The map with every finished visit's node ``visited``, the unfinished last visit's node after ``current``'s
+    status (``running`` without a current step), and ``(n)`` counts on the edges the finished visits took."""
+    if not isinstance(graph, dict) or not isinstance(graph.get("nodes"), list):
+        return None
+    finished = [e for e in path if e.get("finished")]
+    classes = {e["node"]: "visited" for e in finished}
+    if path and not path[-1].get("finished"):
+        status = current["status"] if current else "running"
+        classes[path[-1]["node"]] = status if status in ("running", "open", "failed") else "running"
+    return to_mermaid(graph, classes, dict(Counter((e["node"], e.get("next", "")) for e in finished)))
+
+
 def build_state(root: Path, now: Any = None) -> Dict[str, Any]:
     """The page's state from journal.yaml and JANUS.md (design 4.2); ``now`` (ISO string or datetime) for tests."""
     root, clock = Path(root), parse_time(now) or dt.datetime.now()
     journal, updated, error = read_journal(root)
     raw = journal.get("steps") if isinstance(journal.get("steps"), dict) else {}
     steps = [step_item(str(k), e, clock) for k, e in raw.items() if isinstance(e, dict)]
+    path = [e for e in journal.get("path", []) if isinstance(e, dict)] if isinstance(journal.get("path"), list) else []
     live = [s for s in steps if s["status"] in ("running", "open")]
     failed = [s for s in steps if s["status"] == "failed"]
     current = live[0] if live else failed[-1] if failed else None
@@ -145,8 +162,8 @@ def build_state(root: Path, now: Any = None) -> Dict[str, Any]:
               "codex_seconds": sum(s["seconds"] or 0 for s in steps if s["kind"] in CODEX_KINDS), "tokens": tokens}
     return {"folder": root.resolve().name, "flow": journal.get("flow", "flow.py"), "started": journal.get("started"),
             "updated": updated, "error": error, "goal": "\n".join(section_lines(lines, "# Goal")).strip(),
-            "steps": steps, "tree": build_tree(steps), "current": current["key"] if current else None,
-            "gate": gate_of(steps, raw, lines), "path": [],
-            "mermaid": None,
+            "steps": steps, "tree": build_tree(steps, path), "current": current["key"] if current else None,
+            "gate": gate_of(steps, raw, lines), "path": path,
+            "mermaid": mermaid_of(journal.get("graph"), path, current),
             "progress": section_lines(lines, "## Progress"), "decisions": section_lines(lines, "## Decisions"),
             "totals": totals}
