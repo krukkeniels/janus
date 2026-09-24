@@ -53,6 +53,8 @@ CURRENT: Optional[str] = None
 REPLAYING = False  # True while the last step came from the journal; log() then skips Progress
 NODES: Dict[str, Node] = {}  # node flows register here in definition order; the first one is the start
 NODE: Optional[str] = None  # "<node>#<visit>" while the runner is inside a node; every key gets it as a prefix
+DRY = False  # set by `graph`: loading flow.py must register nodes only, so claim() refuses to run a step
+DRY_MESSAGE = "flow.py runs steps at load time; only node flows have a graph"
 
 
 def now() -> str:
@@ -69,7 +71,7 @@ def write_atomic(path: Path, text: str) -> None:
 
 def begin(root: Path) -> None:
     """Reset the engine for one run rooted at ``root`` and load its journal, or start a fresh one."""
-    global ROOT, JOURNAL, CONTEXT, COUNTERS, LIVE, CURRENT, REPLAYING, NODES, NODE
+    global ROOT, JOURNAL, CONTEXT, COUNTERS, LIVE, CURRENT, REPLAYING, NODES, NODE, DRY
     ROOT = Path(root)
     path, fresh = ROOT / JOURNAL_FILE, {"flow": FLOW_FILE, "started": now(), "steps": {}}
     JOURNAL = fresh
@@ -83,7 +85,7 @@ def begin(root: Path) -> None:
                               + ("empty" if loaded is None else "not a mapping"))
         JOURNAL = loaded
     JOURNAL.setdefault("steps", {})
-    CONTEXT, COUNTERS, LIVE, CURRENT, NODES, NODE = {}, {}, set(), None, {}, None
+    CONTEXT, COUNTERS, LIVE, CURRENT, NODES, NODE, DRY = {}, {}, set(), None, {}, None, False
     REPLAYING = bool(JOURNAL["steps"])
 
 
@@ -272,6 +274,8 @@ def make_key(prompt: str, key: Optional[str]) -> str:
 
 def claim(key: str) -> None:
     global CURRENT
+    if DRY:
+        raise JanusError(DRY_MESSAGE)
     if key in LIVE:
         raise JanusError(f"duplicate step key in one run: {key}")
     LIVE.add(key)
@@ -505,6 +509,27 @@ def check_label(name: str, edges: Dict[str, Optional[str]], returned: Any) -> st
     raise JanusError(f"node {name} returned {returned!r}; declared: {', '.join(edges)}")
 
 
+CLASS_STYLES = {"visited": "fill:#1b5e20,stroke:#66bb6a", "running": "fill:#0d47a1,stroke:#42a5f5",
+                "open": "fill:#e65100,stroke:#ffb74d", "failed": "fill:#b71c1c,stroke:#ef5350"}
+
+
+def to_mermaid(graph: Dict[str, Any], classes: Optional[Dict[str, str]] = None,
+               counts: Optional[Dict[Tuple[str, str], int]] = None) -> str:
+    """A graph() mapping as a mermaid flowchart (design 2.5); ``classes`` adds class lines, ``counts`` (n)."""
+    lines, ends = ["flowchart LR"], False
+    for n in graph["nodes"]:
+        for label, target in n["next"].items():
+            count = (counts or {}).get((n["name"], label))
+            text = " ".join(p for p in (label, f"({count})" if count is not None else "") if p)
+            lines.append(f"  {n['name']} {f'-- {text} -->' if text else '-->'} {'END' if target is None else target}")
+            ends = ends or target is None
+    lines += ["  END([END])"] if ends else []
+    if classes:
+        lines += [f"  class {name} {cls}" for name, cls in classes.items()]
+        lines += [f"  classDef {cls} {style}" for cls, style in CLASS_STYLES.items()]
+    return "\n".join(lines)
+
+
 def run_nodes() -> None:
     """Walk the graph from the start node, recording each visit in JOURNAL["path"] (design 2.3). A finished
     entry is checked against the replayed visit, not re-recorded; an unfinished one is resumed in place."""
@@ -596,6 +621,21 @@ def cmd_run() -> int:
     return 0
 
 
+def cmd_graph() -> int:
+    global DRY
+    begin(Path.cwd())
+    if not (ROOT / FLOW_FILE).exists():
+        print(f"janus: {FLOW_FILE} not found in {ROOT}", file=sys.stderr)
+        return 1
+    DRY = True
+    load_flow()
+    if not NODES:
+        raise JanusError(DRY_MESSAGE)
+    validate_nodes()
+    print(to_mermaid(graph()))
+    return 0
+
+
 def cmd_status() -> int:
     begin(Path.cwd())
     if not (ROOT / JOURNAL_FILE).exists():
@@ -632,7 +672,7 @@ def cmd_reset() -> int:
     return 0
 
 
-COMMANDS = {"run": cmd_run, "status": cmd_status, "reset": cmd_reset}
+COMMANDS = {"run": cmd_run, "status": cmd_status, "reset": cmd_reset, "graph": cmd_graph}
 
 
 def main(argv: Optional[List[str]] = None) -> int:

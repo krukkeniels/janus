@@ -293,3 +293,89 @@ def test_a_script_flow_that_ran_no_step_leaves_no_journal(root, monkeypatch):
     (root / "flow.py").write_text("print('hello')\n", encoding="utf-8")
     assert run(root, monkeypatch) == 0
     assert not (root / "journal.yaml").exists()
+
+
+# --- 2.5 and 2.6 graph, mermaid and status ------------------------------------
+
+MERMAID_FLOW = """\
+from janus import node, END, codex
+
+@node(next="approve")
+def plan(s):
+    codex("prompts/plan.md")
+
+@node(next="review")
+def approve(s):
+    pass
+
+@node(next={"passed": "human_review", "failed": "plan"})
+def review(s):
+    return "passed"
+
+@node(next={"stop": END})
+def human_review(s):
+    return "stop"
+"""
+
+MERMAID = """\
+flowchart LR
+  plan --> approve
+  approve --> review
+  review -- passed --> human_review
+  review -- failed --> plan
+  human_review -- stop --> END
+  END([END])
+"""
+
+
+def test_graph_command_prints_the_mermaid_of_a_node_flow(root, fake_codex, monkeypatch, capsys):
+    (root / "flow.py").write_text(MERMAID_FLOW, encoding="utf-8")
+    assert run(root, monkeypatch, "graph") == 0
+    assert capsys.readouterr().out == MERMAID
+    assert fake_codex.calls() == [] and not (root / "journal.yaml").exists()
+
+
+def test_graph_command_refuses_a_script_flow_without_running_its_steps(root, fake_codex, monkeypatch, capsys):
+    (root / "flow.py").write_text("from janus import codex\ncodex('prompts/plan.md')\n", encoding="utf-8")
+    write_prompt(root, "plan", "Plan", output={"ok": "bool"})
+    assert run(root, monkeypatch, "graph") == 1
+    assert capsys.readouterr().err == "janus: flow.py runs steps at load time; only node flows have a graph\n"
+    assert fake_codex.calls() == [] and not (root / "journal.yaml").exists()
+    (root / "flow.py").write_text("print('no steps, no nodes')\n", encoding="utf-8")
+    assert run(root, monkeypatch, "graph") == 1
+    assert capsys.readouterr().err == "janus: flow.py runs steps at load time; only node flows have a graph\n"
+
+
+def test_graph_command_validates_targets(root, monkeypatch, capsys):
+    (root / "flow.py").write_text("from janus import node\n\n@node(next='nowhere')\ndef a(s):\n    pass\n",
+                                  encoding="utf-8")
+    assert run(root, monkeypatch, "graph") == 1
+    assert capsys.readouterr().err == "janus: node a goes to 'nowhere', which is not a node\n"
+
+
+def test_run_after_graph_runs_steps_again(root, monkeypatch):
+    (root / "flow.py").write_text("from janus import node, END, step\n\n@node(next=END)\ndef a(s):\n"
+                                  "    step('x', lambda: 1)\n", encoding="utf-8")
+    assert run(root, monkeypatch, "graph") == 0
+    assert run(root, monkeypatch) == 0
+    assert read_journal(root)["steps"]["a#1/x"]["status"] == "done"
+
+
+def test_to_mermaid_with_classes_and_counts(root):
+    g = {"start": "a", "nodes": [{"name": "a", "next": {"": "b"}},
+                                 {"name": "b", "next": {"again": "a", "stop": None}}]}
+    assert janus.to_mermaid(g) == "flowchart LR\n  a --> b\n  b -- again --> a\n  b -- stop --> END\n  END([END])"
+    out = janus.to_mermaid(g, classes={"a": "visited", "b": "open"}, counts={("a", ""): 2, ("b", "again"): 1})
+    assert out == (
+        "flowchart LR\n"
+        "  a -- (2) --> b\n"
+        "  b -- again (1) --> a\n"
+        "  b -- stop --> END\n"
+        "  END([END])\n"
+        "  class a visited\n"
+        "  class b open\n"
+        "  classDef visited fill:#1b5e20,stroke:#66bb6a\n"
+        "  classDef running fill:#0d47a1,stroke:#42a5f5\n"
+        "  classDef open fill:#e65100,stroke:#ffb74d\n"
+        "  classDef failed fill:#b71c1c,stroke:#ef5350")
+    assert janus.to_mermaid({"start": "a", "nodes": [{"name": "a", "next": {"": "a"}}]}) == "flowchart LR\n  a --> a"
