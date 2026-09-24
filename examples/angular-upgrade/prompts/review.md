@@ -27,6 +27,11 @@ For each one, read the commits on `{{branch}}` in that sub-folder (`git log`, `g
   files, a secret or a token?
 - was anything committed outside the repository's own folder, or on another branch?
 
+The previous round came back with these findings; work that answers them is requested, not a
+defect. An empty block means this is the first round:
+
+{{findings}}
+
 Set `passed` to false if any answer is wrong, and give one line per problem in `reasons`, each
 naming the repository and the file: those lines are handed to the next round's implementer as
 its findings, so make each one actionable. Set `passed` to true with an empty `reasons` when the

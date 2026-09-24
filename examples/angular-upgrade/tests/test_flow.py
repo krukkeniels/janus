@@ -1,12 +1,18 @@
 """The example flow, end to end, with the engine's fake `codex` and a stubbed TeamCity.
 
 Every test drives `janus.main(["run"])` in a copied goal folder the way a human would: run, answer
-the one open gate in JANUS.md, run again. The keys carry the major, the round and the task
-(`v16/r1/implement/app/1`), as spec section 14 asks of every loop.
+the one open gate in JANUS.md, run again. The keys are the engine's node keys: `<node>#<visit>/`
+in front of each step's own key (`implement#1/implement#1/1`, `review#1/review#1`,
+`approve#1/gate#1`), so a second round's implement is `implement#2/...` and the first human
+review, even in round 2, is `human_review#1/gate#1`.
 """
+from pathlib import Path
+
 import yaml
 
 import janus
+
+EXAMPLE = Path(__file__).resolve().parent.parent
 
 PLAN = {"summary": "One repository, app, goes from Angular 15 to Angular 16.",
         "tasks": [{"id": "app", "repo": "app", "title": "Upgrade app to Angular 16",
@@ -22,13 +28,12 @@ REVIEW_BAD = {"passed": False, "reasons": ["app: app.component.spec.ts is marked
               "summary": "The upgrade skips a spec."}
 TESTPLAN = {"steps": ["Open / and see the title", "Navigate to /about and back"],
             "summary": "Bootstrapping and routing are the risk of this round."}
-BUILD = {"id": 42, "webUrl": "http://tc/viewLog.html?buildId=42", "state": "finished"}
-RED = [{"build": [dict(BUILD, status="FAILURE")]},
-       {"testOccurrence": [{"name": "AppComponent should render title"}]}]
-GREEN = [{"build": [dict(BUILD, status="SUCCESS")]}]
 ONE_ROUND = [{"output": DONE}, {"output": REVIEW_OK}, {"output": TESTPLAN}]
-ROUND_1 = ["v16/r1/implement/app/1", "v16/r1/review", "v16/r1/human-review", "v16/r1/merge",
-           "v16/r1/testplan", "v16/r1/qa"]
+PLAN_KEYS = ["plan#1/plan#1", "approve#1/gate#1"]
+ROUND_1 = ["implement#1/implement#1/1", "review#1/review#1", "human_review#1/gate#1", "merge#1/gate#1",
+           "testplan#1/testplan#1", "qa#1/gate#1"]
+TO_FIRST_TASK = [("start", ""), ("next_major", ""), ("plan", ""), ("approve", ""), ("start_round", "go"),
+                 ("next_task", "task")]
 
 
 def run(folder, monkeypatch):
@@ -45,6 +50,11 @@ def answer(folder, text):
 
 def journal_of(folder):
     return yaml.safe_load((folder / "journal.yaml").read_text(encoding="utf-8"))
+
+
+def path_of(folder):
+    """The journal's path as (node, next) pairs; an unfinished visit has next None."""
+    return [(e["node"], e.get("next")) for e in journal_of(folder)["path"]]
 
 
 def run_to_the_second_gate(folder, fake_codex, monkeypatch, script):
@@ -64,13 +74,18 @@ def test_one_round_that_passes_every_check_ends_at_qa_passed(goal_folder, fake_c
     assert run(goal_folder, monkeypatch) == 2
     answer(goal_folder, "passed")
     assert run(goal_folder, monkeypatch) == 0
-    steps = journal_of(goal_folder)["steps"]
-    assert list(steps) == ["v16/plan", "v16/approve-plan"] + ROUND_1
+    journal = journal_of(goal_folder)
+    steps = journal["steps"]
+    assert list(steps) == PLAN_KEYS + ROUND_1
     assert [e["status"] for e in steps.values()] == \
         ["done", "answered", "done", "done", "answered", "answered", "done", "answered"]
-    assert steps["v16/r1/review"]["kind"] == "codex" and steps["v16/r1/review"]["result"]["passed"] is True
-    assert "v16/r1/ci/app/1" not in steps and "v16/direction" not in steps
+    assert steps["review#1/review#1"]["kind"] == "codex" and steps["review#1/review#1"]["result"]["passed"] is True
+    assert "ci#1/wait" not in steps and "major_done#1/decision#1" not in steps
     assert len(fake_codex.calls()) == 4
+    assert path_of(goal_folder) == TO_FIRST_TASK + [
+        ("implement", "done"), ("task_done", ""), ("next_task", "all_done"), ("review", "passed"),
+        ("human_review", "approved"), ("merge", ""), ("testplan", ""), ("qa", "passed"), ("major_done", "all_done")]
+    assert journal["graph"]["start"] == "start"
     assert "Angular 16 reached in 1 round(s)" in (goal_folder / "JANUS.md").read_text(encoding="utf-8")
 
 
@@ -89,7 +104,10 @@ def test_every_prompt_renders_with_the_branch_the_target_the_task_and_empty_find
     assert "ng update ran; the build still fails." in second["prompt"]
     assert "Upgrade app to Angular 16" in review["prompt"] and "a" * 40 in review["prompt"]
     assert "The target of this round is Angular 16." in review["prompt"]
+    assert "An empty block means this is the first round:\n\n\n\nSet `passed`" in review["prompt"]
     assert review["schema"]["required"] == ["passed", "reasons", "summary"]
+    steps = journal_of(goal_folder)["steps"]
+    assert list(steps)[2:4] == ["implement#1/implement#1/1", "implement#1/implement#1/2"]
     answer(goal_folder, "approved")
     run(goal_folder, monkeypatch)
     answer(goal_folder, "merged")
@@ -97,7 +115,7 @@ def test_every_prompt_renders_with_the_branch_the_target_the_task_and_empty_find
     testplan = fake_codex.calls()[4]
     assert "a" * 40 in testplan["prompt"] and testplan["schema"]["required"] == ["steps", "summary"]
     text = (goal_folder / "JANUS.md").read_text(encoding="utf-8")
-    assert "## Gate: v16/r1/qa" in text and "- Open / and see the title" in text
+    assert "## Gate: qa#1/gate#1" in text and "- Open / and see the title" in text
 
 
 def test_a_failed_ai_review_sends_the_work_back_and_round_2_implements_with_the_reasons(
@@ -105,31 +123,42 @@ def test_a_failed_ai_review_sends_the_work_back_and_round_2_implements_with_the_
     run_to_the_second_gate(goal_folder, fake_codex, monkeypatch,
                             [{"output": DONE}, {"output": REVIEW_BAD}, {"output": DONE_2}] + ONE_ROUND[1:])
     steps = journal_of(goal_folder)["steps"]
-    assert list(steps) == ["v16/plan", "v16/approve-plan", "v16/r1/implement/app/1", "v16/r1/review",
-                           "v16/r2/implement/app/1", "v16/r2/review", "v16/r2/human-review"]
-    assert steps["v16/r1/review"]["result"]["passed"] is False
-    assert "v16/r1/human-review" not in steps
+    assert list(steps) == PLAN_KEYS + ["implement#1/implement#1/1", "review#1/review#1",
+                                       "implement#2/implement#1/1", "review#2/review#1", "human_review#1/gate#1"]
+    assert steps["review#1/review#1"]["result"]["passed"] is False
     round_2 = fake_codex.calls()[3]["prompt"]
     assert "AI review of round 1:\napp: app.component.spec.ts is marked xdescribe" in round_2
+    round_2_review = fake_codex.calls()[4]["prompt"]  # the reviewer knows what was asked for (design 3.3)
+    assert "defect. An empty block means this is the first round:\n\n" \
+           "AI review of round 1:\napp: app.component.spec.ts is marked xdescribe\n\nSet `passed`" in round_2_review
     text = (goal_folder / "JANUS.md").read_text(encoding="utf-8")
     assert "round 1 of Angular 16 came back: AI review of round 1:" in text
     assert "c" * 40 in text  # the human review of round 2 shows round 2's commit
+    assert path_of(goal_folder) == TO_FIRST_TASK + [
+        ("implement", "done"), ("task_done", ""), ("next_task", "all_done"), ("review", "failed"),
+        ("start_round", "go"), ("next_task", "task"), ("implement", "done"), ("task_done", ""),
+        ("next_task", "all_done"), ("review", "passed"), ("human_review", None)]
+    visits = [(e["node"], e["visit"]) for e in journal_of(goal_folder)["path"]]
+    assert visits[4] == ("start_round", 1) and visits[10] == ("start_round", 2) and visits[-1] == ("human_review", 1)
 
 
 def test_human_review_findings_become_the_findings_of_round_2(goal_folder, fake_codex, monkeypatch):
     run_to_the_second_gate(goal_folder, fake_codex, monkeypatch, ONE_ROUND[:2] + [{"output": DONE_2}] + ONE_ROUND[1:])
-    round_1 = dict(journal_of(goal_folder)["steps"]["v16/r1/implement/app/1"])
+    round_1 = dict(journal_of(goal_folder)["steps"]["implement#1/implement#1/1"])
     answer(goal_folder, "Also update zone.js to the version Angular 16 recommends")
     assert run(goal_folder, monkeypatch) == 2
     steps = journal_of(goal_folder)["steps"]
-    assert steps["v16/r1/human-review"]["answer"] == "Also update zone.js to the version Angular 16 recommends"
-    assert list(steps)[-3:] == ["v16/r2/implement/app/1", "v16/r2/review", "v16/r2/human-review"]
-    assert steps["v16/r1/implement/app/1"] == round_1  # round 1 replayed, untouched
+    assert steps["human_review#1/gate#1"]["answer"] == "Also update zone.js to the version Angular 16 recommends"
+    assert list(steps)[-3:] == ["implement#2/implement#1/1", "review#2/review#1", "human_review#2/gate#1"]
+    assert steps["implement#1/implement#1/1"] == round_1  # round 1 replayed, untouched
     assert "Human review of round 1:\nAlso update zone.js to the version Angular 16 recommends" \
         in fake_codex.calls()[3]["prompt"]
+    assert "Human review of round 1:\nAlso update zone.js to the version Angular 16 recommends" \
+        in fake_codex.calls()[4]["prompt"]  # the round-2 review sees the human's wish too
+    assert ("human_review", "findings") in path_of(goal_folder)
     answer(goal_folder, "approved")
     assert run(goal_folder, monkeypatch) == 2
-    assert journal_of(goal_folder)["steps"]["v16/r2/merge"]["status"] == "open"
+    assert journal_of(goal_folder)["steps"]["merge#1/gate#1"]["status"] == "open"  # the first visit of merge
     assert len(fake_codex.calls()) == 5
 
 
@@ -142,15 +171,15 @@ def test_qa_findings_become_the_findings_of_round_2_and_round_2_can_finish(goal_
     answer(goal_folder, "The login form no longer submits on Enter")
     assert run(goal_folder, monkeypatch) == 2
     steps = journal_of(goal_folder)["steps"]
-    assert steps["v16/r1/qa"]["answer"] == "The login form no longer submits on Enter"
-    assert list(steps)[-3:] == ["v16/r2/implement/app/1", "v16/r2/review", "v16/r2/human-review"]
+    assert steps["qa#1/gate#1"]["answer"] == "The login form no longer submits on Enter"
+    assert list(steps)[-3:] == ["implement#2/implement#1/1", "review#2/review#1", "human_review#2/gate#1"]
     assert "QA of round 1:\nThe login form no longer submits on Enter" in fake_codex.calls()[4]["prompt"]
     for text in ("approved", "merged", "passed"):
         answer(goal_folder, text)
         code = run(goal_folder, monkeypatch)
     assert code == 0
     steps = journal_of(goal_folder)["steps"]
-    assert list(steps) == ["v16/plan", "v16/approve-plan"] + ROUND_1 + [k.replace("/r1/", "/r2/") for k in ROUND_1]
+    assert list(steps) == PLAN_KEYS + ROUND_1 + [k.replace("#1/", "#2/", 1) for k in ROUND_1]
     assert "Angular 16 reached in 2 round(s)" in (goal_folder / "JANUS.md").read_text(encoding="utf-8")
 
 
@@ -181,7 +210,9 @@ def test_a_later_task_sees_what_the_earlier_tasks_of_the_round_finished(goal_fol
     assert "Tasks already finished in this round" in first_prompt and "[]" in first_prompt
     assert "a" * 40 in later_prompt and "Upgrade app to Angular 16" in later_prompt
     steps = journal_of(goal_folder)["steps"]
-    assert "v16/r1/implement/ui-kit/1" in steps and steps["v16/r1/human-review"]["status"] == "open"
+    assert "implement#2/implement#1/1" in steps and steps["human_review#1/gate#1"]["status"] == "open"
+    assert fake_codex.calls()[2]["cwd"].endswith("angular-16-upgrade/ui-kit")
+    assert [n for n, _ in path_of(goal_folder)].count("implement") == 2
 
 
 def test_two_majors_run_in_order_when_the_direction_check_says_next(goal_folder, fake_codex, monkeypatch):
@@ -195,12 +226,13 @@ def test_two_majors_run_in_order_when_the_direction_check_says_next(goal_folder,
         answer(goal_folder, text)
         assert run(goal_folder, monkeypatch) == 2
     steps = journal_of(goal_folder)["steps"]
-    assert (steps["v16/direction"]["kind"], steps["v16/direction"]["status"]) == ("decision", "open")
-    assert "Continue to Angular 17" in steps["v16/direction"]["question"]
+    direction = steps["major_done#1/decision#1"]
+    assert (direction["kind"], direction["status"]) == ("decision", "open")
+    assert "Continue to Angular 17" in direction["question"]
     answer(goal_folder, "next")
     assert run(goal_folder, monkeypatch) == 2
     steps = journal_of(goal_folder)["steps"]
-    assert list(steps)[-2:] == ["v17/plan", "v17/approve-plan"]
+    assert list(steps)[-2:] == ["plan#2/plan#1", "approve#2/gate#1"]
     plan_prompt = fake_codex.calls()[4]["prompt"]
     assert "ai/angular-16-to-17" in plan_prompt and "Plan the upgrade to Angular 17." in plan_prompt
     assert "ai/angular-15-to-16" not in plan_prompt
@@ -211,8 +243,10 @@ def test_two_majors_run_in_order_when_the_direction_check_says_next(goal_folder,
         code = run(goal_folder, monkeypatch)
     assert code == 0
     steps = journal_of(goal_folder)["steps"]
-    assert "v17/r1/qa" in steps and "v17/direction" not in steps
+    assert "qa#2/gate#1" in steps and "major_done#2/decision#1" not in steps
     assert len(fake_codex.calls()) == 8
+    path = path_of(goal_folder)
+    assert path.count(("major_done", "next")) == 1 and path[-1] == ("major_done", "all_done")
 
 
 def test_the_direction_check_can_stop_after_the_first_major(goal_folder, fake_codex, monkeypatch):
@@ -225,7 +259,9 @@ def test_the_direction_check_can_stop_after_the_first_major(goal_folder, fake_co
     answer(goal_folder, "stop")
     assert run(goal_folder, monkeypatch) == 0
     steps = journal_of(goal_folder)["steps"]
-    assert steps["v16/direction"]["answer"] == "stop" and "v17/plan" not in steps
+    assert steps["major_done#1/decision#1"]["answer"] == "stop" and "plan#2/plan#1" not in steps
+    assert path_of(goal_folder)[-1] == ("major_done", "stop")
+    assert "stopped after Angular 16, as the human decided" in (goal_folder / "JANUS.md").read_text(encoding="utf-8")
     assert len(fake_codex.calls()) == 4
 
 
@@ -234,44 +270,49 @@ def test_past_max_rounds_the_blocked_decision_opens_and_retry_continues_to_round
     sent_back = [{"output": DONE}, {"output": REVIEW_BAD}]
     run_to_the_second_gate(goal_folder, fake_codex, monkeypatch, sent_back * 3 + ONE_ROUND)
     steps = journal_of(goal_folder)["steps"]
-    gate = steps["v16/r4/blocked"]
+    gate = steps["blocked#1/decision#1"]
     assert (gate["kind"], gate["status"]) == ("decision", "open")
     assert "3 rounds did not finish Angular 16" in gate["question"]
-    assert list(steps)[-3:] == ["v16/r3/implement/app/1", "v16/r3/review", "v16/r4/blocked"]
+    assert list(steps)[-3:] == ["implement#3/implement#1/1", "review#3/review#1", "blocked#1/decision#1"]
+    assert path_of(goal_folder)[-2:] == [("start_round", "too_many"), ("blocked", None)]
     text = (goal_folder / "JANUS.md").read_text(encoding="utf-8")
     assert "    AI review of round 3:\n    app: app.component.spec.ts is marked xdescribe" in text
     answer(goal_folder, "retry")
     assert run(goal_folder, monkeypatch) == 2
     steps = journal_of(goal_folder)["steps"]
-    assert steps["v16/r4/blocked"]["answer"] == "retry"
-    assert list(steps)[-3:] == ["v16/r4/implement/app/1", "v16/r4/review", "v16/r4/human-review"]
+    assert steps["blocked#1/decision#1"]["answer"] == "retry"
+    assert list(steps)[-3:] == ["implement#4/implement#1/1", "review#4/review#1", "human_review#1/gate#1"]
     assert "AI review of round 3:" in fake_codex.calls()[7]["prompt"]
-    assert "v16/r5/blocked" not in steps and "v16/r1/implement/app/2" not in steps
+    assert "blocked#2/decision#1" not in steps and "implement#1/implement#1/2" not in steps
+    assert "Review the pull requests of round 4." in steps["human_review#1/gate#1"]["question"]
 
 
-def test_stop_at_the_blocked_decision_ends_the_run_with_exit_1(goal_folder, fake_codex, monkeypatch):
+def test_stop_at_the_blocked_decision_ends_the_flow_with_exit_0(goal_folder, fake_codex, monkeypatch):
     run_to_the_second_gate(goal_folder, fake_codex, monkeypatch, [{"output": DONE}, {"output": REVIEW_BAD}] * 3)
     answer(goal_folder, "stop")
-    assert run(goal_folder, monkeypatch) == 1
+    assert run(goal_folder, monkeypatch) == 0
     steps = journal_of(goal_folder)["steps"]
-    assert steps["v16/r4/blocked"]["answer"] == "stop" and "v16/r4/implement/app/1" not in steps
-    assert "stopped by the human after 3 rounds" in (goal_folder / "JANUS.md").read_text(encoding="utf-8")
+    assert steps["blocked#1/decision#1"]["answer"] == "stop" and "implement#4/implement#1/1" not in steps
+    assert path_of(goal_folder)[-1] == ("blocked", "stop")
+    assert "Angular 16 stopped by the human after 3 rounds" in (goal_folder / "JANUS.md").read_text(encoding="utf-8")
 
 
 def test_retry_at_an_exhausted_implement_loop_starts_round_2_with_the_blockers_as_findings(
         goal_folder, fake_codex, monkeypatch):
     run_to_the_second_gate(goal_folder, fake_codex, monkeypatch, [{"output": NOT_DONE}] * 5 + ONE_ROUND)
-    gate = journal_of(goal_folder)["steps"]["v16/r1/implement/app/exhausted"]
+    gate = journal_of(goal_folder)["steps"]["implement_exhausted#1/decision#1"]
     assert (gate["kind"], gate["status"]) == ("decision", "open")
     assert "app.component.ts does not compile" in (goal_folder / "JANUS.md").read_text(encoding="utf-8")
     answer(goal_folder, "retry")
     assert run(goal_folder, monkeypatch) == 2
     steps = journal_of(goal_folder)["steps"]
-    assert list(steps) == ["v16/plan", "v16/approve-plan"] + ["v16/r1/implement/app/%d" % n for n in range(1, 6)] \
-        + ["v16/r1/implement/app/exhausted", "v16/r2/implement/app/1", "v16/r2/review", "v16/r2/human-review"]
-    assert "v16/r1/review" not in steps
+    assert list(steps) == PLAN_KEYS + ["implement#1/implement#1/%d" % n for n in range(1, 6)] \
+        + ["implement_exhausted#1/decision#1", "implement#2/implement#1/1", "review#1/review#1",
+           "human_review#1/gate#1"]
     round_2 = fake_codex.calls()[6]["prompt"]
-    assert "Task app gave up at v16/r1/implement/app:\napp.component.ts does not compile" in round_2
+    assert "Task app gave up at implement:\napp.component.ts does not compile" in round_2
+    assert path_of(goal_folder)[6:9] == [("implement", "gave_up"), ("implement_exhausted", "retry"),
+                                         ("start_round", "go")]
 
 
 def test_skip_at_an_exhausted_implement_loop_leaves_the_task_out_of_the_round(goal_folder, fake_codex, monkeypatch):
@@ -279,114 +320,18 @@ def test_skip_at_an_exhausted_implement_loop_leaves_the_task_out_of_the_round(go
     answer(goal_folder, "skip")
     assert run(goal_folder, monkeypatch) == 2
     steps = journal_of(goal_folder)["steps"]
-    assert steps["v16/r1/implement/app/exhausted"]["answer"] == "skip"
-    assert list(steps)[-2:] == ["v16/r1/review", "v16/r1/human-review"]
+    assert steps["implement_exhausted#1/decision#1"]["answer"] == "skip"
+    assert list(steps)[-2:] == ["review#1/review#1", "human_review#1/gate#1"]
     assert "named by its `repo`:\n\n[]\n" in fake_codex.calls()[6]["prompt"]  # the review sees an empty round
+    assert "task app: implement skipped by the human" in (goal_folder / "JANUS.md").read_text(encoding="utf-8")
 
 
-def test_stop_at_an_exhausted_implement_loop_ends_the_run_with_exit_1(goal_folder, fake_codex, monkeypatch):
+def test_stop_at_an_exhausted_implement_loop_ends_the_flow_with_exit_0(goal_folder, fake_codex, monkeypatch):
     run_to_the_second_gate(goal_folder, fake_codex, monkeypatch, [{"output": NOT_DONE}] * 5)
     answer(goal_folder, "stop")
-    assert run(goal_folder, monkeypatch) == 1
+    assert run(goal_folder, monkeypatch) == 0
     steps = journal_of(goal_folder)["steps"]
-    assert steps["v16/r1/implement/app/exhausted"]["answer"] == "stop" and "v16/r1/review" not in steps
-
-
-def test_a_green_build_is_journaled_under_the_first_verdict_and_no_fix_runs(
-        goal_folder, fake_codex, teamcity_server, monkeypatch):
-    teamcity_server.serve(GREEN)
-    run_to_the_second_gate(goal_folder, fake_codex, monkeypatch, ONE_ROUND)
-    steps = journal_of(goal_folder)["steps"]
-    assert steps["v16/r1/ci/app/1"]["result"] == {"status": "SUCCESS", "url": "http://tc/viewLog.html?buildId=42",
-                                                  "excerpt": ""}
-    assert "v16/r1/ci/app/2" not in steps and "v16/r1/fix/app/1/1" not in steps
-    assert "revision%3A%28version%3A" + "a" * 40 in teamcity_server.requests()[0]["path"]
-
-
-def test_a_build_type_of_none_skips_the_teamcity_wait(goal_folder, fake_codex, teamcity_server, monkeypatch):
-    plan = {"summary": PLAN["summary"], "tasks": [dict(PLAN["tasks"][0], build_type="none")]}
-    fake_codex.script([{"output": plan}] + ONE_ROUND)
-    run(goal_folder, monkeypatch)
-    answer(goal_folder, "yes")
-    assert run(goal_folder, monkeypatch) == 2
-    assert "v16/r1/ci/app/1" not in journal_of(goal_folder)["steps"]
-    assert teamcity_server.requests() == []
-
-
-def test_a_red_build_gets_a_fix_whose_commit_is_verified_by_the_second_verdict(
-        goal_folder, fake_codex, teamcity_server, monkeypatch):
-    teamcity_server.serve(RED + GREEN)
-    run_to_the_second_gate(goal_folder, fake_codex, monkeypatch, [{"output": DONE}, {"output": FIXED}] + ONE_ROUND[1:])
-    steps = journal_of(goal_folder)["steps"]
-    assert steps["v16/r1/ci/app/1"]["result"]["status"] == "FAILURE"
-    assert steps["v16/r1/fix/app/1/1"]["result"]["commit"] == "b" * 40
-    assert steps["v16/r1/ci/app/2"]["result"]["status"] == "SUCCESS"
-    assert "v16/r1/ci/app/3" not in steps
-    fix_prompt = fake_codex.calls()[2]["prompt"]
-    assert "AppComponent should render title" in fix_prompt and "http://tc/viewLog.html?buildId=42" in fix_prompt
-    paths = [r["path"] for r in teamcity_server.requests()]
-    assert "revision%3A%28version%3A" + "a" * 40 in paths[0]
-    assert "revision%3A%28version%3A" + "b" * 40 in paths[2]  # the fix commit, not the implement commit
-    assert "b" * 40 in (goal_folder / "JANUS.md").read_text(encoding="utf-8")
-
-
-def test_max_ci_red_verdicts_open_the_red_decision_and_skip_keeps_the_commits(
-        goal_folder, fake_codex, teamcity_server, monkeypatch):
-    teamcity_server.serve(RED * 3)
-    run_to_the_second_gate(goal_folder, fake_codex, monkeypatch,
-                            [{"output": DONE}, {"output": FIXED}, {"output": FIXED}] + ONE_ROUND[1:])
-    steps = journal_of(goal_folder)["steps"]
-    assert (steps["v16/r1/ci/app/red"]["kind"], steps["v16/r1/ci/app/red"]["status"]) == ("decision", "open")
-    assert [k for k in steps if "/ci/" in k or "/fix/" in k] == \
-        ["v16/r1/ci/app/1", "v16/r1/fix/app/1/1", "v16/r1/ci/app/2", "v16/r1/fix/app/2/1", "v16/r1/ci/app/3",
-         "v16/r1/ci/app/red"]
-    answer(goal_folder, "skip")
-    assert run(goal_folder, monkeypatch) == 2
-    steps = journal_of(goal_folder)["steps"]
-    assert steps["v16/r1/ci/app/red"]["answer"] == "skip"
-    assert list(steps)[-2:] == ["v16/r1/review", "v16/r1/human-review"]
-
-
-def test_retry_at_the_red_decision_starts_round_2_with_the_failure_as_findings(
-        goal_folder, fake_codex, teamcity_server, monkeypatch):
-    teamcity_server.serve(RED * 3 + GREEN)
-    run_to_the_second_gate(goal_folder, fake_codex, monkeypatch,
-                            [{"output": DONE}, {"output": FIXED}, {"output": FIXED}, {"output": DONE_2}]
-                            + ONE_ROUND[1:])
-    answer(goal_folder, "retry")
-    assert run(goal_folder, monkeypatch) == 2
-    steps = journal_of(goal_folder)["steps"]
-    assert list(steps)[-4:] == ["v16/r2/implement/app/1", "v16/r2/ci/app/1", "v16/r2/review", "v16/r2/human-review"]
-    assert "Task app is still red after 3 CI verdicts (http://tc/viewLog.html?buildId=42):\n" \
-           "AppComponent should render title" in fake_codex.calls()[4]["prompt"]
-
-
-def test_an_exhausted_fix_loop_opens_its_decision_and_skip_keeps_the_implement_commit(
-        goal_folder, fake_codex, teamcity_server, monkeypatch):
-    teamcity_server.serve(RED)
-    run_to_the_second_gate(goal_folder, fake_codex, monkeypatch,
-                            [{"output": DONE}] + [{"output": NOT_DONE}] * 3 + ONE_ROUND[1:])
-    gate = journal_of(goal_folder)["steps"]["v16/r1/fix/app/1/exhausted"]
-    assert (gate["kind"], gate["status"]) == ("decision", "open")
-    answer(goal_folder, "skip")
-    assert run(goal_folder, monkeypatch) == 2
-    steps = journal_of(goal_folder)["steps"]
-    assert steps["v16/r1/fix/app/1/exhausted"]["answer"] == "skip"
-    assert "v16/r1/ci/app/2" not in steps and steps["v16/r1/human-review"]["status"] == "open"
-    assert "a" * 40 in (goal_folder / "JANUS.md").read_text(encoding="utf-8")
-
-
-def test_a_build_teamcity_cannot_find_opens_the_missing_decision_instead_of_a_fix(
-        goal_folder, fake_codex, teamcity_server, monkeypatch):
-    teamcity_server.serve([{"count": 0}])
-    run_to_the_second_gate(goal_folder, fake_codex, monkeypatch, ONE_ROUND)
-    steps = journal_of(goal_folder)["steps"]
-    assert steps["v16/r1/ci/app/1"]["result"]["status"] == "NOT_FOUND"
-    assert (steps["v16/r1/ci/app/1/missing"]["kind"], steps["v16/r1/ci/app/1/missing"]["status"]) == \
-        ("decision", "open")
-    assert "v16/r1/fix/app/1/1" not in steps
-    answer(goal_folder, "skip")
-    assert run(goal_folder, monkeypatch) == 2
-    steps = journal_of(goal_folder)["steps"]
-    assert steps["v16/r1/ci/app/1/missing"]["answer"] == "skip" and "v16/r1/ci/app/2" not in steps
-    assert steps["v16/r1/human-review"]["status"] == "open"
+    assert steps["implement_exhausted#1/decision#1"]["answer"] == "stop" and "review#1/review#1" not in steps
+    assert path_of(goal_folder)[-1] == ("implement_exhausted", "stop")
+    assert "task app stopped the run at implement, as the human decided" \
+        in (goal_folder / "JANUS.md").read_text(encoding="utf-8")
