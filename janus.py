@@ -15,6 +15,7 @@ import subprocess
 import sys
 import tempfile
 import traceback
+import types
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -39,6 +40,9 @@ class Exhausted(Exception):
         self.last = last
 
 
+END = object()  # sentinel for node(next=END) and {"label": END}: the flow ends there
+Node = Tuple[str, Callable[[Any], Any], Dict[str, Optional[str]]]  # (name, fn, edges); an END target is None
+
 # Engine state for one run; begin() resets all of it.
 ROOT = Path(".")
 JOURNAL: Dict[str, Any] = {"flow": FLOW_FILE, "started": None, "steps": {}}
@@ -47,6 +51,7 @@ COUNTERS: Dict[str, int] = {}
 LIVE: set = set()
 CURRENT: Optional[str] = None
 REPLAYING = False  # True while the last step came from the journal; log() then skips Progress
+NODES: Dict[str, Node] = {}  # node flows register here in definition order; the first one is the start
 
 
 def now() -> str:
@@ -63,7 +68,7 @@ def write_atomic(path: Path, text: str) -> None:
 
 def begin(root: Path) -> None:
     """Reset the engine for one run rooted at ``root`` and load its journal, or start a fresh one."""
-    global ROOT, JOURNAL, CONTEXT, COUNTERS, LIVE, CURRENT, REPLAYING
+    global ROOT, JOURNAL, CONTEXT, COUNTERS, LIVE, CURRENT, REPLAYING, NODES
     ROOT = Path(root)
     path, fresh = ROOT / JOURNAL_FILE, {"flow": FLOW_FILE, "started": now(), "steps": {}}
     JOURNAL = fresh
@@ -77,7 +82,7 @@ def begin(root: Path) -> None:
                               + ("empty" if loaded is None else "not a mapping"))
         JOURNAL = loaded
     JOURNAL.setdefault("steps", {})
-    CONTEXT, COUNTERS, LIVE, CURRENT = {}, {}, set(), None
+    CONTEXT, COUNTERS, LIVE, CURRENT, NODES = {}, {}, set(), None, {}
     REPLAYING = bool(JOURNAL["steps"])
 
 
@@ -448,6 +453,39 @@ def human_gate(question: str, key: Optional[str] = None, show: Any = None) -> st
 
 def decision(question: str, options: List[str], key: Optional[str] = None, show: Any = None) -> str:
     return gate(question, make_key("decision", key), show, list(options))
+
+
+# --- nodes -----------------------------------------------------------------
+
+def node(next: Any) -> Callable[[Callable[[Any], Any]], Callable[[Any], Any]]:
+    """Register the decorated function as a node named after it. ``next`` is a node name (one edge,
+    the function returns None), END, or {label: name or END} (the function returns a label)."""
+    if next is END or isinstance(next, str):
+        edges: Dict[str, Optional[str]] = {"": None if next is END else next}
+    elif (isinstance(next, dict) and next and all(isinstance(k, str) for k in next)
+          and all(v is END or isinstance(v, str) for v in next.values())):
+        edges = {k: (None if v is END else v) for k, v in next.items()}
+    else:
+        raise JanusError(f"node next must be a name, END or a non-empty dict of label -> name or END: {next!r}")
+
+    def register(fn: Callable[[Any], Any]) -> Callable[[Any], Any]:
+        if fn.__name__ in NODES:
+            raise JanusError(f"duplicate node name: {fn.__name__}")
+        NODES[fn.__name__] = (fn.__name__, fn, edges)
+        return fn
+    return register
+
+
+def graph() -> Dict[str, Any]:
+    """The flow's map in registration order: {"start": name, "nodes": [{"name", "next": {label: target|None}}]}."""
+    return {"start": next(iter(NODES), None), "nodes": [{"name": n, "next": dict(e)} for n, _, e in NODES.values()]}
+
+
+def validate_nodes() -> None:
+    for name, _, edges in NODES.values():
+        for target in edges.values():
+            if target is not None and target not in NODES:
+                raise JanusError(f"node {name} goes to {target!r}, which is not a node")
 
 
 # --- git -------------------------------------------------------------------
