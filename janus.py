@@ -52,6 +52,7 @@ LIVE: set = set()
 CURRENT: Optional[str] = None
 REPLAYING = False  # True while the last step came from the journal; log() then skips Progress
 NODES: Dict[str, Node] = {}  # node flows register here in definition order; the first one is the start
+NODE: Optional[str] = None  # "<node>#<visit>" while the runner is inside a node; every key gets it as a prefix
 
 
 def now() -> str:
@@ -68,7 +69,7 @@ def write_atomic(path: Path, text: str) -> None:
 
 def begin(root: Path) -> None:
     """Reset the engine for one run rooted at ``root`` and load its journal, or start a fresh one."""
-    global ROOT, JOURNAL, CONTEXT, COUNTERS, LIVE, CURRENT, REPLAYING, NODES
+    global ROOT, JOURNAL, CONTEXT, COUNTERS, LIVE, CURRENT, REPLAYING, NODES, NODE
     ROOT = Path(root)
     path, fresh = ROOT / JOURNAL_FILE, {"flow": FLOW_FILE, "started": now(), "steps": {}}
     JOURNAL = fresh
@@ -82,7 +83,7 @@ def begin(root: Path) -> None:
                               + ("empty" if loaded is None else "not a mapping"))
         JOURNAL = loaded
     JOURNAL.setdefault("steps", {})
-    CONTEXT, COUNTERS, LIVE, CURRENT, NODES = {}, {}, set(), None, {}
+    CONTEXT, COUNTERS, LIVE, CURRENT, NODES, NODE = {}, {}, set(), None, {}, None
     REPLAYING = bool(JOURNAL["steps"])
 
 
@@ -256,12 +257,13 @@ def validate(value: Any, schema: Dict[str, Any], where: str = "$") -> Optional[s
 # --- steps and keys --------------------------------------------------------
 
 def make_key(prompt: str, key: Optional[str]) -> str:
-    """Explicit key, or ``<stem>#<n>`` counting calls with that prompt stem in this run."""
-    if key is not None:
-        return key
-    stem = Path(prompt).stem
-    COUNTERS[stem] = COUNTERS.get(stem, 0) + 1
-    return f"{stem}#{COUNTERS[stem]}"
+    """Explicit key, or ``<stem>#<n>`` counting calls with that prompt stem in this run (in this node visit,
+    inside a node flow); inside a node the key is prefixed with ``<node>#<visit>/``."""
+    if key is None:
+        stem = Path(prompt).stem
+        COUNTERS[stem] = COUNTERS.get(stem, 0) + 1
+        key = f"{stem}#{COUNTERS[stem]}"
+    return key if NODE is None else f"{NODE}/{key}"
 
 
 def claim(key: str) -> None:
@@ -297,7 +299,7 @@ def run_step(key: str, kind: str, execute: Callable[[int], Any]) -> Any:
 
 
 def step(key: str, fn: Callable[[], Any]) -> Any:
-    return run_step(key, "step", lambda attempt: fn())
+    return run_step(make_key(key, key), "step", lambda attempt: fn())
 
 
 # --- codex -----------------------------------------------------------------

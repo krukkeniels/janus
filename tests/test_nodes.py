@@ -73,3 +73,30 @@ def test_begin_empties_the_node_registry(root):
 
     janus.begin(root)
     assert janus.NODES == {} and janus.graph() == {"start": None, "nodes": []}
+
+
+# --- 2.2 keys inside a node ----------------------------------------------------
+
+def test_inside_a_node_visit_every_key_is_prefixed_with_the_visit(root, fake_codex, monkeypatch):
+    write_prompt(root, "plan", "plan", output={"ok": "bool"})
+    write_prompt(root, "implement", "implement", output={"done": "bool"})
+    fake_codex.script([{"output": {"ok": True}}, {"output": {"done": False}}, {"output": {"done": True}}])
+    monkeypatch.setattr(janus, "NODE", "implement#3")
+    janus.codex("prompts/plan.md")
+    janus.ralph("prompts/implement.md", until=lambda r: r["done"], max_iter=3)
+    janus.step("wait", lambda: "waited")
+    with pytest.raises(SystemExit):
+        janus.human_gate("Go on?")
+    with pytest.raises(SystemExit):
+        janus.decision("What now?", ["a", "b"], key="what-now")
+    assert list(read_journal(root)["steps"]) == [
+        "implement#3/plan#1", "implement#3/implement#1/1", "implement#3/implement#1/2", "implement#3/wait",
+        "implement#3/gate#1", "implement#3/what-now"]
+    assert "## Gate: implement#3/gate#1" in (root / "JANUS.md").read_text(encoding="utf-8")
+
+
+def test_outside_the_runner_keys_are_unchanged(root):
+    assert janus.NODE is None
+    janus.step("push", lambda: 1)
+    assert janus.make_key("prompts/plan.md", None) == "plan#1"
+    assert list(read_journal(root)["steps"]) == ["push"]
