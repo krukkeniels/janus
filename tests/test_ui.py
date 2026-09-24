@@ -250,3 +250,13 @@ def test_tree_next_labels_come_from_the_finished_path_entries(tmp_path):
         [("a#1", "go"), ("b#1", ""), ("a#2", "go"), ("b#2", None), ("loose", None)]
     assert all(c["next"] is None for n in st["tree"] for c in n["children"])
     assert st["current"] == "b#2/plan#1"
+
+
+def test_path_filters_to_entries_with_node_and_visit(tmp_path):
+    write_journal(tmp_path, {"a#1/plan#1": entry("codex", "done", finished=T1)}, graph=GRAPH,
+                  path=[{"finished": T1, "next": "go"}, "not-a-dict",
+                        {"node": "a", "visit": 1, "started": T0, "finished": T1, "next": ""}])
+    st = janus_ui.build_state(tmp_path, now=NOW)
+    assert st["path"] == [{"node": "a", "visit": 1, "started": T0, "finished": T1, "next": ""}]
+    assert st["mermaid"] == ("flowchart LR\n  a -- go --> b\n  a -- stop --> END\n  b --> a\n  END([END])\n"
+                             "  class a visited\n" + CLASSDEFS)
