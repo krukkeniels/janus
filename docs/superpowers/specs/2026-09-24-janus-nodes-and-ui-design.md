@@ -67,16 +67,18 @@ while name is not None:
     NODE = f"{name}#{visit}"; COUNTERS = {}
     label = normalise(fn(s))                    # "" for a single edge, the returned label otherwise
     check label is declared (2.4)
-    if entry.get("finished") and entry["next"] != label:
-        raise JanusError(f"flow changed: {NODE} went to {entry['next']!r} before, now {label!r}")
-    entry.update(finished=now(), next=label)
+    if entry.get("finished"):                   # a finished visit is checked, never re-recorded
+        if entry["next"] != label:
+            raise JanusError(f"flow changed: {NODE} went to {entry['next']!r} before, now {label!r}")
+    else:
+        entry.update(finished=now(), next=label)
     name = edges[label]; index += 1
 NODE = None
 ```
 
 - A path entry is appended in memory when the visit starts and reaches disk at the next journal write (the first step inside the node saves it, marked `running`) or at the end of the run. `cmd_run`'s `finally` writes the journal (`write_atomic`, then `git_commit("janus: run ended")`) so a run that ends inside step-less nodes still persists its path. Today the `finally` only commits; it gains the write, which happens only when `journal.yaml` already exists or the run recorded a path, so a script flow that ran no step still leaves no journal behind.
 - A finished visit is checked, not re-recorded: on replay the node runs again with replayed results (as every flow does today), and its outcome must match. An entry without `finished` is the visit that was interrupted (crash, gate, failure) and is resumed in place: its `visit` count is trusted, its `started` is kept.
-- `JOURNAL["path"]` defaults to `[]` in `begin()` like `steps`. A journal from Janus 4.0 has no `graph` and no `path`; a script flow never writes them, and `status`/`reset` ignore them.
+- `JOURNAL["path"]` is created (`setdefault([])`) by the runner, not by `begin()`, so a script flow's journal stays byte-identical to Janus 4.0: no `graph`, no `path`. `status`/`reset` ignore both.
 - `CURRENT` (used by the error log line) keeps holding the last claimed step key, which now carries the node prefix, so the `## Progress` line after a failure names the node.
 
 ### 2.4 Return values
