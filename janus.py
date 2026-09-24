@@ -87,9 +87,13 @@ def begin(root: Path) -> None:
     REPLAYING = bool(JOURNAL["steps"])
 
 
+def write_journal() -> None:
+    write_atomic(ROOT / JOURNAL_FILE, yaml.safe_dump(JOURNAL, sort_keys=False, allow_unicode=True))
+
+
 def save_journal(key: str, status: str) -> None:
     """Write journal.yaml atomically at every status change of ``key``, then commit (section 5, Git)."""
-    write_atomic(ROOT / JOURNAL_FILE, yaml.safe_dump(JOURNAL, sort_keys=False, allow_unicode=True))
+    write_journal()
     git_commit(f"janus: {key} {status}")
 
 
@@ -490,6 +494,45 @@ def validate_nodes() -> None:
                 raise JanusError(f"node {name} goes to {target!r}, which is not a node")
 
 
+def check_label(name: str, edges: Dict[str, Optional[str]], returned: Any) -> str:
+    """The edge label a node's return value selects (design 2.4): "" for a single edge, else the label."""
+    if list(edges) == [""]:
+        if returned is not None:
+            raise JanusError(f"node {name} declares one edge but returned {returned!r}")
+        return ""
+    if isinstance(returned, str) and returned in edges:
+        return returned
+    raise JanusError(f"node {name} returned {returned!r}; declared: {', '.join(edges)}")
+
+
+def run_nodes() -> None:
+    """Walk the graph from the start node, recording each visit in JOURNAL["path"] (design 2.3). A finished
+    entry is checked against the replayed visit, not re-recorded; an unfinished one is resumed in place."""
+    global NODE, COUNTERS
+    validate_nodes()
+    JOURNAL["graph"] = graph()
+    path: List[Dict[str, Any]] = JOURNAL.setdefault("path", [])
+    s, visits, name, index = types.SimpleNamespace(), {}, graph()["start"], 0
+    while name is not None:
+        visit = visits[name] = visits.get(name, 0) + 1
+        entry = path[index] if index < len(path) else None
+        if entry is not None and entry["node"] != name:  # finished or interrupted, either way the flow changed
+            raise JanusError(f"flow changed: visit {index + 1} was {entry['node']}, now {name}")
+        if entry is None:
+            entry = {"node": name, "visit": visit, "started": now()}
+            path.append(entry)
+        NODE, COUNTERS = f"{name}#{visit}", {}
+        _, fn, edges = NODES[name]
+        label = check_label(name, edges, fn(s))
+        if entry.get("finished"):
+            if entry["next"] != label:
+                raise JanusError(f"flow changed: {NODE} went to {entry['next']!r} before, now {label!r}")
+        else:
+            entry.update(finished=now(), next=label)
+        name, index = edges[label], index + 1
+    NODE = None
+
+
 # --- git -------------------------------------------------------------------
 
 def git(*args: str) -> subprocess.CompletedProcess:
@@ -516,17 +559,23 @@ def git_commit(message: str) -> None:
 
 # --- CLI -------------------------------------------------------------------
 
+def load_flow() -> None:
+    """Execute flow.py top to bottom: a script flow runs its steps here; a node flow registers its nodes."""
+    sys.modules.setdefault("janus", sys.modules[__name__])  # `from janus import ...` must resolve to this module
+    sys.path.insert(0, str(ROOT))  # so flow.py can import helper modules from the goal folder
+    runpy.run_path(str(ROOT / FLOW_FILE), run_name="flow")
+
+
 def cmd_run() -> int:
     global REPLAYING
     begin(Path.cwd())
     if not (ROOT / FLOW_FILE).exists():
         print(f"janus: {FLOW_FILE} not found in {ROOT}", file=sys.stderr)
         return 1
-    # flow.py says `from janus import ...`; that must resolve to this module, not to a second copy of the file.
-    sys.modules.setdefault("janus", sys.modules[__name__])
-    sys.path.insert(0, str(ROOT))  # so flow.py can import helper modules from the goal folder
     try:
-        runpy.run_path(str(ROOT / FLOW_FILE), run_name="flow")
+        load_flow()
+        if NODES:  # a node flow: the file only registered its nodes; the runner walks them
+            run_nodes()
     except SystemExit as exc:
         return exc.code if isinstance(exc.code, int) else (0 if exc.code is None else 1)
     except Exhausted as exc:
@@ -539,7 +588,9 @@ def cmd_run() -> int:
         REPLAYING = False
         log(f"{CURRENT or 'flow'}: {type(exc).__name__}: {exc}")
         return 1
-    finally:  # only save_journal() commits; a log() after the last status change needs this one
+    finally:  # the path's last entry and a log() after the last status change are not saved yet
+        if (ROOT / JOURNAL_FILE).exists() or JOURNAL.get("path"):  # a script flow that ran no step leaves none
+            write_journal()
         git_commit("janus: run ended")
     print("flow ended")
     return 0
